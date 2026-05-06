@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,8 @@ const (
 	chatQuery      = "?FetchKeys=llm_model_result&AgentId=agent_common"
 	modelListPath  = "/algo/api/v2/model/list"
 )
+
+var remoteBaseURLPattern = regexp.MustCompile(`https?://[^\s"'<>),\]}]+`)
 
 type Config struct {
 	BaseURL     string
@@ -535,12 +538,16 @@ func uniqueStrings(values []string) []string {
 }
 
 func extractBaseURLFromText(text string) string {
+	matches := remoteBaseURLPattern.FindAllString(text, -1)
+	for i := len(matches) - 1; i >= 0; i-- {
+		if value := normalizeRemoteBaseURLHint(matches[i]); value != "" {
+			return value
+		}
+	}
 	for _, marker := range []string{
 		"endpoint config:",
 		"Using service url:",
 		"Download asset from:",
-		"https://ai-lingma",
-		"https://lingma",
 	} {
 		if value := extractBaseURLAfterMarker(text, marker); value != "" {
 			return value
@@ -574,8 +581,14 @@ func normalizeRemoteBaseURLHint(raw string) string {
 	if raw == "" {
 		return ""
 	}
+	if strings.HasPrefix(raw, "ttps://") {
+		raw = "h" + raw
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return ""
 	}
 	host := strings.ToLower(parsed.Host)

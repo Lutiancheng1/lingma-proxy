@@ -37,6 +37,28 @@ func TestExtractBaseURLFromMarketplaceLog(t *testing.T) {
 	}
 }
 
+func TestExtractBaseURLFromRawWindowsLogURL(t *testing.T) {
+	got := extractBaseURLFromText(`2026-05-06T12:00:00 endpoint=https://ai-lingma-cmb01-cn-beijing.rdc.aliyuncs.com/algo/api/v2/model/list`)
+	want := "https://ai-lingma-cmb01-cn-beijing.rdc.aliyuncs.com"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeBaseURLRepairsMissingLeadingH(t *testing.T) {
+	got := normalizeRemoteBaseURLHint(`ttps://ai-lingma-cmb01-cn-beijing.rdc.aliyuncs.com`)
+	want := "https://ai-lingma-cmb01-cn-beijing.rdc.aliyuncs.com"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeBaseURLRejectsUnsupportedScheme(t *testing.T) {
+	if got := normalizeRemoteBaseURLHint(`ftp://ai-lingma-cmb01-cn-beijing.rdc.aliyuncs.com`); got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+}
+
 func TestExtractMachineIDFromTextMarkers(t *testing.T) {
 	got := extractMachineIDFromText(`2026-05-06 info using machine id from file: abcdef1234567890abcdef`)
 	if got != "abcdef1234567890abcdef" {

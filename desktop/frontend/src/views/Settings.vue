@@ -10,6 +10,7 @@ const saving = ref(false)
 const openSelect = ref('')
 const fallbackModelsText = ref('')
 const isIPCBackend = computed(() => (config.value.Backend || 'ipc') === 'ipc')
+const formattedTokenExpireAt = computed(() => formatDateTime(detection.value?.remoteTokenExpireAt))
 
 const selectOptions = {
   Backend: [
@@ -51,6 +52,21 @@ function chooseOption(field, value) {
   config.value[field] = value
   openSelect.value = ''
   refreshDetection()
+}
+
+function formatDateTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date)
 }
 
 onMounted(async () => {
@@ -246,7 +262,8 @@ async function save() {
             <div v-if="detection.remoteCredentialSuccess">
               <dt>登录态有效期</dt>
               <dd :class="{ 'warn-text': detection.remoteTokenExpired }">
-                {{ detection.remoteTokenExpireAt || '未提供' }}
+                {{ formattedTokenExpireAt || '未提供' }}
+                <span v-if="formattedTokenExpireAt && detection.remoteTokenExpireAt" class="muted-inline">原始 {{ detection.remoteTokenExpireAt }}</span>
                 <span v-if="detection.remoteTokenExpired">（已过期）</span>
               </dd>
             </div>
