@@ -4,6 +4,11 @@
 
 - Nothing yet.
 
+## v1.4.6 - 2026-05-06
+
+- Added the VS Code Lingma plugin shared cache directory `~/.lingma/vscode/sharedClientCache` to remote credential auto-detection.
+- This fixes Windows setups where Lingma is installed through the VS Code extension and stores `cache/user` plus `cache/id` under the plugin shared client cache.
+
 ## v1.4.5 - 2026-05-06
 
 - Improved Windows remote credential detection for Lingma App installations.

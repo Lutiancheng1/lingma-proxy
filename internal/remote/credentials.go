@@ -126,6 +126,7 @@ func candidateLingmaCacheDirs() []string {
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		dirs = append(dirs,
 			filepath.Join(home, ".lingma"),
+			filepath.Join(home, ".lingma", "vscode", "sharedClientCache"),
 			filepath.Join(home, ".config", "Lingma"),
 			filepath.Join(home, ".local", "share", "Lingma"),
 		)
