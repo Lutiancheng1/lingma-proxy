@@ -4,6 +4,14 @@
 
 - Nothing yet.
 
+## v1.4.4 - 2026-05-05
+
+- Enabled real SSE streaming for OpenAI `/v1/chat/completions` and Anthropic `/v1/messages` requests that include tools.
+- Added a tool-stream filter so normal text can stream immediately while prompt-emulated action blocks are buffered and emitted as proper `tool_calls` / `tool_use` events at the end.
+- Added `LINGMA_AGGREGATE_TOOL_STREAM=1` as a compatibility switch to restore the previous aggregate output behavior for tool requests.
+- Tightened tool-emulation instructions so conceptual chat and explanation requests do not trigger unnecessary terminal/tool calls.
+- Added tests for hosted Anthropic web search handling, tool-stream filtering, and updated tool prompt guidance.
+
 ## v1.4.3 - 2026-04-30
 
 - Added remote API timeout fallback with a configurable model order. The default order is Kimi-K2.6, MiniMax-M2.7, Qwen3-Coder, Qwen3.6-Plus, Qwen3-Max, and Qwen3-Thinking.

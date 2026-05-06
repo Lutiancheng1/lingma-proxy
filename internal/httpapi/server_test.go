@@ -158,6 +158,66 @@ func TestNormalizeAnthropicRequestRejectsEmptyMessages(t *testing.T) {
 	}
 }
 
+func TestAnthropicHostedWebSearchCall(t *testing.T) {
+	req := anthropicRequest{
+		Model: "Kimi-K2.6",
+		Tools: []any{
+			map[string]any{
+				"name": "web_search",
+				"type": "web_search_20250305",
+			},
+		},
+		ToolChoice: map[string]any{
+			"type": "tool",
+			"name": "web_search",
+		},
+		Messages: []rawMessage{{
+			Role: "user",
+			Content: []any{
+				map[string]any{
+					"type": "text",
+					"text": "Perform a web search for the query: Hermes agent web UI documentation",
+				},
+			},
+		}},
+	}
+
+	call, ok := anthropicHostedWebSearchCall(req)
+	if !ok {
+		t.Fatal("expected hosted web_search tool call")
+	}
+	if call.Name != "web_search" {
+		t.Fatalf("tool name = %q", call.Name)
+	}
+	if call.Arguments["query"] != "Hermes agent web UI documentation" {
+		t.Fatalf("query = %#v", call.Arguments["query"])
+	}
+	if !strings.HasPrefix(call.ID, "toolu_") {
+		t.Fatalf("id = %q", call.ID)
+	}
+}
+
+func TestAnthropicHostedWebSearchCallIgnoresRegularClientWebSearch(t *testing.T) {
+	req := anthropicRequest{
+		Tools: []any{
+			map[string]any{
+				"name": "web_search",
+				"input_schema": map[string]any{
+					"type": "object",
+				},
+			},
+		},
+		Messages: []rawMessage{{
+			Role:    "user",
+			Content: "Perform a web search for the query: Lingma",
+		}},
+	}
+
+	if _, ok := anthropicHostedWebSearchCall(req); ok {
+		t.Fatal("regular client web_search should stay in prompt tool emulation")
+	}
+}
+
 func TestDiscoveryCompatibilityEndpoints(t *testing.T) {
 	server := NewServer("", service.New(service.Config{
 		Model:   "Qwen3-Coder",
@@ -176,6 +236,29 @@ func TestDiscoveryCompatibilityEndpoints(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s status = %d body = %s", path, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestToolStreamFilterStreamsNormalTextWithTools(t *testing.T) {
+	filter := newToolStreamFilter(true)
+	var chunks []string
+	chunks = append(chunks, filter.Push(strings.Repeat("你", 120))...)
+	chunks = append(chunks, filter.Push("后续内容")...)
+	chunks = append(chunks, filter.Flush()...)
+	out := strings.Join(chunks, "")
+	if !strings.Contains(out, "后续内容") {
+		t.Fatalf("streamed text = %q", out)
+	}
+}
+
+func TestToolStreamFilterBuffersActionBlock(t *testing.T) {
+	filter := newToolStreamFilter(true)
+	var chunks []string
+	chunks = append(chunks, filter.Push("```json ")...)
+	chunks = append(chunks, filter.Push("action\n{\"tool\":\"Bash\",\"parameters\":{\"command\":\"pwd\"}}\n```")...)
+	chunks = append(chunks, filter.Flush()...)
+	if len(chunks) != 0 {
+		t.Fatalf("unexpected leaked action chunks: %#v", chunks)
 	}
 }
 

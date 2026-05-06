@@ -83,12 +83,34 @@ func TestInjectToolingIncludesAutoToolGuidance(t *testing.T) {
 	for _, want := range []string{
 		"tool_choice=auto means you must decide",
 		"inspect a local file path",
-		"Core tool examples",
+		"Core tool syntax examples",
+		"conceptual question",
 		"NEVER ask the user to run a command",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestExtractAnthropicToolsSkipsHostedWebSearch(t *testing.T) {
+	tools := ExtractAnthropicTools([]any{
+		map[string]any{
+			"name": "web_search",
+			"type": "web_search_20250305",
+		},
+		map[string]any{
+			"name": "read_file",
+			"input_schema": map[string]any{
+				"type": "object",
+			},
+		},
+	})
+	if len(tools) != 1 {
+		t.Fatalf("tool count = %d", len(tools))
+	}
+	if tools[0].Name != "read_file" {
+		t.Fatalf("tool = %+v", tools[0])
 	}
 }
 
