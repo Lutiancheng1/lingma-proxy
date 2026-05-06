@@ -15,6 +15,7 @@ const status = ref({ running: false, addr: '', models: 0 })
 const toast = ref('')
 const themeMode = ref(localStorage.getItem('lingma-theme-mode') || 'system')
 const appliedTheme = ref('light')
+const forceQuitting = ref(false)
 let systemThemeQuery = null
 let toastTimer = null
 
@@ -106,12 +107,13 @@ async function copyEndpoint() {
 }
 
 async function forceQuitApp() {
-  const confirmed = window.confirm('确定要停止代理并退出应用吗？')
-  if (!confirmed) return
+  if (forceQuitting.value) return
+  forceQuitting.value = true
   showToast('正在停止代理并退出应用...')
   try {
     await ForceQuitApp()
   } catch (e) {
+    forceQuitting.value = false
     addLog('error', '退出应用失败：' + (e.message || String(e)))
   }
 }
@@ -271,7 +273,7 @@ onUnmounted(() => {
           <button class="icon-button" type="button" :title="themeTitle()" @click="toggleTheme">
             <i class="bi" :class="themeIcon()" aria-hidden="true"></i>
           </button>
-          <button class="icon-button danger-icon-button" type="button" title="停止代理并退出应用" @click="forceQuitApp">
+          <button class="icon-button danger-icon-button" type="button" title="停止代理并退出应用" :disabled="forceQuitting" @click="forceQuitApp">
             <i class="bi bi-power" aria-hidden="true"></i>
           </button>
         </div>

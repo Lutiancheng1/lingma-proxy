@@ -154,3 +154,25 @@ func TestParseActionBlocksMapsReadAlias(t *testing.T) {
 		t.Fatalf("calls = %+v", calls)
 	}
 }
+
+func TestParseActionBlocksDropsCallsMissingRequiredArgs(t *testing.T) {
+	text := "```json action\n{\"tool\":\"Read\",\"parameters\":{\"path\":\"/tmp/a.txt\"}}\n```"
+	calls, clean, err := ParseActionBlocks(text, []ToolDef{{
+		Name: "Read",
+		InputSchema: map[string]any{
+			"properties": map[string]any{
+				"file_path": map[string]any{"type": "string"},
+			},
+			"required": []any{"file_path"},
+		},
+	}}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("expected no calls, got %+v", calls)
+	}
+	if !strings.Contains(clean, "\"path\"") {
+		t.Fatalf("clean should preserve unparseable action block, got %q", clean)
+	}
+}

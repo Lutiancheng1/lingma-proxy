@@ -117,6 +117,7 @@ func NewServer(addr string, svc *service.Service) *Server {
 	mux.HandleFunc("/v1/props", s.handleModelProps)
 	mux.HandleFunc("/props", s.handleModelProps)
 	mux.HandleFunc("/version", s.handleVersion)
+	mux.HandleFunc("/v1/messages/count_tokens", s.handleAnthropicCountTokens)
 	mux.HandleFunc("/v1/messages", s.handleAnthropicMessages)
 	mux.HandleFunc("/v1/chat/completions", s.handleOpenAIChatCompletions)
 	mux.HandleFunc("/api/v1/chat/completions", s.handleOpenAIChatCompletions)
@@ -443,6 +444,27 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": "lingma-proxy",
 		"service": "lingma-proxy",
+	})
+}
+
+func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAnthropicError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
+
+	var req anthropicRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"input_tokens": estimateAnthropicInputTokens(req),
 	})
 }
 
@@ -1292,6 +1314,9 @@ func anthropicHostedWebSearchCall(req anthropicRequest) (toolemulation.ToolCall,
 	if !hasAnthropicHostedWebSearchTool(req.Tools) {
 		return toolemulation.ToolCall{}, false
 	}
+	if hasAnthropicToolResult(req.Messages) {
+		return toolemulation.ToolCall{}, false
+	}
 	if !anthropicHostedWebSearchRequested(req.Tools, req.ToolChoice) {
 		return toolemulation.ToolCall{}, false
 	}
@@ -1305,6 +1330,46 @@ func anthropicHostedWebSearchCall(req anthropicRequest) (toolemulation.ToolCall,
 		Name:      "web_search",
 		Arguments: map[string]any{"query": query},
 	}, true
+}
+
+func hasAnthropicToolResult(messages []rawMessage) bool {
+	for _, message := range messages {
+		items, ok := message.Content.([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range items {
+			m, ok := item.(map[string]any)
+			if ok && stringFromAny(m["type"]) == "tool_result" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func estimateAnthropicInputTokens(req anthropicRequest) int {
+	payload := map[string]any{
+		"model":       req.Model,
+		"system":      req.System,
+		"messages":    req.Messages,
+		"tools":       req.Tools,
+		"tool_choice": req.ToolChoice,
+		"thinking":    req.Thinking,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return 1
+	}
+	runes := len([]rune(string(raw)))
+	if runes == 0 {
+		return 1
+	}
+	tokens := (runes + 2) / 3
+	if tokens < 1 {
+		return 1
+	}
+	return tokens
 }
 
 func hasAnthropicHostedWebSearchTool(raw any) bool {

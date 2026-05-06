@@ -218,6 +218,64 @@ func TestAnthropicHostedWebSearchCallIgnoresRegularClientWebSearch(t *testing.T)
 	}
 }
 
+func TestAnthropicHostedWebSearchCallIgnoresToolResultFollowup(t *testing.T) {
+	req := anthropicRequest{
+		Tools: []any{
+			map[string]any{
+				"name": "web_search",
+				"type": "web_search_20250305",
+			},
+		},
+		ToolChoice: map[string]any{
+			"type": "tool",
+			"name": "web_search",
+		},
+		Messages: []rawMessage{{
+			Role: "user",
+			Content: []any{
+				map[string]any{
+					"type":        "tool_result",
+					"tool_use_id": "toolu_123",
+					"content":     "result",
+				},
+			},
+		}},
+	}
+
+	if _, ok := anthropicHostedWebSearchCall(req); ok {
+		t.Fatal("hosted web_search should not short-circuit after a tool_result")
+	}
+}
+
+func TestAnthropicCountTokensEndpoint(t *testing.T) {
+	server := NewServer("", service.New(service.Config{
+		Model:   "Qwen3-Coder",
+		Timeout: time.Second,
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{
+		"model":"kmodel",
+		"max_tokens":128,
+		"system":"You are concise.",
+		"messages":[{"role":"user","content":"hello"}],
+		"tools":[{"name":"read_file","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}}]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.http.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["input_tokens"].(float64) <= 0 {
+		t.Fatalf("input_tokens = %#v", body["input_tokens"])
+	}
+}
+
 func TestDiscoveryCompatibilityEndpoints(t *testing.T) {
 	server := NewServer("", service.New(service.Config{
 		Model:   "Qwen3-Coder",

@@ -231,8 +231,19 @@ func (a *App) forceQuit() {
 	a.mu.Unlock()
 
 	a.emitLog("info", "正在停止代理并退出应用")
-	if err := a.StopProxy(); err != nil {
-		runtime.LogWarningf(a.ctx, "stop proxy before exit failed: %v", err)
+
+	done := make(chan struct{})
+	go func() {
+		if err := a.StopProxy(); err != nil {
+			runtime.LogWarningf(a.ctx, "stop proxy before exit failed: %v", err)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(1200 * time.Millisecond):
+		runtime.LogWarning(a.ctx, "force quit continuing before proxy shutdown completed")
 	}
 	os.Exit(0)
 }

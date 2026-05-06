@@ -283,10 +283,11 @@ func ActionOutputPrompt(toolCallID string, output string) string {
 	if output == "" {
 		return ""
 	}
+	next := "Based on the tool result above, answer the user's request directly if you have enough information. Only use another structured action block if a specific missing fact still requires another tool call."
 	if id := strings.TrimSpace(toolCallID); id != "" {
-		return "Tool result for " + id + ":\n" + output + "\n\nBased on the tool result above, continue with the next appropriate action using the structured format."
+		return "Tool result for " + id + ":\n" + output + "\n\n" + next
 	}
-	return "Tool result:\n" + output + "\n\nBased on the tool result above, continue with the next appropriate action using the structured format."
+	return "Tool result:\n" + output + "\n\n" + next
 }
 
 func ActionBlockExample(tools []ToolDef) string {
@@ -629,6 +630,9 @@ func ParseActionBlocks(text string, tools []ToolDef, cfg Config) ([]ToolCall, st
 		// Filter arguments against the tool's input schema to strip unknown params
 		if schema, ok := toolSchemaMap[call.Name]; ok && len(schema) > 0 {
 			call.Arguments = filterArgsBySchema(call.Arguments, schema)
+			if !hasRequiredArgs(call.Arguments, schema) {
+				continue
+			}
 		}
 		calls = append(calls, call)
 		spans = append(spans, span{start: start, end: end + 3})
@@ -1009,6 +1013,19 @@ func filterArgsBySchema(args map[string]any, schema map[string]any) map[string]a
 		out[k] = v
 	}
 	return out
+}
+
+func hasRequiredArgs(args map[string]any, schema map[string]any) bool {
+	for _, key := range requiredKeys(schema) {
+		value, ok := args[key]
+		if !ok {
+			return false
+		}
+		if s, ok := value.(string); ok && strings.TrimSpace(s) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func cloneMap(src map[string]any) map[string]any {
