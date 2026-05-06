@@ -1,10 +1,10 @@
 param(
-  [string]$ServiceName = "LingmaIpcProxy",
+  [string]$ServiceName = "LingmaProxy",
   [string]$BinaryPath = "",
   [string]$Arguments = "--host 127.0.0.1 --port 8095 --session-mode auto",
   [string]$WorkingDirectory = "",
   [string]$NssmPath = "nssm.exe",
-  [string]$Description = "Lingma IPC proxy service"
+  [string]$Description = "Lingma Proxy service"
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
 if ([string]::IsNullOrWhiteSpace($BinaryPath)) {
-  $BinaryPath = Join-Path $repoRoot "dist\lingma-ipc-proxy.exe"
+  $BinaryPath = Join-Path $repoRoot "dist\lingma-proxy.exe"
 }
 if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
   $WorkingDirectory = $repoRoot

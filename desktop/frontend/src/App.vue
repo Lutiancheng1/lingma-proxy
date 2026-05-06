@@ -6,7 +6,7 @@ import Models from './views/Models.vue'
 import Requests from './views/Requests.vue'
 import Settings from './views/Settings.vue'
 import { EventsOff, EventsOn } from '../wailsjs/runtime'
-import { ClearLogs, GetLogs, GetStatus, HideWindow, MinimizeWindow } from '../wailsjs/go/main/App.js'
+import { ClearLogs, ForceQuitApp, GetLogs, GetStatus, HideWindow, MinimizeWindow } from '../wailsjs/go/main/App.js'
 import lingmaIcon from './assets/images/lingma-icon.png'
 
 const currentTab = ref('dashboard')
@@ -103,6 +103,17 @@ async function copyEndpoint() {
   const value = `http://${status.value.addr}`
   await navigator.clipboard?.writeText(value)
   handleNotice('已复制接口地址：' + value)
+}
+
+async function forceQuitApp() {
+  const confirmed = window.confirm('确定要停止代理并退出应用吗？')
+  if (!confirmed) return
+  showToast('正在停止代理并退出应用...')
+  try {
+    await ForceQuitApp()
+  } catch (e) {
+    addLog('error', '退出应用失败：' + (e.message || String(e)))
+  }
 }
 
 function safeEventsOn(name, handler) {
@@ -215,7 +226,7 @@ onUnmounted(() => {
         </span>
         <span>
           <strong>灵码代理</strong>
-          <small>IPC Proxy</small>
+          <small>Proxy</small>
         </span>
       </button>
 
@@ -259,6 +270,9 @@ onUnmounted(() => {
           </button>
           <button class="icon-button" type="button" :title="themeTitle()" @click="toggleTheme">
             <i class="bi" :class="themeIcon()" aria-hidden="true"></i>
+          </button>
+          <button class="icon-button danger-icon-button" type="button" title="停止代理并退出应用" @click="forceQuitApp">
+            <i class="bi bi-power" aria-hidden="true"></i>
           </button>
         </div>
       </header>

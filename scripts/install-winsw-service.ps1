@@ -1,5 +1,5 @@
 param(
-  [string]$ServiceName = "LingmaIpcProxy",
+  [string]$ServiceName = "LingmaProxy",
   [string]$BinaryPath = "",
   [string]$Arguments = "--host 127.0.0.1 --port 8095 --session-mode auto",
   [string]$WorkingDirectory = "",
@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
 if ([string]::IsNullOrWhiteSpace($BinaryPath)) {
-  $BinaryPath = Join-Path $repoRoot "dist\lingma-ipc-proxy.exe"
+  $BinaryPath = Join-Path $repoRoot "dist\lingma-proxy.exe"
 }
 if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
   $WorkingDirectory = $repoRoot
@@ -21,7 +21,7 @@ if ([string]::IsNullOrWhiteSpace($WinSWExePath)) {
   $WinSWExePath = Join-Path $repoRoot "dist\WinSW-x64.exe"
 }
 if ([string]::IsNullOrWhiteSpace($TemplatePath)) {
-  $TemplatePath = Join-Path $PSScriptRoot "lingma-ipc-proxy.xml.template"
+  $TemplatePath = Join-Path $PSScriptRoot "lingma-proxy.xml.template"
 }
 
 if (!(Test-Path $BinaryPath)) {
@@ -40,7 +40,7 @@ $serviceXmlPath = Join-Path $repoRoot "$ServiceName.xml"
 $xml = Get-Content -Raw $TemplatePath
 $xml = $xml.Replace("__SERVICE_ID__", $ServiceName)
 $xml = $xml.Replace("__SERVICE_NAME__", $ServiceName)
-$xml = $xml.Replace("__SERVICE_DESCRIPTION__", "Lingma IPC proxy service")
+$xml = $xml.Replace("__SERVICE_DESCRIPTION__", "Lingma Proxy service")
 $xml = $xml.Replace("__EXECUTABLE__", $BinaryPath)
 $xml = $xml.Replace("__ARGUMENTS__", $Arguments)
 $xml = $xml.Replace("__WORKDIR__", $WorkingDirectory)

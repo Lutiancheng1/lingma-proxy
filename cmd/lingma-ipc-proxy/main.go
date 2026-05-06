@@ -57,7 +57,7 @@ func main() {
 
 	server := httpapi.NewServer(addr, svc)
 
-	log.Printf("lingma-ipc-proxy listening on http://%s", addr)
+	log.Printf("lingma-proxy listening on http://%s", addr)
 	log.Printf("session mode: %s", cfg.SessionMode)
 	log.Printf("transport: %s", cfg.Transport)
 	log.Printf("mode: %s", cfg.Mode)
@@ -134,7 +134,7 @@ func loadConfig() (service.Config, string) {
 	remoteFallbackEnabled := flag.Bool("remote-fallback", cfg.RemoteFallbackEnabled, "Enable remote timeout/5xx fallback to the next available model")
 	remoteFallbackModels := flag.String("remote-fallback-models", strings.Join(cfg.RemoteFallbackModels, ","), "Comma-separated remote fallback model IDs")
 	sessionMode := flag.String("session-mode", string(cfg.SessionMode), "Session mode: auto, fresh, reuse")
-	config := flag.String("config", valueOr(configPath, filepath.Join(currentDir(), "lingma-ipc-proxy.json")), "Path to JSON config file")
+	config := flag.String("config", valueOr(configPath, filepath.Join(currentDir(), "lingma-proxy.json")), "Path to JSON config file")
 	flag.Parse()
 
 	parsedSessionMode := parseSessionMode(*sessionMode)
@@ -176,9 +176,11 @@ func resolveConfigPath() (string, bool) {
 	if path := strings.TrimSpace(os.Getenv("LINGMA_PROXY_CONFIG")); path != "" {
 		return path, true
 	}
-	defaultPath := filepath.Join(currentDir(), "lingma-ipc-proxy.json")
-	if info, err := os.Stat(defaultPath); err == nil && !info.IsDir() {
-		return defaultPath, true
+	defaultPath := filepath.Join(currentDir(), "lingma-proxy.json")
+	for _, candidate := range []string{defaultPath, filepath.Join(currentDir(), "lingma-ipc-proxy.json")} {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
 	}
 	return defaultPath, false
 }

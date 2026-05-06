@@ -10,6 +10,10 @@ export function ClearRequests() {
   return window['go']['main']['App']['ClearRequests']();
 }
 
+export function ForceQuitApp() {
+  return window['go']['main']['App']['ForceQuitApp']();
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }

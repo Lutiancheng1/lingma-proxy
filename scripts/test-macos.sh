@@ -1,5 +1,5 @@
 #!/bin/bash
-# lingma-ipc-proxy macOS 功能测试脚本
+# Lingma Proxy macOS 功能测试脚本
 # 用法: ./scripts/test-macos.sh [host:port]
 
 ENDPOINT="${1:-127.0.0.1:8095}"
@@ -23,7 +23,7 @@ assert_contains() {
 }
 
 echo "========================================"
-echo "lingma-ipc-proxy macOS 功能测试"
+echo "Lingma Proxy macOS 功能测试"
 echo "端点: http://$ENDPOINT"
 echo "========================================"
 

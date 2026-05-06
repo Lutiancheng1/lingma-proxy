@@ -7,6 +7,8 @@ export function ClearLogs():Promise<void>;
 
 export function ClearRequests():Promise<void>;
 
+export function ForceQuitApp():Promise<void>;
+
 export function GetConfig():Promise<service.Config>;
 
 export function GetDetectionInfo():Promise<main.DetectionInfo>;

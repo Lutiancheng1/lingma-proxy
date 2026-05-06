@@ -308,7 +308,7 @@ func (c *Client) headers(cred Credential, path string, body string) (map[string]
 		"Cosy-Machinetype":  "",
 		"Cosy-Version":      c.cfg.CosyVersion,
 		"Login-Version":     "v2",
-		"User-Agent":        "lingma-ipc-proxy/remote",
+		"User-Agent":        "lingma-proxy/remote",
 		"Accept":            "text/event-stream",
 		"Cache-Control":     "no-cache",
 	}, nil
@@ -396,6 +396,7 @@ func candidateConfigFiles() []string {
 		filepath.Join(home, ".lingma", "extension", "server", "config.json"),
 		filepath.Join(home, ".lingma", "extension", "local", "config.json"),
 		filepath.Join(home, ".lingma", "bin", "config.json"),
+		filepath.Join(home, ".config", "lingma-proxy", "config.json"),
 		filepath.Join(home, ".config", "lingma-ipc-proxy", "config.json"),
 		filepath.Join(home, ".lingma", "logs", "lingma.log"),
 		filepath.Join(home, ".lingma", "logs", "lingma-extension.log"),

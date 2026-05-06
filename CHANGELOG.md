@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-- Nothing yet.
+- Renamed user-facing product, desktop app, release assets, and documentation from Lingma IPC Proxy to Lingma Proxy.
+- Clarified that Remote API mode is the recommended default and that only IPC plugin mode is based on the `coolxll/lingma-ipc-proxy` protocol discovery.
+- Added `lingma-proxy.json` and `~/.config/lingma-proxy/config.json` config lookup/write paths while keeping legacy `lingma-ipc-proxy` config fallback.
+- Added a desktop top-bar force quit button that stops the proxy and exits the app on macOS and Windows.
 
 ## v1.4.6 - 2026-05-06
 

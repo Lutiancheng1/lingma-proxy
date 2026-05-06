@@ -2,14 +2,14 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-Lingma Proxy exposes Tongyi Lingma as standard **OpenAI-compatible** and **Anthropic-compatible** HTTP APIs. It can use either the local IDE plugin IPC channel or an experimental remote API backend, and ships as both a CLI proxy service and a cross-platform desktop app for macOS and Windows.
+Lingma Proxy exposes Tongyi Lingma as standard **OpenAI-compatible** and **Anthropic-compatible** HTTP APIs. It can use either the recommended Remote API backend or the local IDE plugin IPC channel, and ships as both a CLI proxy service and a cross-platform desktop app for macOS and Windows.
 
 The project is designed for tools such as Claude Code, Cline, Continue, OpenCode, custom agents, and any client that can talk to OpenAI or Anthropic style APIs.
 
 The proxy now supports two backend modes:
 
-- **Remote API mode (default, experimental)**: imports the local Lingma login cache or an explicit credential file and calls Lingma remote APIs directly. This feels more like an official API, does not depend on an IDE IPC session, and is currently the recommended mode for Claude Code / Hermes style agents.
-- **IPC plugin mode**: connects to the local Lingma IDE plugin over WebSocket / Named Pipe. This keeps behavior closest to the IDE plugin and is useful as a compatibility fallback.
+- **Remote API mode (default, recommended)**: imports the local Lingma login cache or an explicit credential file and calls Lingma remote APIs directly. This behaves closest to a normal hosted API, avoids IDE/plugin session and environment limits, and is currently the best mode for Claude Code / Hermes style agents.
+- **IPC plugin mode**: connects to the local Lingma IDE plugin over WebSocket / Named Pipe. This keeps behavior closest to the IDE plugin, but it can inherit IDE session lifetime, local plugin state, and environment constraints, so it is mainly a compatibility fallback.
 
 ## Current Version
 
@@ -21,22 +21,22 @@ Release builds are produced by GitHub Actions for:
 
 | Asset | Platform | Purpose |
 | --- | --- | --- |
-| `lingma-ipc-proxy_<tag>_darwin_arm64.tar.gz` | macOS | CLI proxy |
-| `lingma-ipc-proxy_<tag>_windows_amd64.zip` | Windows | CLI proxy |
-| `lingma-ipc-proxy-desktop_<tag>_darwin_arm64.dmg` | macOS Apple Silicon | Drag-to-install desktop app |
-| `lingma-ipc-proxy-desktop_<tag>_darwin_arm64.zip` | macOS Apple Silicon | Raw `.app` archive |
-| `lingma-ipc-proxy-desktop_<tag>_windows_amd64.zip` | Windows | Desktop app |
-| `lingma-ipc-proxy_<tag>_sha256.txt` | all | Checksums |
+| `lingma-proxy_<tag>_darwin_arm64.tar.gz` | macOS | CLI proxy |
+| `lingma-proxy_<tag>_windows_amd64.zip` | Windows | CLI proxy |
+| `lingma-proxy-desktop_<tag>_darwin_arm64.dmg` | macOS Apple Silicon | Drag-to-install desktop app |
+| `lingma-proxy-desktop_<tag>_darwin_arm64.zip` | macOS Apple Silicon | Raw `.app` archive |
+| `lingma-proxy-desktop_<tag>_windows_amd64.zip` | Windows | Desktop app |
+| `lingma-proxy_<tag>_sha256.txt` | all | Checksums |
 
 ### Which Package Should I Download?
 
 | Your system | Recommended asset | Notes |
 | --- | --- | --- |
-| macOS on Apple Silicon (M1/M2/M3/M4) | `lingma-ipc-proxy-desktop_<tag>_darwin_arm64.dmg` | Open the DMG and drag `Lingma IPC Proxy.app` to `Applications`. |
-| macOS on Apple Silicon, portable archive | `lingma-ipc-proxy-desktop_<tag>_darwin_arm64.zip` | Same app, but packaged as a zip instead of a drag-to-install DMG. |
-| Windows x64 / x86_64 / AMD64 | `lingma-ipc-proxy-desktop_<tag>_windows_amd64.zip` | This is the correct package for normal 64-bit Windows PCs, including Intel and AMD CPUs. |
-| macOS CLI only | `lingma-ipc-proxy_<tag>_darwin_arm64.tar.gz` | Terminal-only proxy binary. |
-| Windows CLI only | `lingma-ipc-proxy_<tag>_windows_amd64.zip` | Terminal-only proxy binary for 64-bit Windows. |
+| macOS on Apple Silicon (M1/M2/M3/M4) | `lingma-proxy-desktop_<tag>_darwin_arm64.dmg` | Open the DMG and drag `Lingma Proxy.app` to `Applications`. |
+| macOS on Apple Silicon, portable archive | `lingma-proxy-desktop_<tag>_darwin_arm64.zip` | Same app, but packaged as a zip instead of a drag-to-install DMG. |
+| Windows x64 / x86_64 / AMD64 | `lingma-proxy-desktop_<tag>_windows_amd64.zip` | This is the correct package for normal 64-bit Windows PCs, including Intel and AMD CPUs. |
+| macOS CLI only | `lingma-proxy_<tag>_darwin_arm64.tar.gz` | Terminal-only proxy binary. |
+| Windows CLI only | `lingma-proxy_<tag>_windows_amd64.zip` | Terminal-only proxy binary for 64-bit Windows. |
 
 There is currently no separate `windows_arm64` package. On a normal x64 Windows machine, choose `windows_amd64`.
 
@@ -165,18 +165,18 @@ flowchart LR
 If auto detection fails, set the path manually in the desktop Settings page or pass CLI flags:
 
 ```bash
-lingma-ipc-proxy --transport websocket --ws-url ws://127.0.0.1:36510 --port 8095
-lingma-ipc-proxy --transport pipe --pipe '\\.\pipe\lingma-ipc'
+lingma-proxy --transport websocket --ws-url ws://127.0.0.1:36510 --port 8095
+lingma-proxy --transport pipe --pipe '\\.\pipe\lingma-ipc'
 ```
 
 ## Backend Modes
 
-### Remote API Mode (Default, Experimental)
+### Remote API Mode (Default, Recommended)
 
 Remote mode calls Lingma's remote API directly:
 
 ```bash
-lingma-ipc-proxy --backend remote --port 8095
+lingma-proxy --backend remote --port 8095
 ```
 
 By default it reads the local Lingma login cache in read-only mode:
@@ -193,10 +193,10 @@ XDG config/state Lingma cache paths when present
 You can also pass an explicit credential file:
 
 ```bash
-lingma-ipc-proxy \
+lingma-proxy \
   --backend remote \
   --remote-base-url https://lingma.alibabacloud.com \
-  --remote-auth-file ~/.config/lingma-ipc-proxy/credentials.json
+  --remote-auth-file ~/.config/lingma-proxy/credentials.json
 ```
 
 Credential file format:
@@ -216,6 +216,7 @@ Credential file format:
 
 Notes:
 
+- Remote API mode is the recommended default for day-to-day agent usage. It bypasses the IDE/plugin IPC runtime, so it is less affected by plugin session state, IDE working directory, or local extension environment limitations.
 - Remote mode does not write or migrate login state. It only reads the local Lingma cache or the credential file you provide.
 - If your Lingma plugin uses a dedicated domain, remote mode first uses `--remote-base-url`, `LINGMA_REMOTE_BASE_URL`, or the JSON config field. If those are empty, it scans Lingma's local logs on macOS, Windows, and Linux for endpoint hints such as `endpoint config:` and marketplace service URLs.
 - The desktop Settings page shows the resolved remote domain and detection source without exposing tokens.
@@ -228,10 +229,10 @@ Notes:
 IPC mode talks to the local Lingma IDE plugin:
 
 ```bash
-lingma-ipc-proxy --backend ipc --transport auto --port 8095
+lingma-proxy --backend ipc --transport auto --port 8095
 ```
 
-Use this when VS Code / the Lingma plugin is already running, when you want plugin session behavior, or when you want the model list exposed by the local plugin.
+Use this when VS Code / the Lingma plugin is already running, when you want plugin session behavior, or when you want the exact model list exposed by the local plugin. Compared with Remote API mode, IPC mode is more coupled to the IDE/plugin process and can be affected by that process's session, current project, and local environment.
 
 ## Quick Start
 
@@ -239,25 +240,25 @@ Use this when VS Code / the Lingma plugin is already running, when you want plug
 
 1. Install VS Code and the Tongyi Lingma extension.
 2. Log in to Tongyi Lingma and verify the Lingma panel can chat normally.
-3. Download the desktop asset from [Releases](https://github.com/Lutiancheng1/lingma-ipc-proxy/releases).
-4. Start `Lingma IPC Proxy`.
+3. Download the desktop asset from [Releases](https://github.com/Lutiancheng1/lingma-proxy/releases).
+4. Start `Lingma Proxy`.
 5. Click `探测模型` after the proxy is running.
 6. Configure clients to use `http://127.0.0.1:8095`.
 
 ### CLI
 
 ```bash
-git clone https://github.com/Lutiancheng1/lingma-ipc-proxy.git
-cd lingma-ipc-proxy
-go build -o ./dist/lingma-ipc-proxy ./cmd/lingma-ipc-proxy
-./dist/lingma-ipc-proxy --host 127.0.0.1 --port 8095 --session-mode auto
+git clone https://github.com/Lutiancheng1/lingma-proxy.git
+cd lingma-proxy
+go build -o ./dist/lingma-proxy ./cmd/lingma-ipc-proxy
+./dist/lingma-proxy --host 127.0.0.1 --port 8095 --session-mode auto
 ```
 
 Windows:
 
 ```powershell
 .\scripts\build.ps1
-.\dist\lingma-ipc-proxy.exe --host 127.0.0.1 --port 8095 --session-mode auto
+.\dist\lingma-proxy.exe --host 127.0.0.1 --port 8095 --session-mode auto
 ```
 
 ## Client Configuration
@@ -335,7 +336,8 @@ Remote mode enables timeout fallback by default. On timeout, upstream 5xx/429, o
 Default config file:
 
 ```text
-./lingma-ipc-proxy.json
+./lingma-proxy.json
+./lingma-ipc-proxy.json  # legacy fallback
 ```
 
 Example:
@@ -387,7 +389,7 @@ Older builds rejected concurrent chat requests with a `rate_limit_error` saying 
 Example:
 
 ```bash
-LINGMA_PROXY_MAX_CONCURRENT=8 lingma-ipc-proxy --port 8095
+LINGMA_PROXY_MAX_CONCURRENT=8 lingma-proxy --port 8095
 ```
 
 ## Function Calling / Tool Calling
@@ -460,7 +462,7 @@ cd desktop
 wails build -platform windows/amd64 -clean
 ```
 
-The desktop bundle name is always `Lingma IPC Proxy`.
+The desktop bundle name is always `Lingma Proxy`.
 
 ## Release Plan
 
@@ -480,4 +482,4 @@ Planned improvements:
 
 ## Acknowledgements
 
-This project is based on the protocol insight and initial discovery work from [coolxll/lingma-ipc-proxy](https://github.com/coolxll/lingma-ipc-proxy). The core idea of connecting to Lingma's private local IPC protocol and exposing standard API endpoints came from that project. This fork extends the implementation with broader OpenAI/Anthropic compatibility, tool emulation, image handling, desktop app support, request/log inspection, cross-platform packaging, and release automation.
+The **IPC plugin mode** is based on the protocol insight and initial discovery work from [coolxll/lingma-ipc-proxy](https://github.com/coolxll/lingma-ipc-proxy). That project first demonstrated that Lingma's private local IPC protocol can be bridged to standard HTTP API endpoints. Lingma Proxy keeps that IPC path as a compatibility backend and extends it with broader OpenAI/Anthropic compatibility, tool emulation, image handling, desktop app support, request/log inspection, cross-platform packaging, and release automation. The default **Remote API mode** is a separate backend that calls Lingma remote APIs directly and is documented independently above.

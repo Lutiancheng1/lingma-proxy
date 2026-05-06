@@ -198,6 +198,11 @@ func (a *App) QuitApp() {
 	a.beginQuit()
 }
 
+// ForceQuitApp stops the proxy and exits the desktop process immediately.
+func (a *App) ForceQuitApp() {
+	a.beginQuit()
+}
+
 // RequestQuitShortcut requires two shortcut presses to avoid accidental exits.
 func (a *App) RequestQuitShortcut() {
 	now := time.Now()
@@ -358,7 +363,7 @@ func (a *App) saveConfig(cfg service.Config) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(home, ".config", "lingma-ipc-proxy")
+	dir := filepath.Join(home, ".config", "lingma-proxy")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
@@ -1041,15 +1046,19 @@ func configSearchPaths() []string {
 	var paths []string
 	// 1. Executable directory (for dev / portable mode)
 	if exe, err := os.Executable(); err == nil {
+		paths = append(paths, filepath.Join(filepath.Dir(exe), "lingma-proxy.json"))
 		paths = append(paths, filepath.Join(filepath.Dir(exe), "lingma-ipc-proxy.json"))
 	}
 	// 2. Current working directory
 	if wd, err := os.Getwd(); err == nil {
+		paths = append(paths, filepath.Join(wd, "lingma-proxy.json"))
 		paths = append(paths, filepath.Join(wd, "lingma-ipc-proxy.json"))
 	}
 	// 3. User home directory
 	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, "lingma-proxy.json"))
 		paths = append(paths, filepath.Join(home, "lingma-ipc-proxy.json"))
+		paths = append(paths, filepath.Join(home, ".config", "lingma-proxy", "config.json"))
 		paths = append(paths, filepath.Join(home, ".config", "lingma-ipc-proxy", "config.json"))
 	}
 	return paths

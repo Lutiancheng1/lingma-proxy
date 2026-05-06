@@ -60,14 +60,14 @@ jobs:
       - name: Build CLI
         run: |
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/lingma-ipc-proxy ./cmd/lingma-ipc-proxy
-          tar -C dist -czf "lingma-ipc-proxy_${RELEASE_TAG}_darwin_arm64.tar.gz" lingma-ipc-proxy
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/lingma-proxy ./cmd/lingma-ipc-proxy
+          tar -C dist -czf "lingma-proxy_${RELEASE_TAG}_darwin_arm64.tar.gz" lingma-proxy
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: cli-macos
-          path: lingma-ipc-proxy_${{ env.RELEASE_TAG }}_darwin_arm64.tar.gz
+          path: lingma-proxy_${{ env.RELEASE_TAG }}_darwin_arm64.tar.gz
 
   build-cli-windows:
     name: Build CLI Windows
@@ -86,14 +86,14 @@ jobs:
         shell: pwsh
         run: |
           .\scripts\build.ps1 -Clean
-          $asset = "lingma-ipc-proxy_${env:RELEASE_TAG}_windows_amd64.zip"
-          Compress-Archive -Path .\dist\lingma-ipc-proxy.exe -DestinationPath $asset -Force
+          $asset = "lingma-proxy_${env:RELEASE_TAG}_windows_amd64.zip"
+          Compress-Archive -Path .\dist\lingma-proxy.exe -DestinationPath $asset -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: cli-windows
-          path: lingma-ipc-proxy_${{ env.RELEASE_TAG }}_windows_amd64.zip
+          path: lingma-proxy_${{ env.RELEASE_TAG }}_windows_amd64.zip
 
   build-desktop-macos:
     name: Build Desktop macOS
@@ -130,17 +130,17 @@ jobs:
         run: |
           APP_PATH="$(find desktop/build/bin -maxdepth 1 -name '*.app' -print -quit)"
           test -n "$APP_PATH"
-          test "$(basename "$APP_PATH")" = "Lingma IPC Proxy.app"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "lingma-ipc-proxy-desktop_${RELEASE_TAG}_darwin_arm64.zip"
+          test "$(basename "$APP_PATH")" = "Lingma Proxy.app"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "lingma-proxy-desktop_${RELEASE_TAG}_darwin_arm64.zip"
           DMG_ROOT="$(mktemp -d)"
           cp -R "$APP_PATH" "$DMG_ROOT/"
           ln -s /Applications "$DMG_ROOT/Applications"
           hdiutil create \
-            -volname "Lingma IPC Proxy" \
+            -volname "Lingma Proxy" \
             -srcfolder "$DMG_ROOT" \
             -ov \
             -format UDZO \
-            "lingma-ipc-proxy-desktop_${RELEASE_TAG}_darwin_arm64.dmg"
+            "lingma-proxy-desktop_${RELEASE_TAG}_darwin_arm64.dmg"
           rm -rf "$DMG_ROOT"
 
       - name: Upload artifact
@@ -148,8 +148,8 @@ jobs:
         with:
           name: desktop-macos
           path: |
-            lingma-ipc-proxy-desktop_${{ env.RELEASE_TAG }}_darwin_arm64.zip
-            lingma-ipc-proxy-desktop_${{ env.RELEASE_TAG }}_darwin_arm64.dmg
+            lingma-proxy-desktop_${{ env.RELEASE_TAG }}_darwin_arm64.zip
+            lingma-proxy-desktop_${{ env.RELEASE_TAG }}_darwin_arm64.dmg
 
   build-desktop-windows:
     name: Build Desktop Windows
@@ -191,14 +191,14 @@ jobs:
           $exe = Get-ChildItem .\desktop\build\bin -Filter *.exe | Select-Object -First 1
           if (-not $exe) { throw "Desktop exe was not produced" }
           if ($exe.Name -ne "LingmaProxy.exe") { throw "Unexpected desktop exe name: $($exe.Name)" }
-          $asset = "lingma-ipc-proxy-desktop_${env:RELEASE_TAG}_windows_amd64.zip"
+          $asset = "lingma-proxy-desktop_${env:RELEASE_TAG}_windows_amd64.zip"
           Compress-Archive -Path $exe.FullName -DestinationPath $asset -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: desktop-windows
-          path: lingma-ipc-proxy-desktop_${{ env.RELEASE_TAG }}_windows_amd64.zip
+          path: lingma-proxy-desktop_${{ env.RELEASE_TAG }}_windows_amd64.zip
 
   publish:
     name: Publish Release
@@ -218,7 +218,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum * > "lingma-ipc-proxy_${RELEASE_TAG}_sha256.txt"
+          sha256sum * > "lingma-proxy_${RELEASE_TAG}_sha256.txt"
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2

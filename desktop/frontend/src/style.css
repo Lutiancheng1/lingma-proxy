@@ -1289,6 +1289,17 @@ button {
   border: 1px solid var(--line);
 }
 
+.danger-icon-button {
+  color: #b42318;
+  background: rgba(254, 226, 226, 0.72);
+  border-color: rgba(220, 38, 38, 0.24);
+}
+
+.danger-icon-button:hover {
+  color: #991b1b;
+  background: rgba(254, 202, 202, 0.88);
+}
+
 .primary-button:hover,
 .secondary-button:hover,
 .ghost-button:hover,
@@ -1961,6 +1972,17 @@ button:disabled {
   color: var(--text);
   border-color: var(--line);
   background: rgba(30, 41, 59, 0.66);
+}
+
+:root[data-theme='dark'] .danger-icon-button {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.32);
+  background: rgba(127, 29, 29, 0.42);
+}
+
+:root[data-theme='dark'] .danger-icon-button:hover {
+  color: #fff1f2;
+  background: rgba(153, 27, 27, 0.62);
 }
 
 :root[data-theme='dark'] .strip-actions {

@@ -21,7 +21,7 @@ func main() {
 	enableInspector := os.Getenv("LINGMA_DESKTOP_DEBUG") == "1"
 
 	err := wails.Run(&options.App{
-		Title:             "Lingma IPC Proxy",
+		Title:             "Lingma Proxy",
 		Width:             1100,
 		Height:            750,
 		MinWidth:          900,
@@ -40,7 +40,7 @@ func main() {
 		OnBeforeClose:    app.beforeClose,
 		OnDomReady:       app.onDomReady,
 		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId:               "lingma-ipc-proxy-desktop",
+			UniqueId:               "lingma-proxy-desktop",
 			OnSecondInstanceLaunch: app.onSecondInstanceLaunch,
 		},
 		Bind: []interface{}{
@@ -57,8 +57,8 @@ func main() {
 				HideToolbarSeparator:       true,
 			},
 			About: &mac.AboutInfo{
-				Title:   "Lingma IPC Proxy",
-				Message: "A desktop GUI for lingma-ipc-proxy",
+				Title:   "Lingma Proxy",
+				Message: "A desktop GUI for Lingma Proxy",
 			},
 		},
 	})
@@ -86,7 +86,7 @@ func appMenu(app *App) *menu.Menu {
 		app.MinimizeWindow()
 	})
 	appMenu.AddSeparator()
-	appMenu.AddText("退出 Lingma IPC Proxy", quitAccelerator, func(_ *menu.CallbackData) {
+	appMenu.AddText("退出 Lingma Proxy", quitAccelerator, func(_ *menu.CallbackData) {
 		app.RequestQuitShortcut()
 	})
 
@@ -100,7 +100,7 @@ func appMenu(app *App) *menu.Menu {
 	editMenu.AddText("全选", keys.CmdOrCtrl("a"), func(_ *menu.CallbackData) {})
 
 	return menu.NewMenuFromItems(
-		menu.SubMenu("Lingma IPC Proxy", appMenu),
+		menu.SubMenu("Lingma Proxy", appMenu),
 		menu.SubMenu("编辑", editMenu),
 	)
 }

@@ -178,7 +178,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
-		"service": "lingma-ipc-proxy",
+		"service": "lingma-proxy",
 		"state":   s.svc.State(),
 	})
 }
@@ -214,7 +214,7 @@ func (s *Server) handleDebugRequests(w http.ResponseWriter, r *http.Request) {
 	records := s.debugRecords(limit)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
-		"service":  "lingma-ipc-proxy",
+		"service":  "lingma-proxy",
 		"count":    len(records),
 		"requests": records,
 		"state":    s.svc.State(),
@@ -265,7 +265,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"service": "lingma-ipc-proxy",
+		"service": "lingma-proxy",
 		"protocols": []string{
 			"openai.chat_completions",
 			"anthropic.messages",
@@ -441,8 +441,8 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": "lingma-ipc-proxy",
-		"service": "lingma-ipc-proxy",
+		"version": "lingma-proxy",
+		"service": "lingma-proxy",
 	})
 }
 

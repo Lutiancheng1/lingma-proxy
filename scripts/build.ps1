@@ -1,6 +1,6 @@
 param(
   [string]$OutputDir = "dist",
-  [string]$BinaryName = "lingma-ipc-proxy.exe",
+  [string]$BinaryName = "lingma-proxy.exe",
   [switch]$Clean
 )
 

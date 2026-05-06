@@ -1,9 +1,9 @@
-# lingma-ipc-proxy Architecture
+# Lingma Proxy Architecture
 
-This document describes the current architecture of `lingma-ipc-proxy`, including both backend modes:
+This document describes the current architecture of **Lingma Proxy**, including both backend modes:
 
-- `ipc`: bridge to the local Lingma IDE plugin transport
-- `remote`: call Lingma remote HTTP APIs directly with detected credentials
+- `remote`: the default and recommended mode, calling Lingma remote HTTP APIs directly with detected credentials
+- `ipc`: a compatibility mode that bridges to the local Lingma IDE plugin transport
 
 ---
 
@@ -35,7 +35,20 @@ flowchart LR
 
 ## 2. Runtime Modes
 
-### 2.1 IPC mode
+### 2.1 Remote API mode
+
+`backend=remote`
+
+- Reads Lingma remote base URL from config, environment, or detected local Lingma logs
+- Loads credentials from:
+  - explicit `remote_auth_file`
+  - or detected Lingma login cache
+- Calls remote model list and chat endpoints directly
+- Supports timeout / 429 / 5xx fallback across available remote models
+- Does not use local plugin session environment knobs
+- Avoids IDE/plugin IPC session lifetime, working directory, and extension environment limitations
+
+### 2.2 IPC plugin mode
 
 `backend=ipc`
 
@@ -45,18 +58,7 @@ flowchart LR
   - Named Pipe on Windows
 - Reuses Lingma plugin session semantics
 - Session/environment options in the desktop UI apply only here
-
-### 2.2 Remote API mode
-
-`backend=remote`
-
-- Reads Lingma remote base URL
-- Loads credentials from:
-  - explicit `remote_auth_file`
-  - or detected Lingma cache under `~/.lingma`
-- Calls remote model list and chat endpoints directly
-- Supports timeout / 429 / 5xx fallback across available remote models
-- Does not use local plugin session environment knobs
+- This mode is based on the IPC protocol insight from `coolxll/lingma-ipc-proxy`
 
 ---
 
@@ -261,7 +263,8 @@ Responsibilities:
 
 Persisted local state:
 
-- config: `~/.config/lingma-ipc-proxy/config.json`
+- config: `~/.config/lingma-proxy/config.json`
+- legacy config fallback: `~/.config/lingma-ipc-proxy/config.json`
 - UI/runtime state: `~/.config/lingma-ipc-proxy/app-state.json`
 
 Production packaging rules:
@@ -277,8 +280,8 @@ Production packaging rules:
 
 Because the two modes solve different problems:
 
-- IPC mode preserves plugin session semantics and local tool environment
-- Remote mode avoids plugin runtime coupling and is usually better for third-party agent clients
+- Remote mode avoids plugin runtime coupling and is usually better for third-party agent clients.
+- IPC mode preserves plugin session semantics and remains useful when the caller specifically wants the local plugin's context or model list.
 
 ### 7.2 Why keep tool emulation even with remote mode?
 
@@ -313,4 +316,4 @@ If you are extending the system, start here:
 
 ---
 
-Document version: 2026-04-30
+Document version: 2026-05-06

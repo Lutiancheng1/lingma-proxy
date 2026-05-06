@@ -1,9 +1,9 @@
-# lingma-ipc-proxy 架构文档
+# Lingma Proxy 架构文档
 
-本文档描述 `lingma-ipc-proxy` 的当前架构，覆盖两种后端模式：
+本文档描述 **Lingma Proxy** 的当前架构，覆盖两种后端模式：
 
-- `ipc`：桥接本地 Lingma IDE 插件传输层
-- `remote`：直接调用 Lingma 远端 HTTP API
+- `remote`：默认推荐模式，使用探测到的登录态直接调用 Lingma 远端 HTTP API
+- `ipc`：兼容模式，桥接本地 Lingma IDE 插件传输层
 
 ---
 
@@ -35,7 +35,20 @@ flowchart LR
 
 ## 2. 运行模式
 
-### 2.1 IPC 模式
+### 2.1 Remote API 模式
+
+`backend=remote`
+
+- 从配置、环境变量或本地 Lingma 日志中解析远端域名
+- 加载认证信息：
+  - 显式指定的 `remote_auth_file`
+  - 或自动探测 Lingma 登录缓存
+- 直接请求远端模型列表和聊天接口
+- 支持远端超时 / 429 / 5xx 的模型兜底切换
+- 不依赖本地插件会话环境参数
+- 避免 IDE / 插件 IPC 会话生命周期、工作目录和扩展环境限制
+
+### 2.2 IPC 插件模式
 
 `backend=ipc`
 
@@ -45,18 +58,7 @@ flowchart LR
   - Windows：Named Pipe
 - 复用 Lingma 插件自身的 session 语义
 - 桌面端里“会话与环境”相关配置只在这里生效
-
-### 2.2 Remote API 模式
-
-`backend=remote`
-
-- 解析远端域名
-- 加载认证信息：
-  - 显式指定的 `remote_auth_file`
-  - 或自动探测 `~/.lingma` 下的缓存
-- 直接请求远端模型列表和聊天接口
-- 支持远端超时 / 429 / 5xx 的模型兜底切换
-- 不依赖本地插件会话环境参数
+- 该模式基于 `coolxll/lingma-ipc-proxy` 的 IPC 协议发现思路
 
 ---
 
@@ -260,7 +262,8 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 
 本地持久化路径：
 
-- 配置：`~/.config/lingma-ipc-proxy/config.json`
+- 配置：`~/.config/lingma-proxy/config.json`
+- 旧配置兼容读取：`~/.config/lingma-ipc-proxy/config.json`
 - GUI 运行状态：`~/.config/lingma-ipc-proxy/app-state.json`
 
 打包要求：
@@ -276,8 +279,8 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 
 因为两种模式解决的问题不同：
 
-- IPC 模式更贴近插件本地上下文和 session 语义
-- Remote 模式更适合第三方 agent 客户端，减少对插件运行态的依赖
+- Remote 模式避免插件运行时耦合，通常更适合第三方 Agent 客户端。
+- IPC 模式保留插件会话语义，适合明确需要本地插件上下文或插件模型列表的场景。
 
 ### 7.2 为什么 Remote 也保留 Tool Emulation？
 
@@ -312,4 +315,4 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 
 ---
 
-文档版本：2026-04-30
+文档版本：2026-05-06

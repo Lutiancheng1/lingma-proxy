@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-**Lingma Proxy** 是一个通义灵码 API 适配层。它既可以把 Lingma 插件的本地私有 IPC / WebSocket 能力转换成标准 **OpenAI 兼容接口** 和 **Anthropic 兼容接口**，也可以使用实验性的远端 API 模式直接调用 Lingma 远端接口，让 Claude Code、Cline、Continue、OpenCode、自研 Agent 等第三方客户端可以直接调用 Lingma 后端模型。
+**Lingma Proxy** 是一个通义灵码 API 适配层。它可以通过默认推荐的远端 API 模式直接调用 Lingma 远端接口，也可以把 Lingma 插件的本地私有 IPC / WebSocket 能力转换成标准 **OpenAI 兼容接口** 和 **Anthropic 兼容接口**，让 Claude Code、Cline、Continue、OpenCode、自研 Agent 等第三方客户端可以直接调用 Lingma 后端模型。
 
 项目同时提供两种使用方式：
 
@@ -11,8 +11,8 @@
 
 代理后端支持两种模式：
 
-- **远端 API 模式（默认，实验）**：读取 Lingma 本地登录缓存或显式凭据，直接调用 Lingma 远端接口。优点是不依赖 IDE 插件窗口和 IPC 会话，体验更像官方 API；目前更推荐给 Claude Code / Hermes 这类本地 Agent。
-- **IPC 插件模式**：连接本机 Lingma IDE 插件的 WebSocket / Named Pipe。优点是更接近 IDE 插件上下文，适合作为兼容性兜底。
+- **远端 API 模式（默认，推荐）**：读取 Lingma 本地登录缓存或显式凭据，直接调用 Lingma 远端接口。它更接近普通托管 API，不依赖 IDE 插件窗口、IPC 会话和插件执行环境；目前更推荐给 Claude Code / Hermes 这类本地 Agent。
+- **IPC 插件模式**：连接本机 Lingma IDE 插件的 WebSocket / Named Pipe。它更接近 IDE 插件上下文，但会继承 IDE 会话生命周期、插件本地状态和环境限制，主要作为兼容性兜底。
 
 ## 当前版本
 
@@ -24,22 +24,22 @@ GitHub Actions 会在 Release 中产出：
 
 | 产物 | 平台 | 用途 |
 | --- | --- | --- |
-| `lingma-ipc-proxy_<tag>_darwin_arm64.tar.gz` | macOS | CLI 代理 |
-| `lingma-ipc-proxy_<tag>_windows_amd64.zip` | Windows | CLI 代理 |
-| `lingma-ipc-proxy-desktop_<tag>_darwin_arm64.dmg` | Apple Silicon Mac | 拖拽安装桌面 App |
-| `lingma-ipc-proxy-desktop_<tag>_darwin_arm64.zip` | Apple Silicon Mac | `.app` 压缩包 |
-| `lingma-ipc-proxy-desktop_<tag>_windows_amd64.zip` | Windows | 桌面 App |
-| `lingma-ipc-proxy_<tag>_sha256.txt` | 全平台 | 校验文件 |
+| `lingma-proxy_<tag>_darwin_arm64.tar.gz` | macOS | CLI 代理 |
+| `lingma-proxy_<tag>_windows_amd64.zip` | Windows | CLI 代理 |
+| `lingma-proxy-desktop_<tag>_darwin_arm64.dmg` | Apple Silicon Mac | 拖拽安装桌面 App |
+| `lingma-proxy-desktop_<tag>_darwin_arm64.zip` | Apple Silicon Mac | `.app` 压缩包 |
+| `lingma-proxy-desktop_<tag>_windows_amd64.zip` | Windows | 桌面 App |
+| `lingma-proxy_<tag>_sha256.txt` | 全平台 | 校验文件 |
 
 ### 应该下载哪个包？
 
 | 你的系统 | 推荐下载 | 说明 |
 | --- | --- | --- |
-| Apple Silicon Mac（M1/M2/M3/M4） | `lingma-ipc-proxy-desktop_<tag>_darwin_arm64.dmg` | 打开 DMG 后把 `Lingma IPC Proxy.app` 拖到 `Applications`。 |
-| Apple Silicon Mac，想要压缩包 | `lingma-ipc-proxy-desktop_<tag>_darwin_arm64.zip` | 和 DMG 是同一个 App，只是 zip 形式。 |
-| Windows x64 / x86_64 / AMD64 | `lingma-ipc-proxy-desktop_<tag>_windows_amd64.zip` | 普通 64 位 Windows 电脑都选这个，包括 Intel 和 AMD CPU。 |
-| 只想在 macOS 终端跑 CLI | `lingma-ipc-proxy_<tag>_darwin_arm64.tar.gz` | 只有命令行代理，没有桌面界面。 |
-| 只想在 Windows 终端跑 CLI | `lingma-ipc-proxy_<tag>_windows_amd64.zip` | 只有命令行代理，没有桌面界面。 |
+| Apple Silicon Mac（M1/M2/M3/M4） | `lingma-proxy-desktop_<tag>_darwin_arm64.dmg` | 打开 DMG 后把 `Lingma Proxy.app` 拖到 `Applications`。 |
+| Apple Silicon Mac，想要压缩包 | `lingma-proxy-desktop_<tag>_darwin_arm64.zip` | 和 DMG 是同一个 App，只是 zip 形式。 |
+| Windows x64 / x86_64 / AMD64 | `lingma-proxy-desktop_<tag>_windows_amd64.zip` | 普通 64 位 Windows 电脑都选这个，包括 Intel 和 AMD CPU。 |
+| 只想在 macOS 终端跑 CLI | `lingma-proxy_<tag>_darwin_arm64.tar.gz` | 只有命令行代理，没有桌面界面。 |
+| 只想在 Windows 终端跑 CLI | `lingma-proxy_<tag>_windows_amd64.zip` | 只有命令行代理，没有桌面界面。 |
 
 目前没有单独的 `windows_arm64` 包。常见 x64 Windows 机器请选择 `windows_amd64`。
 
@@ -231,18 +231,18 @@ flowchart LR
 CLI 也可以手动指定：
 
 ```bash
-lingma-ipc-proxy --transport websocket --ws-url ws://127.0.0.1:36510 --port 8095
-lingma-ipc-proxy --transport pipe --pipe '\\.\pipe\lingma-ipc'
+lingma-proxy --transport websocket --ws-url ws://127.0.0.1:36510 --port 8095
+lingma-proxy --transport pipe --pipe '\\.\pipe\lingma-ipc'
 ```
 
 ## 后端模式
 
-### 远端 API 模式（默认，实验）
+### 远端 API 模式（默认，推荐）
 
 远端模式直接调用 Lingma 远端接口：
 
 ```bash
-lingma-ipc-proxy --backend remote --port 8095
+lingma-proxy --backend remote --port 8095
 ```
 
 默认会只读导入：
@@ -259,10 +259,10 @@ lingma-ipc-proxy --backend remote --port 8095
 也可以指定显式凭据文件：
 
 ```bash
-lingma-ipc-proxy \
+lingma-proxy \
   --backend remote \
   --remote-base-url https://lingma.alibabacloud.com \
-  --remote-auth-file ~/.config/lingma-ipc-proxy/credentials.json
+  --remote-auth-file ~/.config/lingma-proxy/credentials.json
 ```
 
 `credentials.json` 格式：
@@ -282,6 +282,7 @@ lingma-ipc-proxy \
 
 说明：
 
+- 远端 API 模式是日常 Agent 使用的默认推荐模式。它绕过 IDE / 插件 IPC 运行时，因此更少受到插件会话、IDE 当前项目和本地扩展环境限制影响。
 - 远端模式不会写入或迁移你的登录态，只会读取本机 Lingma 缓存或你指定的凭据文件。
 - 如果 Lingma 插件配置过专属域名，远端模式会优先使用 `--remote-base-url`、`LINGMA_REMOTE_BASE_URL` 或配置文件；这些为空时，会扫描 macOS、Windows、Linux 上 Lingma 本地日志里的 `endpoint config:`、Marketplace service URL 等线索。
 - 桌面端设置页会展示当前解析到的远端域名和来源，但不会展示 token / key 明文。
@@ -294,10 +295,10 @@ lingma-ipc-proxy \
 IPC 模式通过本机 Lingma IDE 插件通信：
 
 ```bash
-lingma-ipc-proxy --backend ipc --transport auto --port 8095
+lingma-proxy --backend ipc --transport auto --port 8095
 ```
 
-适合已经打开 VS Code / Lingma 插件、希望使用插件当前会话环境、并优先使用插件探测模型列表的场景。
+适合已经打开 VS Code / Lingma 插件、希望使用插件当前会话环境、并优先使用插件探测模型列表的场景。相比远端 API 模式，IPC 插件模式更依赖 IDE / 插件进程，也更容易受到插件会话、当前项目和本地环境的影响。
 
 ## 快速开始
 
@@ -310,8 +311,8 @@ lingma-ipc-proxy --backend ipc --transport auto --port 8095
 
 ### 使用桌面 App
 
-1. 前往 [Releases](https://github.com/Lutiancheng1/lingma-ipc-proxy/releases) 下载桌面版。
-2. macOS 解压后打开 `Lingma IPC Proxy.app`。
+1. 前往 [Releases](https://github.com/Lutiancheng1/lingma-proxy/releases) 下载桌面版。
+2. macOS 解压后打开 `Lingma Proxy.app`。
 3. Windows 解压后运行桌面版 exe。
 4. 点击启动代理。
 5. 点击 `探测模型`。
@@ -322,19 +323,19 @@ lingma-ipc-proxy --backend ipc --transport auto --port 8095
 macOS：
 
 ```bash
-git clone https://github.com/Lutiancheng1/lingma-ipc-proxy.git
-cd lingma-ipc-proxy
-go build -o ./dist/lingma-ipc-proxy ./cmd/lingma-ipc-proxy
-./dist/lingma-ipc-proxy --host 127.0.0.1 --port 8095 --session-mode auto
+git clone https://github.com/Lutiancheng1/lingma-proxy.git
+cd lingma-proxy
+go build -o ./dist/lingma-proxy ./cmd/lingma-ipc-proxy
+./dist/lingma-proxy --host 127.0.0.1 --port 8095 --session-mode auto
 ```
 
 Windows：
 
 ```powershell
-git clone https://github.com/Lutiancheng1/lingma-ipc-proxy.git
-cd lingma-ipc-proxy
+git clone https://github.com/Lutiancheng1/lingma-proxy.git
+cd lingma-proxy
 .\scripts\build.ps1
-.\dist\lingma-ipc-proxy.exe --host 127.0.0.1 --port 8095 --session-mode auto
+.\dist\lingma-proxy.exe --host 127.0.0.1 --port 8095 --session-mode auto
 ```
 
 ## 客户端配置
@@ -417,6 +418,7 @@ export ANTHROPIC_API_KEY="any"
 默认读取：
 
 ```text
+./lingma-proxy.json
 ./lingma-ipc-proxy.json
 ```
 
@@ -475,7 +477,7 @@ export ANTHROPIC_API_KEY="any"
 示例：
 
 ```bash
-LINGMA_PROXY_MAX_CONCURRENT=8 lingma-ipc-proxy --port 8095
+LINGMA_PROXY_MAX_CONCURRENT=8 lingma-proxy --port 8095
 ```
 
 ## 工具调用实现
@@ -559,10 +561,10 @@ wails build -platform windows/amd64 -clean
 桌面端最终 App 名称统一为：
 
 ```text
-Lingma IPC Proxy
+Lingma Proxy
 ```
 
-不会再生成 `lingma-proxy-desktop` 旧包名。
+Release 资产文件名仍使用 `lingma-proxy-desktop_<tag>_...` 区分桌面端和 CLI 端。
 
 ## GitHub Actions Release
 
@@ -587,9 +589,9 @@ Release workflow 会执行：
 
 ## 与上游项目的关系
 
-我对比了上游仓库 [coolxll/lingma-ipc-proxy](https://github.com/coolxll/lingma-ipc-proxy)。上游项目的核心贡献是发现并验证了 Lingma 本地私有 IPC 协议可以被代理成标准 HTTP API，这是本项目的基础思路来源。
+我对比了上游仓库 [coolxll/lingma-ipc-proxy](https://github.com/coolxll/lingma-ipc-proxy)。上游项目的核心贡献是发现并验证了 Lingma 本地私有 IPC 协议可以被代理成标准 HTTP API，这是本项目 **IPC 插件模式** 的基础思路来源。
 
-本项目在这个思路上继续扩展了：
+本项目在 IPC 插件模式上继续扩展了：
 
 - 更完整的 OpenAI / Anthropic 参数兼容
 - Tools / Function Calling 模拟
@@ -614,4 +616,4 @@ Release workflow 会执行：
 
 ## 致谢
 
-本项目的协议实现思路参考并继承自 [coolxll/lingma-ipc-proxy](https://github.com/coolxll/lingma-ipc-proxy) 的协议发现工作。Lingma 私有本地 IPC 可以被转换为标准 OpenAI / Anthropic API 这一核心思想是该项目首先验证出来的；本项目在此基础上补充了更完整的协议兼容、工具调用、图片处理、桌面 App、请求 / 日志观测、跨平台打包和 release 自动化。
+本项目的 **IPC 插件模式** 参考并继承自 [coolxll/lingma-ipc-proxy](https://github.com/coolxll/lingma-ipc-proxy) 的协议发现工作。Lingma 私有本地 IPC 可以被转换为标准 OpenAI / Anthropic API 这一核心思想是该项目首先验证出来的；Lingma Proxy 保留这条 IPC 路径作为兼容后端，并补充了更完整的协议兼容、工具调用、图片处理、桌面 App、请求 / 日志观测、跨平台打包和 release 自动化。默认推荐的 **远端 API 模式** 是独立后端，直接调用 Lingma 远端 API，上文已单独说明。
