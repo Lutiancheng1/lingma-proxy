@@ -13,7 +13,7 @@ The proxy now supports two backend modes:
 
 ## Current Version
 
-The current desktop line is `v1.4.10`.
+The current desktop line is `v1.4.11`.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release history.
 
@@ -119,6 +119,26 @@ The proxy accepts common Anthropic request fields:
 - `tools`, `tool_choice`
 - image blocks through base64 sources
 - tool result continuation blocks
+
+### Image Compatibility and Validation
+
+Image support is implemented at the proxy protocol layer and then validated against real client shapes. The current status is:
+
+| Client / request shape | Status | Notes |
+| --- | --- | --- |
+| OpenAI Chat Completions `image_url` data URL | Verified | Tested through `/v1/chat/completions`; the model correctly described the image content. |
+| OpenAI Chat Completions `image_url` local path / `file://` | Supported by proxy normalization | The proxy loads and normalizes local files before sending them to the image pipeline. |
+| Anthropic Messages base64 image block | Verified | Tested through `/v1/messages`; the model correctly described the image content. |
+| Claude Code pasted image | Verified | Tested with Claude Code style Anthropic messages containing long history, tools, a base64 image block, and Claude's image-cache path marker. |
+| Claude Code pasted image + tools | Verified | Remote mode extracts the latest image turn through IPC, then continues with Remote API native tool calling. |
+| Hermes / OpenClaw / custom agents using standard OpenAI or Anthropic image requests | Expected compatible | These are covered when they send the same OpenAI `image_url` or Anthropic base64 image shapes. Their own chat gateways, screenshot delivery, or file-sending features are outside the proxy layer. |
+
+Important behavior:
+
+- Remote API mode still uses Lingma's IPC image pipeline for image understanding because the direct remote chat endpoint does not reliably consume local `file://` and data URL images.
+- If the request includes both images and tools, the proxy first creates a compact image-only IPC turn from the latest image-bearing user message, appends the extracted image context to the original request, and then uses Remote API native tool calling.
+- Because of that image fallback, Lingma App / IDE plugin must remain running for image requests. If Lingma is fully quit, text-only Remote API calls can still work, but image understanding will fail with a reopen-Lingma hint.
+- Request logs redact large image payloads, so use the debug endpoints or desktop request details to confirm that an image marker exists without exposing the full base64 body.
 
 ## Architecture
 

@@ -16,7 +16,7 @@
 
 ## 当前版本
 
-当前桌面端版本线：`v1.4.10`
+当前桌面端版本线：`v1.4.11`
 
 版本更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
@@ -166,6 +166,26 @@ GitHub Actions 会在 Release 中产出：
 - `tool_choice`
 - `tool_result`
 - base64 图片块
+
+### 图片兼容与实测范围
+
+图片能力分两层：代理协议层先兼容 OpenAI / Anthropic 的图片请求格式，再用真实客户端形态做回归验证。当前状态如下：
+
+| 客户端 / 请求形态 | 状态 | 说明 |
+| --- | --- | --- |
+| OpenAI Chat Completions `image_url` data URL | 已验证 | 通过 `/v1/chat/completions` 实测，模型可以正确描述图片内容。 |
+| OpenAI Chat Completions `image_url` 本地路径 / `file://` | 代理层支持 | 代理会读取并归一化本地文件，再交给图片链路。 |
+| Anthropic Messages base64 image block | 已验证 | 通过 `/v1/messages` 实测，模型可以正确描述图片内容。 |
+| Claude Code 粘贴图片 | 已验证 | 已用 Claude Code 风格的 Anthropic 请求实测：长上下文、tools、base64 图片块和 Claude image-cache 路径标记同时存在时可用。 |
+| Claude Code 粘贴图片 + tools | 已验证 | 远端模式会先用 IPC 提取最新图片轮次的上下文，再回到 Remote API 原生工具调用。 |
+| Hermes / OpenClaw / 自研 Agent 使用标准 OpenAI 或 Anthropic 图片请求 | 预期兼容 | 只要它们发出的请求是 OpenAI `image_url` 或 Anthropic base64 image block，就走同一条已验证链路；它们自己的微信网关、截图发送、文件投递属于客户端侧能力，不属于代理图片输入能力。 |
+
+关键限制和行为：
+
+- 远端 API 模式的图片理解仍依赖 Lingma IPC 图片链路，因为直连远端聊天接口不会稳定消费本地 `file://` 和 data URL 图片。
+- 如果请求同时包含图片和工具，代理会只取“最后一条带图片的用户消息”构造一个紧凑的 IPC 图片理解请求，把得到的图片上下文追加回原请求，再交给 Remote API 原生工具调用。
+- 因此图片请求要求 Lingma App / IDE 插件保持运行；如果 Lingma 被彻底退出，纯文本 Remote API 仍可工作，但图片理解会失败并提示重新打开 Lingma。
+- 请求日志会脱敏大段图片 base64，只保留图片载荷标记，避免日志 UI 被撑爆。
 
 ## 架构设计
 

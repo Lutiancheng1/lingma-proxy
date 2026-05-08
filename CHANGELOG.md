@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v1.4.11 - 2026-05-08
+
+- Fixed Claude Code image paste requests in Remote API mode when the request also includes tools and long conversation history.
+- Remote image + tools requests now extract image context through IPC using only the latest image-bearing user turn, preventing stale project context from making the model answer as if it cannot see the image.
+- Added regression coverage for compact image-context extraction while preserving normal Remote native tool handling.
+- Documented the tested image compatibility matrix for OpenAI image URLs, Anthropic image blocks, Claude Code pasted images, and expected Hermes / OpenClaw compatibility boundaries.
+
 ## v1.4.10 - 2026-05-08
 
 - Fixed a streaming regression introduced in v1.4.9: requests with `tools` now stream incrementally by default instead of being aggregated until the full response is complete.

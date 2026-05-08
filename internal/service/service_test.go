@@ -156,6 +156,42 @@ func TestRequestHasImages(t *testing.T) {
 	}
 }
 
+func TestRequestForImageContextUsesLatestImageTurnOnly(t *testing.T) {
+	req := ChatRequest{
+		System: "old system",
+		Messages: []ChatMessage{
+			{Role: "user", Text: "旧问题"},
+			{Role: "assistant", Text: "旧回答"},
+			{Role: "user", Text: "[Image #1] 这个图片是什么?", Images: []Image{{MediaType: "image/png", Data: "AAAA"}}},
+		},
+		Tools: []toolemulation.ToolDef{{
+			Name: "Bash",
+			InputSchema: map[string]any{
+				"required": []any{"command"},
+			},
+		}},
+		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
+	}
+
+	out := requestForImageContext(req)
+	if out.System != "" {
+		t.Fatalf("system = %q, want empty", out.System)
+	}
+	if len(out.Tools) != 0 || out.ToolChoice.Mode != "none" {
+		t.Fatalf("tools should be disabled: tools=%#v choice=%#v", out.Tools, out.ToolChoice)
+	}
+	if len(out.Messages) != 1 {
+		t.Fatalf("messages = %#v, want one compact image turn", out.Messages)
+	}
+	message := out.Messages[0]
+	if message.Role != "user" || len(message.Images) != 1 || message.Images[0].Data != "AAAA" {
+		t.Fatalf("unexpected image message = %#v", message)
+	}
+	if strings.Contains(message.Text, "旧问题") || !strings.Contains(message.Text, "忽略更早的对话历史") {
+		t.Fatalf("unexpected compact prompt = %q", message.Text)
+	}
+}
+
 func TestExtractLastUserImagesFindsPreviousImageTurn(t *testing.T) {
 	images := extractLastUserImages([]ChatMessage{
 		{Role: "user", Text: "看这张图", Images: []Image{{URL: "file:///tmp/a.png"}}},

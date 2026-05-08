@@ -409,10 +409,7 @@ func (s *Service) generateRemoteWithImageContext(
 	req ChatRequest,
 	onDelta func(string),
 ) (*ChatResult, error) {
-	imageReq := req
-	imageReq.Tools = nil
-	imageReq.ToolChoice = toolemulation.ToolChoice{Mode: "none"}
-	imageReq.ParallelToolCalls = nil
+	imageReq := requestForImageContext(req)
 	imageResult, err := s.generateWithReconnect(ctx, imageReq, nil)
 	if err != nil {
 		return nil, fmt.Errorf("image context extraction through IPC failed: %w", err)
@@ -552,6 +549,39 @@ func requestHasImages(req ChatRequest) bool {
 		}
 	}
 	return false
+}
+
+func requestForImageContext(req ChatRequest) ChatRequest {
+	out := req
+	out.System = ""
+	out.Messages = nil
+	out.Tools = nil
+	out.ToolChoice = toolemulation.ToolChoice{Mode: "none"}
+	out.ParallelToolCalls = nil
+
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		message := req.Messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		if len(remoteImagesFromChatMessage(message)) == 0 {
+			continue
+		}
+		text := strings.TrimSpace(message.Text)
+		if text == "" {
+			text = "请描述这张图片的主要内容。"
+		} else {
+			text = "请只根据图片内容回答用户这条问题，忽略更早的对话历史：" + text
+		}
+		out.Messages = []ChatMessage{{
+			Role:   "user",
+			Text:   text,
+			Images: message.Images,
+		}}
+		return out
+	}
+
+	return out
 }
 
 func requestWithImageContext(req ChatRequest, imageContext string) ChatRequest {
