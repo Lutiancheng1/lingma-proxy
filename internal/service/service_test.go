@@ -192,6 +192,40 @@ func TestRequestForImageContextUsesLatestImageTurnOnly(t *testing.T) {
 	}
 }
 
+func TestRequestForImageContextUsesShortSystemPromptForImageOnlyUser(t *testing.T) {
+	req := ChatRequest{
+		System:   "这张图片是什么？只用两句话回答。",
+		Messages: []ChatMessage{{Role: "user", Images: []Image{{MediaType: "image/jpeg", Data: "AAAA"}}}},
+	}
+
+	out := requestForImageContext(req)
+	if len(out.Messages) != 1 {
+		t.Fatalf("messages = %#v, want one compact image turn", out.Messages)
+	}
+	message := out.Messages[0]
+	if message.Role != "user" || len(message.Images) != 1 {
+		t.Fatalf("unexpected image message = %#v", message)
+	}
+	if !strings.Contains(message.Text, "这张图片是什么") {
+		t.Fatalf("compact prompt should include short system prompt, got %q", message.Text)
+	}
+}
+
+func TestBuildLingmaPromptUsesImageFallbackForImageOnlyUser(t *testing.T) {
+	req := ChatRequest{
+		System:   "这张图片是什么？只用两句话回答。",
+		Messages: []ChatMessage{{Role: "user", Images: []Image{{URL: "file:///tmp/a.jpg"}}}},
+	}
+
+	prompt, err := buildLingmaPrompt(req, SessionModeFresh, false)
+	if err != nil {
+		t.Fatalf("buildLingmaPrompt returned error: %v", err)
+	}
+	if !strings.Contains(prompt, "这张图片是什么") {
+		t.Fatalf("prompt should include image fallback question, got %q", prompt)
+	}
+}
+
 func TestExtractLastUserImagesFindsPreviousImageTurn(t *testing.T) {
 	images := extractLastUserImages([]ChatMessage{
 		{Role: "user", Text: "看这张图", Images: []Image{{URL: "file:///tmp/a.png"}}},

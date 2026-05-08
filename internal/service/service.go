@@ -569,7 +569,7 @@ func requestForImageContext(req ChatRequest) ChatRequest {
 		}
 		text := strings.TrimSpace(message.Text)
 		if text == "" {
-			text = "请描述这张图片的主要内容。"
+			text = imagePromptFallback(req, i)
 		} else {
 			text = "请只根据图片内容回答用户这条问题，忽略更早的对话历史：" + text
 		}
@@ -582,6 +582,22 @@ func requestForImageContext(req ChatRequest) ChatRequest {
 	}
 
 	return out
+}
+
+func imagePromptFallback(req ChatRequest, imageMessageIndex int) string {
+	for i := imageMessageIndex - 1; i >= 0; i-- {
+		message := req.Messages[i]
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			if text := strings.TrimSpace(message.Text); text != "" {
+				return "请只根据图片内容回答用户这条问题，忽略更早的对话历史：" + text
+			}
+		}
+	}
+	system := strings.TrimSpace(req.System)
+	if system != "" && len([]rune(system)) <= 1000 {
+		return "请只根据图片内容回答这条要求：" + system
+	}
+	return "请描述这张图片的主要内容。"
 }
 
 func requestWithImageContext(req ChatRequest, imageContext string) ChatRequest {
@@ -1296,7 +1312,12 @@ func buildLingmaPrompt(req ChatRequest, mode SessionMode, emulateTools bool) (st
 		}
 	}
 	if strings.TrimSpace(lastUser) == "" {
-		return "", errors.New("no user message found in request")
+		if idx := latestImageMessageIndex(req.Messages); idx >= 0 {
+			lastUser = imagePromptFallback(req, idx)
+			messages = append(messages, ChatMessage{Role: "user", Text: lastUser})
+		} else {
+			return "", errors.New("no user message found in request")
+		}
 	}
 	if mode == SessionModeReuse {
 		return lastUser, nil
@@ -1343,6 +1364,18 @@ func buildLingmaPrompt(req ChatRequest, mode SessionMode, emulateTools bool) (st
 	}
 	parts = append(parts, "Reply as the assistant to the latest user message only. Follow the system instructions and prior transcript naturally.")
 	return strings.Join(parts, "\n\n"), nil
+}
+
+func latestImageMessageIndex(messages []ChatMessage) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(messages[i].Role), "user") {
+			continue
+		}
+		if len(remoteImagesFromChatMessage(messages[i])) > 0 {
+			return i
+		}
+	}
+	return -1
 }
 
 func filteredMessages(messages []ChatMessage) []ChatMessage {

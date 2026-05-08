@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v1.4.12 - 2026-05-08
+
+- Fixed OpenClaw-style image requests where the prompt is sent as a short OpenAI `system` message and the user message contains only `image_url`.
+- Added regression coverage for image-only user turns with prompt fallback from short system instructions.
+- Verified Hermes CLI `--image`, OpenClaw `infer image describe --file`, and OpenClaw agent sandbox image-marker flows through Lingma Proxy.
+- Updated the image compatibility documentation with the tested Hermes/OpenClaw behavior and the OpenClaw sandbox file-delivery limitation.
+
 ## v1.4.11 - 2026-05-08
 
 - Fixed Claude Code image paste requests in Remote API mode when the request also includes tools and long conversation history.

@@ -178,7 +178,10 @@ GitHub Actions 会在 Release 中产出：
 | Anthropic Messages base64 image block | 已验证 | 通过 `/v1/messages` 实测，模型可以正确描述图片内容。 |
 | Claude Code 粘贴图片 | 已验证 | 已用 Claude Code 风格的 Anthropic 请求实测：长上下文、tools、base64 图片块和 Claude image-cache 路径标记同时存在时可用。 |
 | Claude Code 粘贴图片 + tools | 已验证 | 远端模式会先用 IPC 提取最新图片轮次的上下文，再回到 Remote API 原生工具调用。 |
-| Hermes / OpenClaw / 自研 Agent 使用标准 OpenAI 或 Anthropic 图片请求 | 预期兼容 | 只要它们发出的请求是 OpenAI `image_url` 或 Anthropic base64 image block，就走同一条已验证链路；它们自己的微信网关、截图发送、文件投递属于客户端侧能力，不属于代理图片输入能力。 |
+| Hermes CLI `hermes chat --image` | 已验证 | 使用 `--provider custom --model kmodel --image /Users/tiancheng/Pictures/ik2.jpg` 实测；Hermes 会向 `/v1/chat/completions` 发送 OpenAI `image_url`，模型可以正确描述图片内容。 |
+| OpenClaw `infer image describe --file` | 已验证 | 配置 `lingma-proxy/kmodel` 为 `text+image` 后实测；OpenClaw 会发送 OpenAI `image_url`，模型可以正确描述图片内容。 |
+| OpenClaw `agent` 图片标记 | 部分验证 | 图片文件进入 OpenClaw 每个 session 的 sandbox 后可用；直接引用 `/Users/.../Pictures/ik2.jpg` 会先被 OpenClaw 自己的沙盒拒绝，尚未作为图片请求进入代理。 |
+| 自研 Agent 使用标准 OpenAI 或 Anthropic 图片请求 | 预期兼容 | 只要它们发出的请求是 OpenAI `image_url` 或 Anthropic base64 image block，就走同一条已验证链路；它们自己的微信网关、截图发送、文件投递属于客户端侧能力，不属于代理图片输入能力。 |
 
 关键限制和行为：
 
