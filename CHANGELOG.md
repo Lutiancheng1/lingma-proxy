@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v1.4.15-fix1 - 2026-05-13
+
+- Added a dedicated desktop warmup-timeout setting for startup/model-detection flows. The default is now 30 seconds, independent from the main per-request timeout.
+- Added `scripts/rebuild-local-app.sh` as the standard local macOS desktop rebuild flow: package -> stop old app -> replace `/Applications` -> reopen.
+- Removed the accidentally tracked `lingma-ipc-proxy.macos.json` machine-local config from the repository and ignored it for future commits.
+- Ignored the local `.playwright-mcp/` workspace to keep browser-testing artifacts out of Git.
+- Clarified license scope and model-availability disclaimers in the README: screenshots and recommended models reflect the maintainer's enterprise Lingma environment and may differ across personal, business, or other enterprise tenants.
+- 增加桌面端单独的探测超时秒数配置，默认 30 秒，仅作用于启动代理和手动探测模型，不再与正式请求超时混用。
+- 增加 `scripts/rebuild-local-app.sh` 本地标准重建脚本，固定执行“打包 -> 停旧进程 -> 覆盖 `/Applications` -> 重新打开”。
+- 删除误提交的 `lingma-ipc-proxy.macos.json` 本机配置文件，并加入忽略规则，避免个人开发机配置继续进入仓库。
+- 忽略本地 `.playwright-mcp/` 目录，避免浏览器测试临时目录进入 Git。
+- 补充许可证和模型可用性说明：README 中已明确当前截图和推荐模型来自维护者企业版 Lingma 环境，不代表个人账号、商业账号或其他企业租户一定拥有相同模型集合。
+
 ## v1.4.15 - 2026-05-13
 
 - Added desktop request-detail jump flow: clicking a recent request on the Dashboard now opens the Requests page, scrolls to the matching record, and expands its full request/response details after data loads.
