@@ -6,6 +6,27 @@ Lingma Proxy exposes Tongyi Lingma as standard **OpenAI-compatible** and **Anthr
 
 The project is designed for tools such as Claude Code, Cline, Continue, OpenCode, custom agents, and any client that can talk to OpenAI or Anthropic style APIs.
 
+## Model Availability Disclaimer
+
+Model availability is not the same for every Lingma user.
+
+- The screenshots, recommendations, and examples in this repository reflect the maintainer's current enterprise Lingma environment.
+- That does **not** mean personal accounts, other business accounts, or other enterprise tenants will see the same catalog.
+- Actual model availability depends on the Lingma account type, enterprise tenant, remote API domain, region, product plan, and server-side entitlements.
+- Lingma Proxy does not normally invent these models and does not silently remove them from `/v1/models`; the list primarily reflects what the active Lingma backend actually returns.
+
+## License
+
+This repository now includes a `LICENSE` file for the original contributions made in this repo.
+
+Important boundary:
+
+- The MIT grant applies to original contributions in this repository by Tiancheng Lu and contributors.
+- The IPC-plugin-mode design was inspired by `coolxll/lingma-ipc-proxy`.
+- Because the upstream repository did not publish a clear root open-source license when this file was added, this repository does not claim to relicense third-party material on behalf of the upstream author.
+
+If the upstream project later publishes an explicit license, this repository can be simplified and aligned accordingly.
+
 The proxy now supports two backend modes:
 
 - **Remote API mode (default, recommended)**: imports the local Lingma login cache or an explicit credential file and calls Lingma remote APIs directly. This behaves closest to a normal hosted API, avoids IDE/plugin session and environment limits, and is currently the best mode for Claude Code / Hermes style agents.
@@ -250,6 +271,7 @@ Notes:
 - If your Lingma plugin uses a dedicated domain, remote mode first uses `--remote-base-url`, `LINGMA_REMOTE_BASE_URL`, or the JSON config field. If those are empty, it scans Lingma's local logs on macOS, Windows, and Linux for endpoint hints such as `endpoint config:` and marketplace service URLs.
 - The desktop Settings page shows the resolved remote domain and detection source without exposing tokens.
 - `/v1/models` in remote mode returns remote API model keys, which may not match the IPC plugin display IDs such as `MiniMax-M2.7` or `Kimi-K2.6`.
+- Even after a successful remote login import, the model set may still differ from the examples shown in this repository. In particular, `Kimi-K2.6`, `MiniMax-M2.7`, some `Qwen3` variants, or `Auto / org_auto` can vary by account and tenant.
 - Image requests in remote mode are routed through the IPC image pipeline because the direct remote chat endpoint ignores local `file://` and data URL image payloads. If a request also contains tools, Lingma Proxy first extracts image context through IPC and then sends the tool-capable turn through Remote API native tool calling.
 - Local validation passed `/health`, `/v1/models`, OpenAI streaming/non-streaming chat, and Claude Code Anthropic + Bash tool use. Claude Code full tool runs are much slower than simple OpenAI requests because the client sends a large context and performs a second tool-result turn.
 - This mode is inspired by the remote API and credential-signing research in [ZipperCode/lingma2api](https://github.com/ZipperCode/lingma2api), integrated here as a switchable backend under the existing OpenAI / Anthropic / desktop app architecture.

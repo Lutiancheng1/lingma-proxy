@@ -53,6 +53,7 @@ type Config struct {
 	ShellType             string
 	SessionMode           SessionMode
 	Timeout               time.Duration
+	WarmupTimeout         time.Duration
 	RemoteFallbackEnabled bool
 	RemoteFallbackModels  []string
 }

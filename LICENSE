@@ -1,0 +1,35 @@
+MIT License
+
+Copyright (c) 2026 Tiancheng Lu and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of the original contributions in this repository (the "Original Contributions"),
+to deal in the Original Contributions without restriction, including without
+limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Original Contributions, and to permit
+persons to whom the Original Contributions are furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Original Contributions.
+
+THE ORIGINAL CONTRIBUTIONS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE ORIGINAL CONTRIBUTIONS OR THE USE OR
+OTHER DEALINGS IN THE ORIGINAL CONTRIBUTIONS.
+
+Additional clarification:
+
+1. This repository references and incorporates ideas, interfaces, and possibly
+   portions derived from the upstream project
+   `coolxll/lingma-ipc-proxy`.
+2. At the time this file was added, the upstream repository did not publish a
+   clear open-source license in its root metadata.
+3. Therefore, this LICENSE grants rights only for the original contributions
+   made in this repository by Tiancheng Lu and contributors, and does not
+   purport to relicense any third-party material that may require separate
+   permission from its original authors.
+

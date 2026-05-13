@@ -113,7 +113,7 @@ async function save() {
     <div class="page-title">
       <div>
         <h1>设置</h1>
-        <p>配置监听地址、Lingma 传输方式、会话复用和请求超时。</p>
+        <p>配置监听地址、Lingma 传输方式、模型探测超时、会话复用和请求超时。</p>
       </div>
       <button class="primary-button" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中...' : '保存并重启' }}
@@ -181,6 +181,11 @@ async function save() {
             <label>超时秒数</label>
             <input v-model.number="config.Timeout" type="number" min="0" />
             <small>0 表示不设置代理层单次请求超时，适合长流程任务。</small>
+          </div>
+          <div class="field">
+            <label>探测超时秒数</label>
+            <input v-model.number="config.WarmupTimeout" type="number" min="1" placeholder="30" />
+            <small>用于启动代理和手动探测模型时的 warmup 超时，默认 30 秒。</small>
           </div>
           <div class="field span-2 switch-field">
             <div>

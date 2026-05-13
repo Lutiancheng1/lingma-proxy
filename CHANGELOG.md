@@ -7,12 +7,20 @@
 - Added desktop request-detail jump flow: clicking a recent request on the Dashboard now opens the Requests page, scrolls to the matching record, and expands its full request/response details after data loads.
 - Added smarter desktop request timestamps: request tables now show `今天` / `昨天` / `MM/DD HH:mm:ss` instead of time-only values, making cross-day debugging easier.
 - Added backward-compatible timestamp recovery for legacy desktop request history that only stored `HH:mm:ss`; if old entries still look wrong after migration, clear request history once and all newly recorded entries will use full timestamps.
-- Added export-only feedback bundles in the desktop app, including redacted app logs, request logs, config summary, environment summary, and detection info for issue reporting without bundling raw credentials.
+- Added a desktop feedback-package export workflow. Users can choose a time range and generate a redacted local ZIP bundle for issue reporting, including app logs, request logs, config summary, environment summary, and detection info without bundling raw credentials.
+- Added a dedicated desktop warmup-timeout setting for startup/model-detection flows. The default is now 30 seconds, independent from the main per-request timeout.
+- Added `scripts/rebuild-local-app.sh` as the standard local macOS desktop rebuild flow: package -> stop old app -> replace `/Applications` -> reopen.
+- Removed the accidentally tracked `lingma-ipc-proxy.macos.json` machine-local config from the repository and ignored it for future commits.
+- Clarified license scope and model-availability disclaimers in the README: screenshots and recommended models reflect the maintainer's enterprise Lingma environment and may differ across personal, business, or other enterprise tenants.
 - Refined Dashboard health metrics with explicit `ms` / `s` / `min` units, restored `Avg / P50 / P95 / Max` labels, and hover explanations for each latency statistic.
 - 增加桌面端请求详情跳转能力：点击首页最近请求可直接打开请求流页面，自动滚动并展开对应记录，减少手动查找路径。
 - 增加桌面端请求时间智能格式化：请求列表改为显示“今天 / 昨天 / 月日+时间”，跨天排查时不再只有裸时间。
 - 增加旧桌面请求历史的时间兼容修复：对只保存 `HH:mm:ss` 的旧记录做回填；如果历史记录迁移后仍不准确，清空一次请求记录，后续新记录会完整保存时间戳并稳定显示日期。
-- 增加桌面端脱敏反馈包导出：可导出应用日志、请求日志、配置摘要、运行环境与探测信息，默认不打包明文登录态和无限长原始请求体。
+- 增加桌面端“反馈日志包导出”功能：用户可选择时间范围，一键生成本地脱敏 ZIP 反馈包，包含应用日志、请求日志、配置摘要、运行环境与探测信息，默认不打包明文登录态和无限长原始请求体。
+- 增加桌面端单独的探测超时秒数配置，默认 30 秒，仅作用于启动代理和手动探测模型，不再与正式请求超时混用。
+- 增加 `scripts/rebuild-local-app.sh` 本地标准重建脚本，固定执行“打包 -> 停旧进程 -> 覆盖 `/Applications` -> 重新打开”，避免桌面端旧进程残留导致覆盖不彻底。
+- 删除误提交的 `lingma-ipc-proxy.macos.json` 本机配置文件，并加入忽略规则，避免个人开发机配置继续进入仓库。
+- 补充许可证和模型可用性说明：README 中已明确当前截图和推荐模型来自维护者企业版 Lingma 环境，不代表个人账号、商业账号或其他企业租户一定拥有相同模型集合。
 - 优化首页健康指标显示：延迟数值改为明确的 `ms / s / min` 单位，恢复 `Avg / P50 / P95 / Max` 标签，并提供悬浮解释说明。
 
 ## v1.4.13 - 2026-05-12

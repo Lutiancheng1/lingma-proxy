@@ -4,6 +4,27 @@
 
 **Lingma Proxy** 是一个通义灵码 API 适配层。它可以通过默认推荐的远端 API 模式直接调用 Lingma 远端接口，也可以把 Lingma 插件的本地私有 IPC / WebSocket 能力转换成标准 **OpenAI 兼容接口** 和 **Anthropic 兼容接口**，让 Claude Code、Cline、Continue、OpenCode、自研 Agent 等第三方客户端可以直接调用 Lingma 后端模型。
 
+## 模型可用性说明
+
+模型可用性并不是所有 Lingma 用户都完全一致。
+
+- 本仓库里的截图、推荐模型和示例，基于维护者当前使用的 Lingma 企业版环境。
+- 这**不代表**个人账号、其他商业账号或其他企业租户也一定会看到同样的模型目录。
+- 实际能看到哪些模型，取决于 Lingma 账号类型、企业租户、远端 API 域名、地域、产品套餐以及服务端当前分配的模型权限。
+- Lingma Proxy 正常情况下不会凭空生成这些模型，也不会静默删除；`/v1/models` 主要反映当前 Lingma 后端真实返回的模型集合。
+
+## 开源协议
+
+当前仓库已经补充了 `LICENSE` 文件，用来覆盖**本仓库中的原创增量代码**。
+
+需要明确的边界：
+
+- MIT 授权适用于 Tiancheng Lu 和本仓库贡献者在这里新增的原创代码。
+- IPC 插件模式的协议启发来自 `coolxll/lingma-ipc-proxy`。
+- 在补充本文件时，上游仓库没有明确发布根目录开源许可证，因此本仓库**不会代替上游作者**对任何第三方内容重新授权。
+
+如果后续上游项目补充了明确许可证，这里的许可证说明可以再进一步简化并与上游对齐。
+
 项目同时提供两种使用方式：
 
 - **CLI 代理服务**：适合后台常驻、脚本化和服务器式运行。
@@ -315,6 +336,7 @@ lingma-proxy \
 - 如果 Lingma 插件配置过专属域名，远端模式会优先使用 `--remote-base-url`、`LINGMA_REMOTE_BASE_URL` 或配置文件；这些为空时，会扫描 macOS、Windows、Linux 上 Lingma 本地日志里的 `endpoint config:`、Marketplace service URL 等线索。
 - 桌面端设置页会展示当前解析到的远端域名和来源，但不会展示 token / key 明文。
 - 远端模式的 `/v1/models` 返回的是远端接口模型 key，不一定等同于 IPC 插件模式里看到的 `MiniMax-M2.7`、`Kimi-K2.6` 等展示名。
+- 即使成功导入了远端登录态，模型集合也可能和本仓库示例不同。尤其是 `Kimi-K2.6`、`MiniMax-M2.7`、部分 `Qwen3` 变体、`Auto / org_auto`，都可能随着账号和租户不同而变化。
 - 远端模式下的图片请求会自动走 IPC 图片链路，因为直连远端聊天接口不会直接消费本地 `file://` 和 data URL 图片。若请求同时带工具，代理会先通过 IPC 提取图片上下文，再把不含图片但包含上下文的请求交给 Remote API 原生工具调用。
 - 当前本机实测：`/health`、`/v1/models`、OpenAI 流式 / 非流式、Claude Code Anthropic + Bash 工具调用均可用；Claude Code 完整工具链耗时明显高于简单 OpenAI 请求。
 - 该模式参考了 [ZipperCode/lingma2api](https://github.com/ZipperCode/lingma2api) 对 Lingma 远端接口、签名和登录态结构的探索，本仓库将其作为可切换后端集成到现有 OpenAI / Anthropic / 桌面 App 架构中。

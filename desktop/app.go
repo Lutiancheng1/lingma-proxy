@@ -32,6 +32,7 @@ const (
 	feedbackStringFieldLimit   = 4096
 	feedbackDefaultRangePreset = "30m"
 	feedbackDesktopFolderName  = "Lingma Proxy Feedback"
+	proxyWarmupTimeout         = 30 * time.Second
 )
 
 // App struct
@@ -332,6 +333,7 @@ func (a *App) GetConfig() service.Config {
 	cfg := a.cfg
 	a.mu.RUnlock()
 	cfg.Timeout = cfg.Timeout / time.Second
+	cfg.WarmupTimeout = cfg.WarmupTimeout / time.Second
 	return cfg
 }
 
@@ -390,6 +392,12 @@ func (a *App) UpdateConfig(cfg service.Config) error {
 	if cfg.Timeout > 0 && cfg.Timeout < time.Second {
 		cfg.Timeout = cfg.Timeout * time.Second
 	}
+	if cfg.WarmupTimeout > 0 && cfg.WarmupTimeout < time.Second {
+		cfg.WarmupTimeout = cfg.WarmupTimeout * time.Second
+	}
+	if cfg.WarmupTimeout <= 0 {
+		cfg.WarmupTimeout = proxyWarmupTimeout
+	}
 
 	a.mu.Lock()
 	wasRunning := a.running
@@ -440,6 +448,7 @@ func (a *App) saveConfig(cfg service.Config) error {
 		"shell_type":              cfg.ShellType,
 		"session_mode":            string(cfg.SessionMode),
 		"timeout":                 timeoutSec,
+		"warmup_timeout":          int(cfg.WarmupTimeout.Seconds()),
 		"remote_fallback_enabled": cfg.RemoteFallbackEnabled,
 		"remote_fallback_models":  cfg.RemoteFallbackModels,
 	}
@@ -467,7 +476,7 @@ func (a *App) StartProxy() error {
 
 	svc := service.New(cfg)
 
-	warmupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	warmupCtx, cancel := context.WithTimeout(context.Background(), effectiveWarmupTimeout(cfg))
 	if err := svc.Warmup(warmupCtx); err != nil {
 		runtime.LogWarningf(a.ctx, "warmup failed: %v", err)
 		a.emitLog("warn", fmt.Sprintf("%s warmup failed: %v. %s", backendLabel(cfg.Backend), err, warmupFallbackHint(cfg.Backend)))
@@ -1373,6 +1382,7 @@ func buildConfigSummary(cfg service.Config, stats TokenStats, status ProxyStatus
 		"shellType":             cfg.ShellType,
 		"sessionMode":           string(cfg.SessionMode),
 		"timeoutSeconds":        int(cfg.Timeout.Seconds()),
+		"warmupTimeoutSeconds":  int(effectiveWarmupTimeout(cfg).Seconds()),
 		"remoteFallbackEnabled": cfg.RemoteFallbackEnabled,
 		"remoteFallbackModels":  cleanConfigStrings(cfg.RemoteFallbackModels),
 		"statusRunning":         status.Running,
@@ -1608,6 +1618,13 @@ func limitString(value string, limit int) string {
 	return string(runes[:limit]) + fmt.Sprintf("\n... [TRUNCATED %d chars]", len(runes)-limit)
 }
 
+func effectiveWarmupTimeout(cfg service.Config) time.Duration {
+	if cfg.WarmupTimeout <= 0 {
+		return proxyWarmupTimeout
+	}
+	return cfg.WarmupTimeout
+}
+
 func defaultConfig() service.Config {
 	cfg := service.Config{
 		Host:                  "127.0.0.1",
@@ -1620,6 +1637,7 @@ func defaultConfig() service.Config {
 		ShellType:             defaultShellType(),
 		SessionMode:           service.SessionModeAuto,
 		Timeout:               0,
+		WarmupTimeout:         proxyWarmupTimeout,
 		RemoteFallbackEnabled: true,
 		RemoteFallbackModels:  service.DefaultRemoteFallbackModels(),
 	}
@@ -1646,6 +1664,7 @@ func defaultConfig() service.Config {
 					ShellType             string   `json:"shell_type"`
 					SessionMode           string   `json:"session_mode"`
 					TimeoutSeconds        int      `json:"timeout"`
+					WarmupTimeoutSeconds  int      `json:"warmup_timeout"`
 					RemoteFallbackEnabled *bool    `json:"remote_fallback_enabled"`
 					RemoteFallbackModels  []string `json:"remote_fallback_models"`
 				}
@@ -1699,6 +1718,9 @@ func defaultConfig() service.Config {
 					}
 					if fileCfg.TimeoutSeconds >= 0 {
 						cfg.Timeout = time.Duration(fileCfg.TimeoutSeconds) * time.Second
+					}
+					if fileCfg.WarmupTimeoutSeconds > 0 {
+						cfg.WarmupTimeout = time.Duration(fileCfg.WarmupTimeoutSeconds) * time.Second
 					}
 					if fileCfg.RemoteFallbackEnabled != nil {
 						cfg.RemoteFallbackEnabled = *fileCfg.RemoteFallbackEnabled

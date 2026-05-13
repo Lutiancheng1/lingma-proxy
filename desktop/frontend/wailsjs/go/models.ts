@@ -234,6 +234,7 @@ export namespace service {
 	    ShellType: string;
 	    SessionMode: string;
 	    Timeout: number;
+	    WarmupTimeout: number;
 	    RemoteFallbackEnabled: boolean;
 	    RemoteFallbackModels: string[];
 	
@@ -259,6 +260,7 @@ export namespace service {
 	        this.ShellType = source["ShellType"];
 	        this.SessionMode = source["SessionMode"];
 	        this.Timeout = source["Timeout"];
+	        this.WarmupTimeout = source["WarmupTimeout"];
 	        this.RemoteFallbackEnabled = source["RemoteFallbackEnabled"];
 	        this.RemoteFallbackModels = source["RemoteFallbackModels"];
 	    }

@@ -14,10 +14,12 @@ desktop/frontend/*.png
 *.test
 *.out
 coverage.*
+.DS_Store
 .idea/
 .vscode/
 nul
 LINUXDO_POST.md
+lingma-ipc-proxy.macos.json
 
 # Local iteration doc (not for git)
 ITERATION.md
