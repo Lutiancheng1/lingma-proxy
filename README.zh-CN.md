@@ -391,20 +391,100 @@ cd lingma-proxy
 
 ## 客户端配置
 
+下面这些配置示例都来自我们已经实际联调通过的客户端，但它们**不代表所有 Lingma 账号都会看到相同模型**。
+
+- 下面示例里的模型 ID 来自我们自己的企业版 Lingma 环境。
+- 个人版、商业版、校园版、不同企业租户、不同远端域名，可能会返回不同的模型集合、别名、额度和能力。
+- 以你自己实际请求 `/v1/models` 的返回结果为准，不要把本仓库截图或 README 里的模型当成所有环境的固定真相。
+
 ### Claude Code
+
+参考：Anthropic Claude Code 官方文档：[code.claude.com/docs/en/overview](https://code.claude.com/docs/en/overview)
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8095"
 export ANTHROPIC_API_KEY="any"
 ```
 
-注意：`ANTHROPIC_BASE_URL` 不要带 `/v1`，Claude SDK 会自动追加。
-
 然后在 Claude Code 中选择模型：
 
 ```text
 /model kmodel
 ```
+
+补充说明：
+
+- `ANTHROPIC_BASE_URL` 不要带 `/v1`，Claude Code 会自己追加 Anthropic 路径。
+- 本地已验证：普通文本、tools、粘贴图片、图片 + tools 同轮请求都可用。
+
+### Hermes Agent
+
+参考：Hermes 官方 providers 集成文档：[NousResearch/hermes-agent providers.md](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/integrations/providers.md)
+
+环境变量示例（`~/.hermes/.env`）：
+
+```bash
+OPENAI_API_KEY=any
+```
+
+配置示例（`~/.hermes/config.yaml`）：
+
+```yaml
+providers:
+  custom:
+    api_key_env: OPENAI_API_KEY
+    base_url: http://127.0.0.1:8095/v1
+    models:
+      - id: kmodel
+        label: Lingma Proxy Kimi
+
+default_provider: custom
+default_model: kmodel
+```
+
+本地已验证：普通文本对话、带工具的代码任务、`hermes chat --image` 图片理解。
+
+### CodeBuddy
+
+CodeBuddy 目前没有公开更细的 Lingma Proxy 官方接入文档可直接引用。下面这份是我们在 CodeBuddy 自定义 OpenAI 兼容模型导入流程里实测通过的配置形态。
+
+```json
+{
+  "name": "Lingma Proxy",
+  "provider": "openai-compatible",
+  "baseURL": "http://127.0.0.1:8095/v1",
+  "apiKey": "any",
+  "model": "kmodel"
+}
+```
+
+本地已验证：标准聊天请求可以正常调用，并且 token usage 统计可被桌面端识别。
+
+### Codex CLI
+
+参考：OpenAI Codex CLI 官方总览：[developers.openai.com/codex/cli](https://developers.openai.com/codex/cli)。下面这份 provider 配置是我们基于 `codex-cli 0.130.0` 的本地实测结果。
+
+本地实测可用的 provider 配置如下：
+
+```toml
+model = "kmodel"
+model_provider = "lingma_proxy"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[model_providers.lingma_proxy]
+name = "Lingma Proxy"
+base_url = "http://127.0.0.1:8095/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+```
+
+```bash
+export OPENAI_API_KEY="any"
+codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json '只回复 OK'
+```
+
+本地已验证：在补齐 `/v1/responses` 兼容后，普通文本请求和带工具的命令型请求（如“运行 pwd 并只输出命令结果”）都能通过代理执行。
 
 ### Cline
 
@@ -433,6 +513,8 @@ export ANTHROPIC_API_KEY="any"
 ## 模型说明
 
 模型列表来自 Lingma 插件，不是代理内置静态列表。桌面端仅负责展示和复制模型 ID，真正使用哪个模型由调用方请求里的 `model` 字段决定。
+
+重要说明：下面列出的模型来自我们自己当前观察到的企业版 Lingma 环境。你的账号可能模型更少、别名不同，或者根本没有 `kmodel` / `mmodel` 这类远端模式 ID。
 
 当前常见模型：
 

@@ -80,6 +80,137 @@ func TestCapabilitiesAdvertiseAgentCompatibility(t *testing.T) {
 			t.Fatalf("feature %s = %#v", key, features[key])
 		}
 	}
+	protocols, ok := body["protocols"].([]any)
+	if !ok {
+		t.Fatalf("missing protocols: %#v", body)
+	}
+	foundResponses := false
+	for _, item := range protocols {
+		if item == "openai.responses" {
+			foundResponses = true
+			break
+		}
+	}
+	if !foundResponses {
+		t.Fatalf("protocols = %#v", protocols)
+	}
+}
+
+func TestResponsesRequestToChatRequest(t *testing.T) {
+	req := openAIResponsesRequest{
+		Model:        "resp-model",
+		Instructions: "You are concise.",
+		Input: []any{map[string]any{
+			"role":    "user",
+			"content": []any{map[string]any{"type": "input_text", "text": "hello"}},
+		}},
+		MaxOutputTokens: 64,
+		Reasoning:       map[string]any{"effort": "medium"},
+		Text:            map[string]any{"format": map[string]any{"type": "json_object"}},
+	}
+
+	chatReq, err := responsesRequestToChatRequest(req)
+	if err != nil {
+		t.Fatalf("responsesRequestToChatRequest() error = %v", err)
+	}
+	if chatReq.Model != "resp-model" {
+		t.Fatalf("model = %q", chatReq.Model)
+	}
+	if chatReq.MaxCompletionTokens != 64 {
+		t.Fatalf("max completion tokens = %d", chatReq.MaxCompletionTokens)
+	}
+	if chatReq.ReasoningEffort != "medium" {
+		t.Fatalf("reasoning effort = %q", chatReq.ReasoningEffort)
+	}
+	if len(chatReq.Messages) != 2 {
+		t.Fatalf("message count = %d", len(chatReq.Messages))
+	}
+	if chatReq.Messages[0].Role != "system" || extractText(chatReq.Messages[0].Content) != "You are concise." {
+		t.Fatalf("first message = %+v", chatReq.Messages[0])
+	}
+	if chatReq.Messages[1].Role != "user" || extractText(chatReq.Messages[1].Content) != "hello" {
+		t.Fatalf("second message = %+v", chatReq.Messages[1])
+	}
+	if extractResponseFormat(chatReq.ResponseFormat) != "json_object" {
+		t.Fatalf("response format = %#v", chatReq.ResponseFormat)
+	}
+}
+
+func TestResponsesRequestStringInput(t *testing.T) {
+	chatReq, err := responsesRequestToChatRequest(openAIResponsesRequest{Input: "hello"})
+	if err != nil {
+		t.Fatalf("responsesRequestToChatRequest() error = %v", err)
+	}
+	if len(chatReq.Messages) != 1 {
+		t.Fatalf("message count = %d", len(chatReq.Messages))
+	}
+	if chatReq.Messages[0].Role != "user" || extractText(chatReq.Messages[0].Content) != "hello" {
+		t.Fatalf("message = %+v", chatReq.Messages[0])
+	}
+}
+
+func TestResponsesRequestSingleObjectPreservesRole(t *testing.T) {
+	chatReq, err := responsesRequestToChatRequest(openAIResponsesRequest{Input: map[string]any{
+		"role":    "assistant",
+		"content": []any{map[string]any{"type": "output_text", "text": "hello"}},
+	}})
+	if err != nil {
+		t.Fatalf("responsesRequestToChatRequest() error = %v", err)
+	}
+	if len(chatReq.Messages) != 1 {
+		t.Fatalf("message count = %d", len(chatReq.Messages))
+	}
+	if chatReq.Messages[0].Role != "assistant" || extractText(chatReq.Messages[0].Content) != "hello" {
+		t.Fatalf("message = %+v", chatReq.Messages[0])
+	}
+}
+
+func TestOpenAIResponsesMethodNotAllowed(t *testing.T) {
+	server := NewServer("", service.New(service.Config{
+		Model:   "Qwen3-Coder",
+		Timeout: time.Second,
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	rec := httptest.NewRecorder()
+	server.http.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWriteOpenAIResponseStreamCompletedToolOnlyEmitsFunctionCallLifecycle(t *testing.T) {
+	rec := httptest.NewRecorder()
+	result := &service.ChatResult{
+		Model: "kmodel",
+		ToolCalls: []toolemulation.ToolCall{{
+			ID:        "call_1",
+			Name:      "read_file",
+			Arguments: map[string]any{"file_path": "go.mod"},
+		}},
+	}
+
+	writeOpenAIResponseStreamCompleted(rec, rec, "resp_1", 123, "kmodel", result, "msg_1", false)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "\"type\":\"message\"") {
+		t.Fatalf("unexpected empty message lifecycle in tool-only response: %s", body)
+	}
+	if !strings.Contains(body, "\"type\":\"response.output_item.added\"") {
+		t.Fatalf("missing function call added event: %s", body)
+	}
+	if !strings.Contains(body, "\"type\":\"response.function_call_arguments.delta\"") {
+		t.Fatalf("missing function call delta event: %s", body)
+	}
+	if !strings.Contains(body, "\"type\":\"response.function_call_arguments.done\"") {
+		t.Fatalf("missing function call done event: %s", body)
+	}
+	if !strings.Contains(body, "\"type\":\"response.output_item.done\"") {
+		t.Fatalf("missing function call done event: %s", body)
+	}
+	if !strings.Contains(body, "\"call_id\":\"call_1\"") {
+		t.Fatalf("missing function call payload: %s", body)
+	}
 }
 
 func TestNormalizeOpenAIRequestRejectsMissingUserAndAssistantMessages(t *testing.T) {

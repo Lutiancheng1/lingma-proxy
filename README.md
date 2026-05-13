@@ -315,7 +315,15 @@ Windows:
 
 ## Client Configuration
 
+These examples are based on clients we have actually validated against Lingma Proxy. They are not a claim that every Lingma account exposes the same model list.
+
+- The model IDs shown below come from our own enterprise Lingma environment.
+- Personal, commercial, campus, or different enterprise tenants may expose a different set of models, aliases, quotas, and remote domains.
+- Always trust your own `/v1/models` response over screenshots or README examples from this repository.
+
 ### Claude Code
+
+Reference: Anthropic Claude Code overview and setup docs: [code.claude.com/docs/en/overview](https://code.claude.com/docs/en/overview)
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8095"
@@ -327,6 +335,80 @@ Then select a model in Claude Code:
 ```text
 /model kmodel
 ```
+
+Notes:
+
+- `ANTHROPIC_BASE_URL` should not include `/v1`; Claude Code appends the Anthropic path itself.
+- Verified locally with text chat, tool use, pasted images, and image + tools in the same conversation.
+
+### Hermes Agent
+
+Reference: Hermes providers integration docs: [NousResearch/hermes-agent providers.md](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/integrations/providers.md)
+
+Environment file example (`~/.hermes/.env`):
+
+```bash
+OPENAI_API_KEY=any
+```
+
+Config example (`~/.hermes/config.yaml`):
+
+```yaml
+providers:
+  custom:
+    api_key_env: OPENAI_API_KEY
+    base_url: http://127.0.0.1:8095/v1
+    models:
+      - id: kmodel
+        label: Lingma Proxy Kimi
+
+default_provider: custom
+default_model: kmodel
+```
+
+Verified locally with text chat, tool-enabled coding tasks, and `hermes chat --image` image understanding.
+
+### CodeBuddy
+
+CodeBuddy does not currently publish a more detailed public Lingma Proxy guide that we can reference directly. The example below is the import shape we validated locally with its OpenAI-compatible custom model flow.
+
+```json
+{
+  "name": "Lingma Proxy",
+  "provider": "openai-compatible",
+  "baseURL": "http://127.0.0.1:8095/v1",
+  "apiKey": "any",
+  "model": "kmodel"
+}
+```
+
+Verified locally with standard chat requests and token usage accounting.
+
+### Codex CLI
+
+Reference: OpenAI Codex CLI overview: [developers.openai.com/codex/cli](https://developers.openai.com/codex/cli). The provider snippet below is the local configuration we validated against `codex-cli 0.130.0`.
+
+The tested local provider setup is:
+
+```toml
+model = "kmodel"
+model_provider = "lingma_proxy"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[model_providers.lingma_proxy]
+name = "Lingma Proxy"
+base_url = "http://127.0.0.1:8095/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+```
+
+```bash
+export OPENAI_API_KEY="any"
+codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json '只回复 OK'
+```
+
+Verified locally after adding `/v1/responses` compatibility. Both plain text execution and a tool-calling task (`运行 pwd 并只输出命令结果`) succeeded against the proxy.
 
 ### Cline
 
@@ -354,6 +436,8 @@ Then select a model in Claude Code:
 ## Models
 
 The proxy reports the models exposed by the Lingma plugin. The desktop app does not force a global model switch; the calling client should specify the `model` field. Clicking a model in the desktop app copies its model ID.
+
+Important: the list below reflects models we have observed in our own enterprise Lingma environment. Your account may expose fewer models, different aliases, or no `kmodel` / `mmodel` style remote IDs at all.
 
 Observed model IDs include:
 

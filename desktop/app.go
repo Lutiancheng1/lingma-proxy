@@ -1021,7 +1021,7 @@ func (a *App) reconcileTokenStatsLocked() {
 
 func isUsageBearingRequest(path string) bool {
 	switch strings.TrimSpace(path) {
-	case "/v1/messages", "/v1/chat/completions", "/v1/completions":
+	case "/v1/messages", "/v1/chat/completions", "/v1/completions", "/v1/responses":
 		return true
 	default:
 		return false

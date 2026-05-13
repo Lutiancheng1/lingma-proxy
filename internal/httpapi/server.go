@@ -72,6 +72,24 @@ type openAIChatRequest struct {
 	ReasoningEffort     string       `json:"reasoning_effort,omitempty"`
 }
 
+type openAIResponsesRequest struct {
+	Model             string   `json:"model"`
+	Input             any      `json:"input"`
+	Instructions      string   `json:"instructions,omitempty"`
+	Stream            bool     `json:"stream,omitempty"`
+	Tools             any      `json:"tools,omitempty"`
+	ToolChoice        any      `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool    `json:"parallel_tool_calls,omitempty"`
+	Temperature       *float64 `json:"temperature,omitempty"`
+	TopP              *float64 `json:"top_p,omitempty"`
+	MaxOutputTokens   int      `json:"max_output_tokens,omitempty"`
+	MaxTokens         int      `json:"max_tokens,omitempty"`
+	Stop              any      `json:"stop,omitempty"`
+	User              string   `json:"user,omitempty"`
+	Reasoning         any      `json:"reasoning,omitempty"`
+	Text              any      `json:"text,omitempty"`
+}
+
 type rawMessage struct {
 	Role       string `json:"role"`
 	Content    any    `json:"content"`
@@ -121,6 +139,8 @@ func NewServer(addr string, svc *service.Service) *Server {
 	mux.HandleFunc("/v1/messages", s.handleAnthropicMessages)
 	mux.HandleFunc("/v1/chat/completions", s.handleOpenAIChatCompletions)
 	mux.HandleFunc("/api/v1/chat/completions", s.handleOpenAIChatCompletions)
+	mux.HandleFunc("/v1/responses", s.handleOpenAIResponses)
+	mux.HandleFunc("/api/v1/responses", s.handleOpenAIResponses)
 
 	s.http = &http.Server{
 		Addr:              addr,
@@ -269,6 +289,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		"service": "lingma-proxy",
 		"protocols": []string{
 			"openai.chat_completions",
+			"openai.responses",
 			"anthropic.messages",
 			"lm_studio.discovery",
 			"ollama.discovery",
@@ -324,6 +345,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		},
 		"endpoints": map[string]any{
 			"openai_chat":        []string{"/v1/chat/completions", "/api/v1/chat/completions"},
+			"openai_responses":   []string{"/v1/responses", "/api/v1/responses"},
 			"anthropic_messages": "/v1/messages",
 			"models":             []string{"/v1/models", "/api/v1/models", "/api/tags"},
 			"capabilities":       []string{"/capabilities", "/v1/capabilities"},
@@ -587,46 +609,53 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	created := time.Now().Unix()
-	message := map[string]any{
-		"role":    "assistant",
-		"content": result.Text,
+	writeOpenAIChatCompletion(w, result)
+}
+
+func (s *Server) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
-	finishReason := "stop"
-	if len(result.ToolCalls) > 0 {
-		toolCalls := make([]map[string]any, 0, len(result.ToolCalls))
-		for _, tc := range result.ToolCalls {
-			argsJSON, _ := json.Marshal(tc.Arguments)
-			toolCalls = append(toolCalls, map[string]any{
-				"id":   tc.ID,
-				"type": "function",
-				"function": map[string]any{
-					"name":      tc.Name,
-					"arguments": string(argsJSON),
-				},
-			})
-		}
-		message["tool_calls"] = toolCalls
-		finishReason = "tool_calls"
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
-		"object":  "chat.completion",
-		"created": created,
-		"model":   result.Model,
-		"choices": []map[string]any{
-			{
-				"index":         0,
-				"message":       message,
-				"finish_reason": finishReason,
-			},
-		},
-		"usage": map[string]any{
-			"prompt_tokens":     result.InputTokens,
-			"completion_tokens": result.OutputTokens,
-			"total_tokens":      result.InputTokens + result.OutputTokens,
-		},
-	})
+	if !s.acquire(r.Context()) {
+		writeOpenAIError(w, http.StatusRequestTimeout, "timeout_error", "request was cancelled while waiting for a proxy execution slot")
+		return
+	}
+	defer s.release()
+
+	var req openAIResponsesRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+
+	chatReq, err := responsesRequestToChatRequest(req)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	normalized, err := normalizeOpenAIRequest(chatReq)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	s.applyDefaultModel(&normalized)
+
+	if req.Stream {
+		s.handleOpenAIResponsesStream(w, r, normalized)
+		return
+	}
+
+	result, err := s.svc.Generate(r.Context(), normalized)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, "api_error", err.Error())
+		return
+	}
+	writeOpenAIResponse(w, result)
 }
 
 func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, req service.ChatRequest) {
@@ -1207,6 +1236,124 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 	flusher.Flush()
 }
 
+func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Request, req service.ChatRequest) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeOpenAIError(w, http.StatusInternalServerError, "api_error", "streaming is not supported by this server")
+		return
+	}
+
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = "lingma"
+	}
+	responseID := fmt.Sprintf("resp_%d", time.Now().UnixNano())
+	messageID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
+	created := time.Now().Unix()
+	messageStarted := false
+	streamingHeaders(w)
+	if err := writeSSEEvent(w, flusher, "response.created", map[string]any{
+		"type": "response.created",
+		"response": map[string]any{
+			"id":         responseID,
+			"object":     "response",
+			"created_at": created,
+			"status":     "in_progress",
+			"model":      model,
+		},
+	}); err != nil {
+		return
+	}
+
+	if shouldAggregateToolStream(req) {
+		result, err := s.svc.Generate(r.Context(), req)
+		if err != nil {
+			_ = writeSSEEvent(w, flusher, "error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
+			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			return
+		}
+		writeOpenAIResponseStreamCompleted(w, flusher, responseID, created, model, result, messageID, false)
+		return
+	}
+
+	events, done, err := s.svc.GenerateStream(r.Context(), req)
+	if err != nil {
+		writeOpenAIError(w, http.StatusInternalServerError, "api_error", err.Error())
+		return
+	}
+
+	filter := newToolStreamFilter(len(req.Tools) > 0)
+	eventsCh := events
+	doneCh := done
+	var final *service.ChatResult
+	var finalErr error
+
+	for eventsCh != nil || doneCh != nil {
+		select {
+		case <-r.Context().Done():
+			return
+		case event, ok := <-eventsCh:
+			if !ok {
+				eventsCh = nil
+				continue
+			}
+			for _, delta := range filter.Push(event.Delta) {
+				if delta == "" {
+					continue
+				}
+				if !messageStarted {
+					if err := writeOpenAIResponseMessageStarted(w, flusher, messageID, 0); err != nil {
+						return
+					}
+					messageStarted = true
+				}
+				if err := writeSSEEvent(w, flusher, "response.output_text.delta", map[string]any{"type": "response.output_text.delta", "delta": delta}); err != nil {
+					return
+				}
+			}
+		case result, ok := <-doneCh:
+			if !ok {
+				doneCh = nil
+				continue
+			}
+			final = result.Result
+			finalErr = result.Err
+			doneCh = nil
+		}
+	}
+
+	if finalErr != nil {
+		_ = writeSSEEvent(w, flusher, "error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": finalErr.Error()}})
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
+	}
+	if final == nil {
+		_ = writeSSEEvent(w, flusher, "error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "stream finished without a final result"}})
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
+	}
+	if len(final.ToolCalls) == 0 {
+		for _, delta := range filter.Flush() {
+			if delta == "" {
+				continue
+			}
+			if !messageStarted {
+				if err := writeOpenAIResponseMessageStarted(w, flusher, messageID, 0); err != nil {
+					return
+				}
+				messageStarted = true
+			}
+			if err := writeSSEEvent(w, flusher, "response.output_text.delta", map[string]any{"type": "response.output_text.delta", "delta": delta}); err != nil {
+				return
+			}
+		}
+	}
+	writeOpenAIResponseStreamCompleted(w, flusher, responseID, created, model, final, messageID, messageStarted)
+}
+
 func shouldAggregateToolStream(req service.ChatRequest) bool {
 	return len(req.Tools) > 0 && truthyEnv("LINGMA_AGGREGATE_TOOL_STREAM")
 }
@@ -1573,7 +1720,131 @@ func extractResponseFormat(rf any) string {
 	if !ok {
 		return ""
 	}
+	if format, ok := m["format"].(map[string]any); ok {
+		return stringFromAny(format["type"])
+	}
 	return stringFromAny(m["type"])
+}
+
+func responsesRequestToChatRequest(req openAIResponsesRequest) (openAIChatRequest, error) {
+	messages, err := responsesInputToMessages(req.Input)
+	if err != nil {
+		return openAIChatRequest{}, err
+	}
+	if instructions := strings.TrimSpace(req.Instructions); instructions != "" {
+		messages = append([]rawMessage{{Role: "system", Content: instructions}}, messages...)
+	}
+	return openAIChatRequest{
+		Model:               strings.TrimSpace(req.Model),
+		Messages:            messages,
+		Stream:              req.Stream,
+		MaxTokens:           req.MaxTokens,
+		MaxCompletionTokens: req.MaxOutputTokens,
+		Tools:               req.Tools,
+		ToolChoice:          req.ToolChoice,
+		ParallelToolCalls:   req.ParallelToolCalls,
+		Temperature:         req.Temperature,
+		TopP:                req.TopP,
+		Stop:                req.Stop,
+		User:                req.User,
+		ReasoningEffort:     extractReasoningEffort(req.Reasoning),
+		ResponseFormat:      req.Text,
+	}, nil
+}
+
+func responsesInputToMessages(input any) ([]rawMessage, error) {
+	switch typed := input.(type) {
+	case nil:
+		return nil, fmt.Errorf("input is required")
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil, fmt.Errorf("input is required")
+		}
+		return []rawMessage{{Role: "user", Content: typed}}, nil
+	case []any:
+		messages := make([]rawMessage, 0, len(typed))
+		for _, item := range typed {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			role := stringFromAny(m["role"])
+			if role == "" {
+				role = "user"
+			}
+			content := normalizeResponsesContent(m["content"])
+			if text := strings.TrimSpace(extractText(content)); text == "" && len(extractOpenAIImages(content)) == 0 {
+				continue
+			}
+			messages = append(messages, rawMessage{Role: role, Content: content})
+		}
+		if len(messages) == 0 {
+			return nil, fmt.Errorf("no usable input messages found")
+		}
+		return messages, nil
+	case map[string]any:
+		role := stringFromAny(typed["role"])
+		if role == "" {
+			role = "user"
+		}
+		if content := normalizeResponsesContent(typed); strings.TrimSpace(extractText(content)) != "" || len(extractOpenAIImages(content)) > 0 {
+			return []rawMessage{{Role: role, Content: content}}, nil
+		}
+	}
+	return nil, fmt.Errorf("unsupported input format")
+}
+
+func normalizeResponsesContent(content any) any {
+	switch typed := content.(type) {
+	case nil:
+		return nil
+	case string:
+		return typed
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch stringFromAny(m["type"]) {
+			case "input_text", "output_text", "text":
+				text := stringFromAny(m["text"])
+				if text == "" {
+					text = stringFromAny(m["input_text"])
+				}
+				out = append(out, map[string]any{"type": "text", "text": text})
+			case "input_image", "image_url":
+				url := stringFromAny(m["image_url"])
+				if nested, ok := m["image_url"].(map[string]any); ok {
+					url = stringFromAny(nested["url"])
+				}
+				if url != "" {
+					out = append(out, map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}})
+				}
+			}
+		}
+		if len(out) == 0 {
+			return content
+		}
+		return out
+	case map[string]any:
+		if role := stringFromAny(typed["role"]); role != "" {
+			return normalizeResponsesContent(typed["content"])
+		}
+		if text := stringFromAny(typed["text"]); text != "" {
+			return text
+		}
+	}
+	return content
+}
+
+func extractReasoningEffort(reasoning any) string {
+	m, ok := reasoning.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return stringFromAny(m["effort"])
 }
 
 func maxTokens(a, b int) int {
@@ -1661,6 +1932,205 @@ func writeOpenAIError(w http.ResponseWriter, status int, kind string, message st
 			"param":   nil,
 		},
 	})
+}
+
+func writeOpenAIChatCompletion(w http.ResponseWriter, result *service.ChatResult) {
+	created := time.Now().Unix()
+	message := map[string]any{
+		"role":    "assistant",
+		"content": result.Text,
+	}
+	finishReason := "stop"
+	if len(result.ToolCalls) > 0 {
+		toolCalls := make([]map[string]any, 0, len(result.ToolCalls))
+		for _, tc := range result.ToolCalls {
+			argsJSON, _ := json.Marshal(tc.Arguments)
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   tc.ID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      tc.Name,
+					"arguments": string(argsJSON),
+				},
+			})
+		}
+		message["tool_calls"] = toolCalls
+		finishReason = "tool_calls"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
+		"object":  "chat.completion",
+		"created": created,
+		"model":   result.Model,
+		"choices": []map[string]any{{
+			"index":         0,
+			"message":       message,
+			"finish_reason": finishReason,
+		}},
+		"usage": map[string]any{
+			"prompt_tokens":     result.InputTokens,
+			"completion_tokens": result.OutputTokens,
+			"total_tokens":      result.InputTokens + result.OutputTokens,
+		},
+	})
+}
+
+func writeOpenAIResponse(w http.ResponseWriter, result *service.ChatResult) {
+	responseID := fmt.Sprintf("resp_%d", time.Now().UnixNano())
+	created := time.Now().Unix()
+	writeJSON(w, http.StatusOK, buildOpenAIResponseBody(responseID, created, result.Model, result, ""))
+}
+
+func buildOpenAIResponseMessageItem(messageID string, text string, status string) map[string]any {
+	item := map[string]any{
+		"id":      messageID,
+		"type":    "message",
+		"status":  status,
+		"role":    "assistant",
+		"content": []map[string]any{},
+	}
+	if strings.TrimSpace(text) != "" {
+		item["content"] = []map[string]any{{
+			"type": "output_text",
+			"text": text,
+		}}
+	}
+	return item
+}
+
+func buildOpenAIResponseBody(responseID string, created int64, model string, result *service.ChatResult, messageID string) map[string]any {
+	output := make([]map[string]any, 0, 1+len(result.ToolCalls))
+	if strings.TrimSpace(result.Text) != "" {
+		if strings.TrimSpace(messageID) == "" {
+			messageID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
+		}
+		output = append(output, buildOpenAIResponseMessageItem(messageID, result.Text, "completed"))
+	}
+	for _, tc := range result.ToolCalls {
+		argsJSON, _ := json.Marshal(tc.Arguments)
+		output = append(output, map[string]any{
+			"type":      "function_call",
+			"id":        tc.ID,
+			"call_id":   tc.ID,
+			"name":      tc.Name,
+			"arguments": string(argsJSON),
+			"status":    "completed",
+		})
+	}
+	if strings.TrimSpace(model) == "" {
+		model = result.Model
+	}
+	return map[string]any{
+		"id":          responseID,
+		"object":      "response",
+		"created_at":  created,
+		"status":      "completed",
+		"model":       model,
+		"output":      output,
+		"output_text": result.Text,
+		"usage": map[string]any{
+			"input_tokens":  result.InputTokens,
+			"output_tokens": result.OutputTokens,
+			"total_tokens":  result.InputTokens + result.OutputTokens,
+		},
+	}
+}
+
+func writeOpenAIResponseMessageStarted(w http.ResponseWriter, flusher http.Flusher, messageID string, outputIndex int) error {
+	if err := writeSSEEvent(w, flusher, "response.output_item.added", map[string]any{
+		"type":         "response.output_item.added",
+		"output_index": outputIndex,
+		"item":         buildOpenAIResponseMessageItem(messageID, "", "in_progress"),
+	}); err != nil {
+		return err
+	}
+	return writeSSEEvent(w, flusher, "response.content_part.added", map[string]any{
+		"type":          "response.content_part.added",
+		"item_id":       messageID,
+		"output_index":  outputIndex,
+		"content_index": 0,
+		"part": map[string]any{
+			"type": "output_text",
+			"text": "",
+		},
+	})
+}
+
+func writeOpenAIResponseStreamCompleted(w http.ResponseWriter, flusher http.Flusher, responseID string, created int64, model string, result *service.ChatResult, messageID string, messageStarted bool) {
+	outputIndex := 0
+	if strings.TrimSpace(result.Text) != "" {
+		if !messageStarted {
+			_ = writeOpenAIResponseMessageStarted(w, flusher, messageID, outputIndex)
+		}
+		_ = writeSSEEvent(w, flusher, "response.content_part.done", map[string]any{
+			"type":          "response.content_part.done",
+			"item_id":       messageID,
+			"output_index":  outputIndex,
+			"content_index": 0,
+			"part": map[string]any{
+				"type": "output_text",
+				"text": result.Text,
+			},
+		})
+		_ = writeSSEEvent(w, flusher, "response.output_text.done", map[string]any{
+			"type": "response.output_text.done",
+			"text": result.Text,
+		})
+		_ = writeSSEEvent(w, flusher, "response.output_item.done", map[string]any{
+			"type":         "response.output_item.done",
+			"output_index": outputIndex,
+			"item":         buildOpenAIResponseMessageItem(messageID, result.Text, "completed"),
+		})
+		outputIndex++
+	}
+	for _, tc := range result.ToolCalls {
+		argsJSON, _ := json.Marshal(tc.Arguments)
+		argsText := string(argsJSON)
+		_ = writeSSEEvent(w, flusher, "response.output_item.added", map[string]any{
+			"type":         "response.output_item.added",
+			"output_index": outputIndex,
+			"item": map[string]any{
+				"type":      "function_call",
+				"id":        tc.ID,
+				"call_id":   tc.ID,
+				"name":      tc.Name,
+				"arguments": "",
+				"status":    "in_progress",
+			},
+		})
+		_ = writeSSEEvent(w, flusher, "response.function_call_arguments.delta", map[string]any{
+			"type":         "response.function_call_arguments.delta",
+			"item_id":      tc.ID,
+			"output_index": outputIndex,
+			"delta":        argsText,
+		})
+		_ = writeSSEEvent(w, flusher, "response.function_call_arguments.done", map[string]any{
+			"type":         "response.function_call_arguments.done",
+			"item_id":      tc.ID,
+			"output_index": outputIndex,
+			"name":         tc.Name,
+			"arguments":    argsText,
+		})
+		_ = writeSSEEvent(w, flusher, "response.output_item.done", map[string]any{
+			"type":         "response.output_item.done",
+			"output_index": outputIndex,
+			"item": map[string]any{
+				"type":      "function_call",
+				"id":        tc.ID,
+				"call_id":   tc.ID,
+				"name":      tc.Name,
+				"arguments": argsText,
+				"status":    "completed",
+			},
+		})
+		outputIndex++
+	}
+	_ = writeSSEEvent(w, flusher, "response.completed", map[string]any{
+		"type":     "response.completed",
+		"response": buildOpenAIResponseBody(responseID, created, model, result, messageID),
+	})
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 func streamingHeaders(w http.ResponseWriter) {
