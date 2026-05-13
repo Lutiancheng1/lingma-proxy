@@ -17,6 +17,7 @@ coverage.*
 .DS_Store
 .idea/
 .vscode/
+.playwright-mcp/
 nul
 LINUXDO_POST.md
 lingma-ipc-proxy.macos.json
