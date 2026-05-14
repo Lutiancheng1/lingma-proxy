@@ -1252,7 +1252,8 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 	created := time.Now().Unix()
 	messageStarted := false
 	streamingHeaders(w)
-	if err := writeSSEEvent(w, flusher, "response.created", map[string]any{
+	emitter := newOpenAIResponseStreamEmitter(w, flusher, responseID)
+	if err := emitter.Event("response.created", map[string]any{
 		"type": "response.created",
 		"response": map[string]any{
 			"id":         responseID,
@@ -1268,12 +1269,12 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 	if shouldAggregateToolStream(req) {
 		result, err := s.svc.Generate(r.Context(), req)
 		if err != nil {
-			_ = writeSSEEvent(w, flusher, "error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
+			_ = emitter.Event("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
 			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 			flusher.Flush()
 			return
 		}
-		writeOpenAIResponseStreamCompleted(w, flusher, responseID, created, model, result, messageID, false)
+		writeOpenAIResponseStreamCompleted(emitter, responseID, created, model, result, messageID, false)
 		return
 	}
 
@@ -1288,6 +1289,7 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 	doneCh := done
 	var final *service.ChatResult
 	var finalErr error
+	pendingText := make([]string, 0, 16)
 
 	for eventsCh != nil || doneCh != nil {
 		select {
@@ -1302,15 +1304,7 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 				if delta == "" {
 					continue
 				}
-				if !messageStarted {
-					if err := writeOpenAIResponseMessageStarted(w, flusher, messageID, 0); err != nil {
-						return
-					}
-					messageStarted = true
-				}
-				if err := writeSSEEvent(w, flusher, "response.output_text.delta", map[string]any{"type": "response.output_text.delta", "delta": delta}); err != nil {
-					return
-				}
+				pendingText = append(pendingText, delta)
 			}
 		case result, ok := <-doneCh:
 			if !ok {
@@ -1324,34 +1318,41 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 	}
 
 	if finalErr != nil {
-		_ = writeSSEEvent(w, flusher, "error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": finalErr.Error()}})
+		_ = emitter.Event("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": finalErr.Error()}})
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 		return
 	}
 	if final == nil {
-		_ = writeSSEEvent(w, flusher, "error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "stream finished without a final result"}})
+		_ = emitter.Event("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "stream finished without a final result"}})
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
 		return
 	}
 	if len(final.ToolCalls) == 0 {
-		for _, delta := range filter.Flush() {
+		pendingText = append(pendingText, filter.Flush()...)
+		for _, delta := range pendingText {
 			if delta == "" {
 				continue
 			}
 			if !messageStarted {
-				if err := writeOpenAIResponseMessageStarted(w, flusher, messageID, 0); err != nil {
+				if err := writeOpenAIResponseMessageStarted(emitter, messageID, 0); err != nil {
 					return
 				}
 				messageStarted = true
 			}
-			if err := writeSSEEvent(w, flusher, "response.output_text.delta", map[string]any{"type": "response.output_text.delta", "delta": delta}); err != nil {
+			if err := emitter.Event("response.output_text.delta", map[string]any{
+				"type":          "response.output_text.delta",
+				"item_id":       messageID,
+				"output_index":  0,
+				"content_index": 0,
+				"delta":         delta,
+			}); err != nil {
 				return
 			}
 		}
 	}
-	writeOpenAIResponseStreamCompleted(w, flusher, responseID, created, model, final, messageID, messageStarted)
+	writeOpenAIResponseStreamCompleted(emitter, responseID, created, model, final, messageID, messageStarted)
 }
 
 func shouldAggregateToolStream(req service.ChatRequest) bool {
@@ -1768,6 +1769,18 @@ func responsesInputToMessages(input any) ([]rawMessage, error) {
 			if !ok {
 				continue
 			}
+			switch stringFromAny(m["type"]) {
+			case "function_call":
+				if toolCall := responsesFunctionCallToRawMessage(m); toolCall != nil {
+					messages = append(messages, *toolCall)
+				}
+				continue
+			case "function_call_output":
+				if toolResult := responsesFunctionCallOutputToRawMessage(m); toolResult != nil {
+					messages = append(messages, *toolResult)
+				}
+				continue
+			}
 			role := stringFromAny(m["role"])
 			if role == "" {
 				role = "user"
@@ -1783,6 +1796,16 @@ func responsesInputToMessages(input any) ([]rawMessage, error) {
 		}
 		return messages, nil
 	case map[string]any:
+		switch stringFromAny(typed["type"]) {
+		case "function_call":
+			if toolCall := responsesFunctionCallToRawMessage(typed); toolCall != nil {
+				return []rawMessage{*toolCall}, nil
+			}
+		case "function_call_output":
+			if toolResult := responsesFunctionCallOutputToRawMessage(typed); toolResult != nil {
+				return []rawMessage{*toolResult}, nil
+			}
+		}
 		role := stringFromAny(typed["role"])
 		if role == "" {
 			role = "user"
@@ -1792,6 +1815,47 @@ func responsesInputToMessages(input any) ([]rawMessage, error) {
 		}
 	}
 	return nil, fmt.Errorf("unsupported input format")
+}
+
+func responsesFunctionCallToRawMessage(item map[string]any) *rawMessage {
+	name := strings.TrimSpace(stringFromAny(item["name"]))
+	if name == "" {
+		return nil
+	}
+	callID := strings.TrimSpace(stringFromAny(item["call_id"]))
+	if callID == "" {
+		callID = strings.TrimSpace(stringFromAny(item["id"]))
+	}
+	if callID == "" {
+		return nil
+	}
+	arguments := strings.TrimSpace(stringFromAny(item["arguments"]))
+	return &rawMessage{
+		Role: "assistant",
+		ToolCalls: []any{
+			map[string]any{
+				"id":   callID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      name,
+					"arguments": arguments,
+				},
+			},
+		},
+	}
+}
+
+func responsesFunctionCallOutputToRawMessage(item map[string]any) *rawMessage {
+	callID := strings.TrimSpace(stringFromAny(item["call_id"]))
+	output := strings.TrimSpace(stringFromAny(item["output"]))
+	if callID == "" || output == "" {
+		return nil
+	}
+	return &rawMessage{
+		Role:       "tool",
+		Content:    output,
+		ToolCallID: callID,
+	}
 }
 
 func normalizeResponsesContent(content any) any {
@@ -1998,13 +2062,24 @@ func buildOpenAIResponseMessageItem(messageID string, text string, status string
 	return item
 }
 
+func responseTextForResponses(result *service.ChatResult) string {
+	if result == nil {
+		return ""
+	}
+	if len(result.ToolCalls) > 0 {
+		return ""
+	}
+	return strings.TrimSpace(result.Text)
+}
+
 func buildOpenAIResponseBody(responseID string, created int64, model string, result *service.ChatResult, messageID string) map[string]any {
 	output := make([]map[string]any, 0, 1+len(result.ToolCalls))
-	if strings.TrimSpace(result.Text) != "" {
+	text := responseTextForResponses(result)
+	if text != "" {
 		if strings.TrimSpace(messageID) == "" {
 			messageID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
 		}
-		output = append(output, buildOpenAIResponseMessageItem(messageID, result.Text, "completed"))
+		output = append(output, buildOpenAIResponseMessageItem(messageID, text, "completed"))
 	}
 	for _, tc := range result.ToolCalls {
 		argsJSON, _ := json.Marshal(tc.Arguments)
@@ -2027,7 +2102,7 @@ func buildOpenAIResponseBody(responseID string, created int64, model string, res
 		"status":      "completed",
 		"model":       model,
 		"output":      output,
-		"output_text": result.Text,
+		"output_text": text,
 		"usage": map[string]any{
 			"input_tokens":  result.InputTokens,
 			"output_tokens": result.OutputTokens,
@@ -2036,15 +2111,40 @@ func buildOpenAIResponseBody(responseID string, created int64, model string, res
 	}
 }
 
-func writeOpenAIResponseMessageStarted(w http.ResponseWriter, flusher http.Flusher, messageID string, outputIndex int) error {
-	if err := writeSSEEvent(w, flusher, "response.output_item.added", map[string]any{
+type openAIResponseStreamEmitter struct {
+	w          http.ResponseWriter
+	flusher    http.Flusher
+	responseID string
+	sequence   int
+}
+
+func newOpenAIResponseStreamEmitter(w http.ResponseWriter, flusher http.Flusher, responseID string) *openAIResponseStreamEmitter {
+	return &openAIResponseStreamEmitter{w: w, flusher: flusher, responseID: responseID}
+}
+
+func (e *openAIResponseStreamEmitter) Event(name string, payload map[string]any) error {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if _, ok := payload["sequence_number"]; !ok {
+		payload["sequence_number"] = e.sequence
+		e.sequence++
+	}
+	if _, ok := payload["response_id"]; !ok && e.responseID != "" {
+		payload["response_id"] = e.responseID
+	}
+	return writeSSEEvent(e.w, e.flusher, name, payload)
+}
+
+func writeOpenAIResponseMessageStarted(emitter *openAIResponseStreamEmitter, messageID string, outputIndex int) error {
+	if err := emitter.Event("response.output_item.added", map[string]any{
 		"type":         "response.output_item.added",
 		"output_index": outputIndex,
 		"item":         buildOpenAIResponseMessageItem(messageID, "", "in_progress"),
 	}); err != nil {
 		return err
 	}
-	return writeSSEEvent(w, flusher, "response.content_part.added", map[string]any{
+	return emitter.Event("response.content_part.added", map[string]any{
 		"type":          "response.content_part.added",
 		"item_id":       messageID,
 		"output_index":  outputIndex,
@@ -2056,37 +2156,41 @@ func writeOpenAIResponseMessageStarted(w http.ResponseWriter, flusher http.Flush
 	})
 }
 
-func writeOpenAIResponseStreamCompleted(w http.ResponseWriter, flusher http.Flusher, responseID string, created int64, model string, result *service.ChatResult, messageID string, messageStarted bool) {
+func writeOpenAIResponseStreamCompleted(emitter *openAIResponseStreamEmitter, responseID string, created int64, model string, result *service.ChatResult, messageID string, messageStarted bool) {
 	outputIndex := 0
-	if strings.TrimSpace(result.Text) != "" {
+	text := responseTextForResponses(result)
+	if text != "" {
 		if !messageStarted {
-			_ = writeOpenAIResponseMessageStarted(w, flusher, messageID, outputIndex)
+			_ = writeOpenAIResponseMessageStarted(emitter, messageID, outputIndex)
 		}
-		_ = writeSSEEvent(w, flusher, "response.content_part.done", map[string]any{
+		_ = emitter.Event("response.content_part.done", map[string]any{
 			"type":          "response.content_part.done",
 			"item_id":       messageID,
 			"output_index":  outputIndex,
 			"content_index": 0,
 			"part": map[string]any{
 				"type": "output_text",
-				"text": result.Text,
+				"text": text,
 			},
 		})
-		_ = writeSSEEvent(w, flusher, "response.output_text.done", map[string]any{
-			"type": "response.output_text.done",
-			"text": result.Text,
+		_ = emitter.Event("response.output_text.done", map[string]any{
+			"type":          "response.output_text.done",
+			"item_id":       messageID,
+			"output_index":  outputIndex,
+			"content_index": 0,
+			"text":          text,
 		})
-		_ = writeSSEEvent(w, flusher, "response.output_item.done", map[string]any{
+		_ = emitter.Event("response.output_item.done", map[string]any{
 			"type":         "response.output_item.done",
 			"output_index": outputIndex,
-			"item":         buildOpenAIResponseMessageItem(messageID, result.Text, "completed"),
+			"item":         buildOpenAIResponseMessageItem(messageID, text, "completed"),
 		})
 		outputIndex++
 	}
 	for _, tc := range result.ToolCalls {
 		argsJSON, _ := json.Marshal(tc.Arguments)
 		argsText := string(argsJSON)
-		_ = writeSSEEvent(w, flusher, "response.output_item.added", map[string]any{
+		_ = emitter.Event("response.output_item.added", map[string]any{
 			"type":         "response.output_item.added",
 			"output_index": outputIndex,
 			"item": map[string]any{
@@ -2098,20 +2202,20 @@ func writeOpenAIResponseStreamCompleted(w http.ResponseWriter, flusher http.Flus
 				"status":    "in_progress",
 			},
 		})
-		_ = writeSSEEvent(w, flusher, "response.function_call_arguments.delta", map[string]any{
+		_ = emitter.Event("response.function_call_arguments.delta", map[string]any{
 			"type":         "response.function_call_arguments.delta",
 			"item_id":      tc.ID,
 			"output_index": outputIndex,
 			"delta":        argsText,
 		})
-		_ = writeSSEEvent(w, flusher, "response.function_call_arguments.done", map[string]any{
+		_ = emitter.Event("response.function_call_arguments.done", map[string]any{
 			"type":         "response.function_call_arguments.done",
 			"item_id":      tc.ID,
 			"output_index": outputIndex,
 			"name":         tc.Name,
 			"arguments":    argsText,
 		})
-		_ = writeSSEEvent(w, flusher, "response.output_item.done", map[string]any{
+		_ = emitter.Event("response.output_item.done", map[string]any{
 			"type":         "response.output_item.done",
 			"output_index": outputIndex,
 			"item": map[string]any{
@@ -2125,12 +2229,12 @@ func writeOpenAIResponseStreamCompleted(w http.ResponseWriter, flusher http.Flus
 		})
 		outputIndex++
 	}
-	_ = writeSSEEvent(w, flusher, "response.completed", map[string]any{
+	_ = emitter.Event("response.completed", map[string]any{
 		"type":     "response.completed",
 		"response": buildOpenAIResponseBody(responseID, created, model, result, messageID),
 	})
-	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
-	flusher.Flush()
+	_, _ = fmt.Fprint(emitter.w, "data: [DONE]\n\n")
+	emitter.flusher.Flush()
 }
 
 func streamingHeaders(w http.ResponseWriter) {

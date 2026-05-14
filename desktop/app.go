@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	desktopAppVersion          = "1.4.15"
+	desktopAppVersion          = "1.5.0"
 	feedbackPayloadCharLimit   = 16000
 	feedbackStringFieldLimit   = 4096
 	feedbackDefaultRangePreset = "30m"

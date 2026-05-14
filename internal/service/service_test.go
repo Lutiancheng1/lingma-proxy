@@ -255,3 +255,33 @@ func TestRequestWithImageContextRemovesImagesAndAppendsContext(t *testing.T) {
 		t.Fatalf("latest user message missing image context: %#v", out.Messages[2])
 	}
 }
+
+func TestBuildLingmaPromptInjectsToolingForImageContextRemoteFallback(t *testing.T) {
+	req := ChatRequest{
+		Messages: []ChatMessage{
+			{Role: "user", Text: "这张图是什么", Images: []Image{{URL: "file:///tmp/a.png"}}},
+		},
+		Tools: []toolemulation.ToolDef{{
+			Name: "exec_command",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"cmd": map[string]any{"type": "string"},
+				},
+				"required": []any{"cmd"},
+			},
+		}},
+		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
+	}
+
+	withContext := requestWithImageContext(req, "黑色礁石与海浪")
+	prompt, err := buildLingmaPrompt(withContext, SessionModeFresh, true)
+	if err != nil {
+		t.Fatalf("buildLingmaPrompt returned error: %v", err)
+	}
+	if !strings.Contains(prompt, "[图片上下文]") {
+		t.Fatalf("prompt should include image context, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "DIRECT tool access") || !strings.Contains(prompt, "```json action") {
+		t.Fatalf("image-context remote fallback prompt should include tool emulation, got %q", prompt)
+	}
+}

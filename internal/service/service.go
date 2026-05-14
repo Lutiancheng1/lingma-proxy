@@ -369,6 +369,15 @@ func (s *Service) generateRemote(
 	req ChatRequest,
 	onDelta func(string),
 ) (*ChatResult, error) {
+	return s.generateRemoteInternal(ctx, req, onDelta, false)
+}
+
+func (s *Service) generateRemoteInternal(
+	ctx context.Context,
+	req ChatRequest,
+	onDelta func(string),
+	emulateTools bool,
+) (*ChatResult, error) {
 	if requestHasImages(req) {
 		if len(req.Tools) > 0 && req.ToolChoice.Mode != "none" {
 			return s.generateRemoteWithImageContext(ctx, req, onDelta)
@@ -379,7 +388,7 @@ func (s *Service) generateRemote(
 		req.Model = s.DefaultModel()
 	}
 	req.Model = normalizeModelForBackend(BackendRemote, req.Model)
-	prompt, err := buildLingmaPrompt(req, SessionModeFresh, false)
+	prompt, err := buildLingmaPrompt(req, SessionModeFresh, emulateTools)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +401,7 @@ func (s *Service) generateRemote(
 	var lastErr error
 	for i, model := range models {
 		attemptCtx, cancel := contextWithOptionalTimeout(ctx, s.cfg.Timeout)
-		result, emitted, err := s.generateRemoteWithModel(attemptCtx, client, req, prompt, model, onDelta)
+		result, emitted, err := s.generateRemoteWithModel(attemptCtx, client, req, prompt, model, onDelta, emulateTools)
 		cancel()
 		if err == nil {
 			return result, nil
@@ -416,7 +425,7 @@ func (s *Service) generateRemoteWithImageContext(
 		return nil, fmt.Errorf("image context extraction through IPC failed: %w", err)
 	}
 	remoteReq := requestWithImageContext(req, imageResult.Text)
-	return s.generateRemote(ctx, remoteReq, onDelta)
+	return s.generateRemoteInternal(ctx, remoteReq, onDelta, true)
 }
 
 func (s *Service) generateRemoteWithModel(
@@ -426,6 +435,7 @@ func (s *Service) generateRemoteWithModel(
 	prompt string,
 	model string,
 	onDelta func(string),
+	emulateTools bool,
 ) (*ChatResult, bool, error) {
 	emitted := false
 	delta := func(text string) {
@@ -479,6 +489,30 @@ func (s *Service) generateRemoteWithModel(
 		Transport:        "remote",
 		EffectiveSession: SessionModeFresh,
 		ToolCalls:        remoteResult.ToolCalls,
+	}
+	if emulateTools {
+		s.applyToolEmulation(ctx, req, prompt, result, onDelta, func(hintPrompt string) (string, int, error) {
+			retryResult, err := client.Chat(ctx, remote.ChatRequest{
+				Model:       model,
+				Prompt:      hintPrompt,
+				Messages:    remoteMessagesFromRequest(req),
+				Images:      remoteImagesFromRequest(req),
+				Stream:      false,
+				Temperature: req.Temperature,
+				Tools:       req.Tools,
+				ToolChoice:  req.ToolChoice,
+			}, nil)
+			if err != nil {
+				return "", 0, err
+			}
+			if len(retryResult.ToolCalls) > 0 {
+				result.Text = retryResult.Text
+				result.ToolCalls = retryResult.ToolCalls
+				result.OutputTokens = retryResult.OutputTokens
+				return "", 0, nil
+			}
+			return retryResult.Text, retryResult.OutputTokens, nil
+		})
 	}
 	return result, emitted, nil
 }

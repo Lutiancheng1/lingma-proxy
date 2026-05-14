@@ -15,6 +15,7 @@ func TestLooksLikeMissedToolUseDetectsLocalToolAvoidance(t *testing.T) {
 		"Let me use the web search tool.",
 		"You can run the following command in your terminal.",
 		"现在我需要切换到计划模式。",
+		"现在我将编辑文件，在末尾追加一行 beta，然后生成 unified diff。",
 	}
 	for _, tc := range cases {
 		if !LooksLikeMissedToolUse(tc) {
@@ -92,6 +93,71 @@ func TestInjectToolingIncludesAutoToolGuidance(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestCoreToolExamplesSupportsCodexStyleToolNames(t *testing.T) {
+	prompt := InjectTooling("", []ToolDef{
+		{
+			Name:        "exec_command",
+			Description: "Run a shell command",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"cmd": map[string]any{"type": "string"},
+				},
+				"required": []any{"cmd"},
+			},
+		},
+		{
+			Name:        "apply_patch",
+			Description: "Edit files",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"patch": map[string]any{"type": "string"},
+				},
+				"required": []any{"patch"},
+			},
+		},
+	}, ToolChoice{Mode: "auto"}, nil)
+
+	for _, want := range []string{
+		"Run shell commands, inspect memory/CPU/processes/ports, build or test code: use exec_command.",
+		"Edit files: use apply_patch.",
+		"\"tool\":\"exec_command\"",
+		"\"cmd\":\"pwd\"",
+		"\"tool\":\"apply_patch\"",
+		"\"patch\":\"value\"",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestExtractToolsSupportsResponsesFunctionShape(t *testing.T) {
+	tools := ExtractTools([]any{
+		map[string]any{
+			"type":        "function",
+			"name":        "exec_command",
+			"description": "Runs a command",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"cmd": map[string]any{"type": "string"},
+				},
+				"required": []any{"cmd"},
+			},
+		},
+	})
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	if tools[0].Name != "exec_command" {
+		t.Fatalf("unexpected tool name %q", tools[0].Name)
+	}
+	props, _ := tools[0].InputSchema["properties"].(map[string]any)
+	if _, ok := props["cmd"]; !ok {
+		t.Fatalf("expected responses schema properties to be preserved")
 	}
 }
 

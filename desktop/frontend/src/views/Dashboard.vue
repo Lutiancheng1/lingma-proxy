@@ -308,7 +308,7 @@ onUnmounted(() => {
         <div class="panel-header">
           <div>
             <h2>Health <span class="muted">(Last 60s)</span></h2>
-            <p>最近 60 秒请求延迟。P95 表示 95% 的请求会低于这个耗时。</p>
+            <p>最近 60 秒请求延迟。</p>
           </div>
           <span class="status-chip ok">Healthy</span>
         </div>

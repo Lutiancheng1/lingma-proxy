@@ -181,6 +181,7 @@ func TestOpenAIResponsesMethodNotAllowed(t *testing.T) {
 
 func TestWriteOpenAIResponseStreamCompletedToolOnlyEmitsFunctionCallLifecycle(t *testing.T) {
 	rec := httptest.NewRecorder()
+	emitter := newOpenAIResponseStreamEmitter(rec, rec, "resp_1")
 	result := &service.ChatResult{
 		Model: "kmodel",
 		ToolCalls: []toolemulation.ToolCall{{
@@ -190,7 +191,7 @@ func TestWriteOpenAIResponseStreamCompletedToolOnlyEmitsFunctionCallLifecycle(t 
 		}},
 	}
 
-	writeOpenAIResponseStreamCompleted(rec, rec, "resp_1", 123, "kmodel", result, "msg_1", false)
+	writeOpenAIResponseStreamCompleted(emitter, "resp_1", 123, "kmodel", result, "msg_1", false)
 
 	body := rec.Body.String()
 	if strings.Contains(body, "\"type\":\"message\"") {
@@ -210,6 +211,16 @@ func TestWriteOpenAIResponseStreamCompletedToolOnlyEmitsFunctionCallLifecycle(t 
 	}
 	if !strings.Contains(body, "\"call_id\":\"call_1\"") {
 		t.Fatalf("missing function call payload: %s", body)
+	}
+	for _, want := range []string{
+		"\"sequence_number\":0",
+		"\"response_id\":\"resp_1\"",
+		"\"output_index\":0",
+		"\"item_id\":\"call_1\"",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in body: %s", want, body)
+		}
 	}
 }
 

@@ -44,6 +44,10 @@ func ExtractTools(raw any) []ToolDef {
 			continue
 		}
 		fn, ok := m["function"].(map[string]any)
+		if !ok && strings.EqualFold(strings.TrimSpace(stringFromAny(m["type"])), "function") {
+			fn = m
+			ok = true
+		}
 		if !ok {
 			continue
 		}
@@ -236,10 +240,25 @@ func InjectTooling(system string, tools []ToolDef, choice ToolChoice, parallel *
 	b.WriteString("- The action block format is MANDATORY.\n")
 	b.WriteString(forceConstraint(choice, parallel))
 
-	b.WriteString("\n\nExample requiring a tool:\n")
-	b.WriteString("If the user asks to list files, respond ONLY with:\n")
-	b.WriteString("```json action\n{\"tool\":\"Bash\",\"parameters\":{\"command\":\"ls\"}}\n```\n")
-	b.WriteString("Do NOT add explanations. Do NOT refuse.")
+	if tool, ok := firstAvailableToolDef(tools, "terminal", "bash", "shell", "exec_command"); ok {
+		block := map[string]any{
+			"tool":       tool.Name,
+			"parameters": exampleParameters(tool.Name, tool.InputSchema),
+		}
+		if prop, ok := block["parameters"].(map[string]any); ok {
+			for key := range prop {
+				if strings.Contains(strings.ToLower(key), "command") || strings.EqualFold(key, "cmd") {
+					prop[key] = "ls"
+				}
+			}
+		}
+		if bts, err := json.Marshal(block); err == nil {
+			b.WriteString("\n\nExample requiring a tool:\n")
+			b.WriteString("If the user asks to list files, respond ONLY with:\n")
+			b.WriteString("```json action\n" + string(bts) + "\n```\n")
+			b.WriteString("Do NOT add explanations. Do NOT refuse.")
+		}
+	}
 
 	example := ActionBlockExample(tools)
 	if example != "" {
@@ -264,7 +283,7 @@ func ActionOutputPrompt(toolCallID string, output string) string {
 	if output == "" {
 		return ""
 	}
-	next := "Based on the tool result above, answer the user's request directly if you have enough information. Only use another tool call if a specific missing fact still requires it."
+	next := "Based on the tool result above, answer the user's request directly if you have enough information. Only use another tool call if a specific missing fact still requires it. Do NOT repeat the same tool call with the same arguments when its result is already shown above."
 	if id := strings.TrimSpace(toolCallID); id != "" {
 		return "Tool result for " + id + ":\n" + output + "\n\n" + next
 	}
@@ -309,8 +328,8 @@ func toolRoutingHints(tools []ToolDef) string {
 
 	add("Read a specific local file or code path", "read_file")
 	add("Search files or list project files", "search_files")
-	add("Edit files", "patch", "write_file")
-	add("Run shell commands, inspect memory/CPU/processes/ports, build or test code", "terminal", "bash", "shell")
+	add("Edit files", "patch", "write_file", "apply_patch")
+	add("Run shell commands, inspect memory/CPU/processes/ports, build or test code", "terminal", "bash", "shell", "exec_command")
 	add("Manage long-running shell processes", "process")
 	add("Search current web information such as weather, news, or documentation", "web_search", "search")
 	add("Fetch or scrape a web page", "web_extract", "fetch")
@@ -326,17 +345,20 @@ func toolRoutingHints(tools []ToolDef) string {
 func coreToolExamples(tools []ToolDef) string {
 	names := availableToolNames(tools)
 	examples := make([]string, 0, 4)
-	if name := firstAvailableTool(names, "read_file"); name != "" {
-		examples = append(examples, "- Read a file: ```json action\n{\"tool\":\""+name+"\",\"parameters\":{\"path\":\"/absolute/path/to/file.go\"}}\n```")
+	if tool, ok := firstAvailableToolDef(tools, "read_file"); ok {
+		examples = append(examples, "- Read a file: "+buildToolExample(tool))
 	}
-	if name := firstAvailableTool(names, "search_files"); name != "" {
-		examples = append(examples, "- Search or list files: ```json action\n{\"tool\":\""+name+"\",\"parameters\":{\"pattern\":\"TODO\",\"path\":\"/absolute/project\"}}\n```")
+	if tool, ok := firstAvailableToolDef(tools, "search_files"); ok {
+		examples = append(examples, "- Search or list files: "+buildToolExample(tool))
 	}
-	if name := firstAvailableTool(names, "terminal", "bash", "shell"); name != "" {
-		examples = append(examples, "- Run a command: ```json action\n{\"tool\":\""+name+"\",\"parameters\":{\"command\":\"top -l 1 | head -n 20\"}}\n```")
+	if tool, ok := firstAvailableToolDef(tools, "terminal", "bash", "shell", "exec_command"); ok {
+		examples = append(examples, "- Run a command: "+buildToolExample(tool))
 	}
 	if name := firstAvailableTool(names, "web_search", "search"); name != "" {
 		examples = append(examples, "- Search current web data: ```json action\n{\"tool\":\""+name+"\",\"parameters\":{\"query\":\"上海今天的天气\"}}\n```")
+	}
+	if tool, ok := firstAvailableToolDef(tools, "patch", "write_file", "apply_patch"); ok {
+		examples = append(examples, "- Edit a file: "+buildToolExample(tool))
 	}
 	if len(examples) == 0 {
 		return ""
@@ -345,7 +367,7 @@ func coreToolExamples(tools []ToolDef) string {
 }
 
 func codingDisciplineHints(tools []ToolDef) string {
-	if !hasAnyTool(tools, "read_file", "search_files", "patch", "write_file", "terminal", "bash", "shell") {
+	if !hasAnyTool(tools, "read_file", "search_files", "patch", "write_file", "apply_patch", "terminal", "bash", "shell", "exec_command") {
 		return ""
 	}
 	hints := []string{
@@ -391,6 +413,30 @@ func firstAvailableTool(names map[string]string, candidates ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstAvailableToolDef(tools []ToolDef, candidates ...string) (ToolDef, bool) {
+	for _, candidate := range candidates {
+		want := strings.ToLower(strings.TrimSpace(candidate))
+		for _, tool := range tools {
+			if strings.ToLower(strings.TrimSpace(tool.Name)) == want {
+				return tool, true
+			}
+		}
+	}
+	return ToolDef{}, false
+}
+
+func buildToolExample(tool ToolDef) string {
+	block := map[string]any{
+		"tool":       tool.Name,
+		"parameters": exampleParameters(tool.Name, tool.InputSchema),
+	}
+	b, err := json.Marshal(block)
+	if err != nil {
+		return ""
+	}
+	return "```json action\n" + string(b) + "\n```"
 }
 
 func ForceToolingPrompt(choice ToolChoice) string {
@@ -458,6 +504,9 @@ func LooksLikeMissedToolUse(text string) bool {
 		"i need to use",
 		"i will use",
 		"i'll use",
+		"i will edit",
+		"i'll edit",
+		"i am going to edit",
 		"i need to run",
 		"i will run",
 		"i need to read",
@@ -486,8 +535,15 @@ func LooksLikeMissedToolUse(text string) bool {
 		"让我使用",
 		"让我尝试",
 		"执行命令",
+		"编辑文件",
+		"我将编辑",
+		"现在我将编辑",
 		"读取文件",
 		"查看文件",
+		"追加一行",
+		"在末尾追加",
+		"生成unified diff",
+		"生成 unified diff",
 		"查询天气",
 		"手动运行",
 		"你可以在终端中运行",
@@ -971,7 +1027,7 @@ func exampleValueForKey(toolName string, key string, prop map[string]any) any {
 	switch {
 	case strings.Contains(lowerKey, "path") || strings.Contains(lowerKey, "file"):
 		return "README.md"
-	case strings.Contains(lowerKey, "command") || strings.Contains(lowerTool, "bash") || strings.Contains(lowerTool, "shell"):
+	case strings.Contains(lowerKey, "command") || lowerKey == "cmd" || strings.Contains(lowerTool, "bash") || strings.Contains(lowerTool, "shell") || strings.Contains(lowerTool, "exec_command"):
 		return "pwd"
 	case strings.Contains(lowerKey, "url"):
 		return "https://example.com"

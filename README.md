@@ -4,7 +4,7 @@
 
 Lingma Proxy exposes Tongyi Lingma as standard **OpenAI-compatible** and **Anthropic-compatible** HTTP APIs. It can use either the recommended Remote API backend or the local IDE plugin IPC channel, and ships as both a CLI proxy service and a cross-platform desktop app for macOS and Windows.
 
-The project is designed for tools such as Claude Code, Cline, Continue, OpenCode, custom agents, and any client that can talk to OpenAI or Anthropic style APIs.
+The project is designed for tools such as Claude Code, Hermes, CodeBuddy, Codex CLI, OpenCode, custom agents, and any client that can talk to OpenAI or Anthropic style APIs.
 
 ## Model Availability Disclaimer
 
@@ -15,18 +15,6 @@ Model availability is not the same for every Lingma user.
 - Actual model availability depends on the Lingma account type, enterprise tenant, remote API domain, region, product plan, and server-side entitlements.
 - Lingma Proxy does not normally invent these models and does not silently remove them from `/v1/models`; the list primarily reflects what the active Lingma backend actually returns.
 
-## License
-
-This repository now includes a `LICENSE` file for the original contributions made in this repo.
-
-Important boundary:
-
-- The MIT grant applies to original contributions in this repository by Tiancheng Lu and contributors.
-- The IPC-plugin-mode design was inspired by `coolxll/lingma-ipc-proxy`.
-- Because the upstream repository did not publish a clear root open-source license when this file was added, this repository does not claim to relicense third-party material on behalf of the upstream author.
-
-If the upstream project later publishes an explicit license, this repository can be simplified and aligned accordingly.
-
 The proxy now supports two backend modes:
 
 - **Remote API mode (default, recommended)**: imports the local Lingma login cache or an explicit credential file and calls Lingma remote APIs directly. This behaves closest to a normal hosted API, avoids IDE/plugin session and environment limits, and is currently the best mode for Claude Code / Hermes style agents.
@@ -34,7 +22,7 @@ The proxy now supports two backend modes:
 
 ## Current Version
 
-The current desktop line is `v1.4.15`.
+The current desktop line is `v1.5.0`.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release history.
 
@@ -101,6 +89,7 @@ Narrow window layout:
 | LM Studio / Ollama Discovery | `GET /api/v1/models`, `GET /api/tags`, `GET /props` | supported |
 | OpenAI Chat Completions | `POST /v1/chat/completions` | streaming and non-streaming |
 | OpenAI Chat Alias | `POST /api/v1/chat/completions` | supported |
+| OpenAI Responses | `POST /v1/responses`, `POST /api/v1/responses` | streaming and non-streaming; required for Codex CLI |
 | Anthropic Messages | `POST /v1/messages` | streaming and non-streaming |
 
 ## What This Fork Adds
@@ -321,6 +310,15 @@ These examples are based on clients we have actually validated against Lingma Pr
 - Personal, commercial, campus, or different enterprise tenants may expose a different set of models, aliases, quotas, and remote domains.
 - Always trust your own `/v1/models` response over screenshots or README examples from this repository.
 
+### Verified Client Compatibility
+
+| Client | Status | Verified Features | Notes |
+| --- | --- | --- | --- |
+| **Claude Code** | ✅ Fully Tested | Text chat, tool use, image input, image + tools | Anthropic API compatible |
+| **Hermes Agent** | ✅ Fully Tested | Text chat, tool-enabled coding, `--image` flag | OpenAI API compatible |
+| **CodeBuddy** | ✅ Fully Tested | Standard chat, token usage accounting | OpenAI-compatible custom model |
+| **Codex CLI** | ✅ Fully Tested | Plain text execution, multi-step tool use, file edits + diff, image input, image + tool follow-up | Requires `/v1/responses` endpoint, `wire_api = "responses"`, validated against desktop app `v1.5.0`, retry recovery also verified |
+
 ### Claude Code
 
 Reference: Anthropic Claude Code overview and setup docs: [code.claude.com/docs/en/overview](https://code.claude.com/docs/en/overview)
@@ -408,29 +406,22 @@ export OPENAI_API_KEY="any"
 codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json '只回复 OK'
 ```
 
-Verified locally after adding `/v1/responses` compatibility. Both plain text execution and a tool-calling task (`运行 pwd 并只输出命令结果`) succeeded against the proxy.
+Verified locally after adding `/v1/responses` compatibility. The following flows all passed against the proxy:
 
-### Cline
+- plain text execution (`只回复 OK`)
+- multi-step tool use (`查看一下当前项目结构...`)
+- file edit + unified diff (`编辑 /tmp/... 并只返回 unified diff`)
+- image input (`codex exec --image /absolute/path.jpg -- '这张图片里是什么？'`)
+- image + tool follow-up in the same turn (describe the image, then edit a local file and return diff)
+- desktop-app recovery after retry (stop the desktop app, let Codex enter retry, reopen the desktop app on `8095`, then continue successfully)
 
-- Provider: `OpenAI Compatible`
-- Base URL: `http://127.0.0.1:8095/v1`
-- API Key: `any`
-- Model ID: `kmodel`
+Example image command:
 
-### Continue
-
-```json
-{
-  "models": [
-    {
-      "title": "Lingma Proxy",
-      "provider": "openai",
-      "model": "kmodel",
-      "apiKey": "any",
-      "apiBase": "http://127.0.0.1:8095/v1"
-    }
-  ]
-}
+```bash
+export OPENAI_API_KEY="any"
+codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json \
+  --image /Users/tiancheng/Pictures/ik2.jpg \
+  -- '先用一句话描述这张图片的氛围，再运行 pwd，并只返回命令结果。'
 ```
 
 ## Models
@@ -602,20 +593,73 @@ The desktop bundle name is always `Lingma Proxy`.
 
 ## Release Plan
 
-The release workflow is triggered by:
+### Local release-candidate flow
 
-- pushing a tag such as `v1.4.0`
+For local verification builds on macOS, always use the standard script instead of manually quitting/replacing the app:
+
+```bash
+./scripts/rebuild-local-app.sh
+```
+
+That script performs the required sequence:
+
+1. build the desktop app
+2. issue the macOS double-quit sequence for the installed app
+3. replace `/Applications/Lingma Proxy.app`
+4. reopen the installed app
+
+Recommended local release-candidate checklist:
+
+1. `go test ./...`
+2. `npm run build --prefix desktop/frontend`
+3. `./scripts/rebuild-local-app.sh`
+4. verify `/Applications/Lingma Proxy.app` shows the expected version
+5. run the key desktop workflows (Dashboard, Requests, Models, Settings, Logs, feedback export)
+6. run the validated Codex CLI smoke suite against `http://127.0.0.1:8095/v1`
+
+### GitHub release flow
+
+The GitHub release workflow is triggered by:
+
+- pushing a tag such as `v1.5.0`
 - manually running the `Release` workflow with a tag input
 
-Planned improvements:
+Recommended remote release checklist:
 
-- macOS signing and notarization
-- Windows installer packaging
-- configurable log retention
-- request export/import
-- richer model metadata display
-- optional Linux desktop packaging after the Lingma transport story is stable
+1. make sure `README.md`, `README.zh-CN.md`, and `CHANGELOG.md` are up to date
+2. confirm the local desktop verification build has passed
+3. create and push the release tag
+4. wait for GitHub Actions to build CLI + desktop assets
+5. verify the DMG / ZIP / Windows packages and SHA256 file in the Release page
+
+If you need a temporary packaging tag without changing the app's internal version line, use a suffix tag such as `v1.4.15-fix1`. The GitHub workflow will still package the latest code because the workflow matches `v*`.
+
+### Suggested release summary for v1.5.0
+
+Use the following as the GitHub Release body draft:
+
+- Added stable OpenAI Responses API compatibility for Codex CLI (`/v1/responses`, `/api/v1/responses`).
+- Fixed Codex multi-step tool workflows so project-structure reading, command execution, file edits, and unified diff output complete through Lingma Proxy instead of failing with repeated `502` retries.
+- Fixed Remote API image-context fallback so image-bearing requests can continue into tool-enabled turns after IPC image extraction.
+- Verified the desktop app `v1.5.0` against Brew-installed `codex-cli 0.130.0`, including plain text, multi-step tools, file edit + diff, image input, image + tool follow-up, and retry recovery after desktop app restart.
+- Kept Remote API as the default recommended backend while retaining IPC plugin mode as a compatibility fallback.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=lutc5/lingma-ipc-proxy&type=Date)](https://star-history.com/#lutc5/lingma-ipc-proxy&Date)
 
 ## Acknowledgements
 
 The **IPC plugin mode** is based on the protocol insight and initial discovery work from [coolxll/lingma-ipc-proxy](https://github.com/coolxll/lingma-ipc-proxy). That project first demonstrated that Lingma's private local IPC protocol can be bridged to standard HTTP API endpoints. Lingma Proxy keeps that IPC path as a compatibility backend and extends it with broader OpenAI/Anthropic compatibility, tool emulation, image handling, desktop app support, request/log inspection, cross-platform packaging, and release automation. The default **Remote API mode** is a separate backend that calls Lingma remote APIs directly and is documented independently above.
+
+## License
+
+This repository now includes a `LICENSE` file for the original contributions made in this repo.
+
+Important boundary:
+
+- The MIT grant applies to original contributions in this repository by Tiancheng Lu and contributors.
+- The IPC-plugin-mode design was inspired by `coolxll/lingma-ipc-proxy`.
+- Because the upstream repository did not publish a clear root open-source license when this file was added, this repository does not claim to relicense third-party material on behalf of the upstream author.
+
+If the upstream project later publishes an explicit license, this repository can be simplified and aligned accordingly.

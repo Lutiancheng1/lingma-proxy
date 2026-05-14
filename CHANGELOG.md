@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## v1.5.0 - 2026-05-14
+
+- Added stable OpenAI Responses API compatibility for Codex CLI, including `/v1/responses` and `/api/v1/responses` streaming/non-streaming support.
+- Fixed Codex CLI multi-step tool workflows so project-structure inspection, command execution, file edits, and unified diff responses now complete through the proxy instead of retrying with 502 errors.
+- Fixed the Remote API image-context branch so image-bearing Codex requests no longer lose tool emulation after IPC image extraction.
+- Verified Codex CLI image input, image + tool follow-up, multi-step tool use, and file-edit + diff flows against Brew-installed `codex-cli 0.130.0`.
+- Verified the installed desktop app line `v1.5.0` on `http://127.0.0.1:8095/v1`, including retry recovery after stopping and reopening the desktop app during Codex CLI retries.
+- Bumped the desktop app line to `1.5.0` for the next packaged local verification build.
+- 增加 OpenAI Responses API 兼容层，补齐 `/v1/responses` 和 `/api/v1/responses` 的流式 / 非流式支持，满足 Codex CLI 接入要求。
+- 修复 Codex CLI 多步工具工作流：项目结构读取、命令执行、文件修改和 unified diff 返回现在都能通过代理稳定完成，不再因为事件序列不完整而反复重试 502。
+- 修复 Remote API 图片上下文分叉在 IPC 提取图片后丢失 tool-emulation 的问题，带图请求可以继续走后续工具调用。
+- 完整验证 Brew 安装版 `codex-cli 0.130.0`：纯文本、图片输入、图片 + 工具后续调用、多步工具调用、文件修改 + diff 全部通过。
+- 进一步基于已安装桌面端 `v1.5.0` 和 `http://127.0.0.1:8095/v1` 做回归，验证桌面端重启期间 Codex CLI 的重试恢复链路也可用。
+- 桌面端版本线提升到 `1.5.0`，作为下一轮本地打包验证基线。
+
 ## v1.4.15-fix1 - 2026-05-13
 
 - Added a dedicated desktop warmup-timeout setting for startup/model-detection flows. The default is now 30 seconds, independent from the main per-request timeout.
