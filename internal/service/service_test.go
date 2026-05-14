@@ -95,6 +95,30 @@ func TestBuildLingmaPromptOnlyInjectsToolingWhenEmulationEnabled(t *testing.T) {
 	}
 }
 
+func TestBuildLingmaPromptIncludesReasoningHintOnlyWhenRequested(t *testing.T) {
+	req := ChatRequest{
+		Messages:        []ChatMessage{{Role: "user", Text: "解释这个函数"}},
+		ReasoningEffort: "high",
+	}
+	prompt, err := buildLingmaPrompt(req, SessionModeFresh, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "Reasoning mode is enabled") {
+		t.Fatalf("prompt should include reasoning hint:\n%s", prompt)
+	}
+
+	plainPrompt, err := buildLingmaPrompt(ChatRequest{
+		Messages: []ChatMessage{{Role: "user", Text: "解释这个函数"}},
+	}, SessionModeFresh, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plainPrompt, "Reasoning mode is enabled") {
+		t.Fatalf("plain prompt should not include reasoning hint:\n%s", plainPrompt)
+	}
+}
+
 func TestShouldRetryRemoteNativeToolForContinuationText(t *testing.T) {
 	req := ChatRequest{
 		Tools: []toolemulation.ToolDef{{Name: "Bash"}},

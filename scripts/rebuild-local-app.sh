@@ -29,6 +29,13 @@ kill_processes() {
   pkill -x "$APP_BUNDLE_NAME" >/dev/null 2>&1 || true
 }
 
+kill_processes_hard() {
+  log "Escalating to SIGKILL for remaining Lingma Proxy processes"
+  pkill -9 -f "$INSTALL_APP_PATH/Contents/MacOS/$APP_BUNDLE_NAME" >/dev/null 2>&1 || true
+  pkill -9 -f "$BUILD_APP_PATH/Contents/MacOS/$APP_BUNDLE_NAME" >/dev/null 2>&1 || true
+  pkill -9 -x "$APP_BUNDLE_NAME" >/dev/null 2>&1 || true
+}
+
 wait_for_exit() {
   local retries=20
   while [ "$retries" -gt 0 ]; do
@@ -45,7 +52,10 @@ stop_existing_app() {
   quit_gui_app
   if ! wait_for_exit; then
     kill_processes
-    sleep 1
+    if ! wait_for_exit; then
+      kill_processes_hard
+      sleep 1
+    fi
   fi
   if pgrep -f "$APP_BUNDLE_NAME" >/dev/null 2>&1; then
     log "ERROR: Lingma Proxy process is still running after force stop"

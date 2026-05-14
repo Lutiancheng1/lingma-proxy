@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v1.5.1 - 2026-05-15
+
+- Clarified the Remote API reasoning boundary: the proxy forwards `thinking` / `reasoning` intent, but the current upstream remote SSE does not expose a separate structured reasoning block. This should not be interpreted as “the model did not reason internally”.
+- Added a unified IPC reasoning compatibility matrix for Claude Code, Hermes CLI, and Codex CLI, using the same fixed complex probe and explicitly separating protocol-layer capability from client-side rendering.
+- Documented per-model IPC reasoning behavior across `Auto`, `Kimi-K2.6`, `MiniMax-M2.7`, `Qwen3-Coder`, `Qwen3-Max`, `Qwen3-Thinking`, and `Qwen3.6-Plus`.
+- Confirmed the current safest cross-client IPC recommendation for visible reasoning panels is `Qwen3-Thinking`.
+- Rebuilt the desktop app line to `1.5.1` for the next packaged release.
+- 收紧 Remote API 模式的 reasoning 文案边界：代理会透传 `thinking` / `reasoning` 请求意图，但当前上游远端 SSE 不会返回独立的结构化 reasoning block；这不应被误解成“模型没有进行内部推理”。
+- 增加 Claude Code、Hermes CLI、Codex CLI 三客户端统一的 IPC 思考兼容矩阵，统一使用同一条复杂固定探针，并明确区分“协议层能力”和“客户端展示层行为”。
+- 文档化 `Auto`、`Kimi-K2.6`、`MiniMax-M2.7`、`Qwen3-Coder`、`Qwen3-Max`、`Qwen3-Thinking`、`Qwen3.6-Plus` 的逐模型 IPC 思考表现。
+- 当前最稳的三客户端统一 IPC 思考推荐模型明确为 `Qwen3-Thinking`。
+- 桌面端版本线提升到 `1.5.1`，用于本轮正式打包发布。
+
 ## v1.5.0 - 2026-05-14
 
 - Added stable OpenAI Responses API compatibility for Codex CLI, including `/v1/responses` and `/api/v1/responses` streaming/non-streaming support.

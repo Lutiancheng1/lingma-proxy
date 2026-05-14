@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	desktopAppVersion          = "1.5.0"
+	desktopAppVersion          = "1.5.1"
 	feedbackPayloadCharLimit   = 16000
 	feedbackStringFieldLimit   = 4096
 	feedbackDefaultRangePreset = "30m"
@@ -475,17 +475,6 @@ func (a *App) StartProxy() error {
 	a.mu.Unlock()
 
 	svc := service.New(cfg)
-
-	warmupCtx, cancel := context.WithTimeout(context.Background(), effectiveWarmupTimeout(cfg))
-	if err := svc.Warmup(warmupCtx); err != nil {
-		runtime.LogWarningf(a.ctx, "warmup failed: %v", err)
-		a.emitLog("warn", fmt.Sprintf("%s warmup failed: %v. %s", backendLabel(cfg.Backend), err, warmupFallbackHint(cfg.Backend)))
-	} else {
-		runtime.LogInfof(a.ctx, "%s warmup completed", backendLabel(cfg.Backend))
-		a.emitLog("info", fmt.Sprintf("%s warmup completed", backendLabel(cfg.Backend)))
-	}
-	cancel()
-
 	server := httpapi.NewServer(addr, svc)
 	server.OnRequest = func(method, path string, statusCode int, duration time.Duration, reqBody, respBody string) {
 		inputTokens, outputTokens := extractTokenUsage(respBody)
@@ -551,8 +540,20 @@ func (a *App) StartProxy() error {
 	runtime.LogInfof(a.ctx, msg)
 	a.emitLog("info", msg)
 
-	// Fetch models in background
+	// Warm up backend and fetch models in background so the HTTP endpoint
+	// becomes available immediately after the desktop app launches/restarts.
 	go a.fetchModels(addr)
+	go func() {
+		warmupCtx, cancel := context.WithTimeout(context.Background(), effectiveWarmupTimeout(cfg))
+		defer cancel()
+		if err := svc.Warmup(warmupCtx); err != nil {
+			runtime.LogWarningf(a.ctx, "warmup failed: %v", err)
+			a.emitLog("warn", fmt.Sprintf("%s warmup failed: %v. %s", backendLabel(cfg.Backend), err, warmupFallbackHint(cfg.Backend)))
+			return
+		}
+		runtime.LogInfof(a.ctx, "%s warmup completed", backendLabel(cfg.Backend))
+		a.emitLog("info", fmt.Sprintf("%s warmup completed", backendLabel(cfg.Backend)))
+	}()
 
 	return nil
 }

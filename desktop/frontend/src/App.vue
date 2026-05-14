@@ -6,11 +6,12 @@ import Models from './views/Models.vue'
 import Requests from './views/Requests.vue'
 import Settings from './views/Settings.vue'
 import { ClipboardSetText, EventsOff, EventsOn } from '../wailsjs/runtime'
-import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetLogs, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager } from '../wailsjs/go/main/App.js'
+import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetLogs, GetRequests, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager } from '../wailsjs/go/main/App.js'
 import lingmaIcon from './assets/images/lingma-icon.png'
 
 const currentTab = ref('dashboard')
 const selectedRequestId = ref(null)
+const requestSnapshot = ref([])
 const logs = ref([])
 const status = ref({ running: false, addr: '', models: 0 })
 const toast = ref('')
@@ -130,6 +131,15 @@ async function refreshStatus() {
     status.value = await GetStatus()
   } catch (e) {
     addLog('error', '状态刷新失败：' + (e.message || String(e)))
+  }
+}
+
+async function primeRequests() {
+  try {
+    const items = await GetRequests()
+    requestSnapshot.value = Array.isArray(items) ? items : []
+  } catch (e) {
+    console.debug('Wails GetRequests unavailable in app shell')
   }
 }
 
@@ -275,6 +285,7 @@ onMounted(() => {
   systemThemeQuery?.addEventListener?.('change', applyTheme)
   applyTheme()
   refreshStatus()
+  primeRequests()
   GetLogs().then((items) => {
     logs.value = Array.isArray(items) ? items : []
   }).catch(() => {})
@@ -300,7 +311,12 @@ onMounted(() => {
   safeEventsOn('status:updated', (nextStatus) => {
     status.value = nextStatus
   })
-  safeEventsOn('requests:updated', () => {
+  safeEventsOn('requests:updated', async (data) => {
+    if (Array.isArray(data)) {
+      requestSnapshot.value = data
+    } else {
+      await primeRequests()
+    }
     refreshStatus()
   })
 })
@@ -351,7 +367,7 @@ onUnmounted(() => {
         <span class="status-dot" :class="{ running: status.running }"></span>
         <div>
           <strong>{{ status.running ? 'Proxy Running' : 'Proxy Stopped' }}</strong>
-          <small>v1.5.0</small>
+          <small>v1.5.1</small>
         </div>
       </div>
     </aside>
@@ -394,7 +410,12 @@ onUnmounted(() => {
             @open-models="currentTab = 'models'"
             @open-request-detail="handleOpenRequestDetail"
           />
-          <Requests v-else-if="currentTab === 'requests'" :selected-request-id="selectedRequestId" @notice="handleNotice" />
+          <Requests
+            v-else-if="currentTab === 'requests'"
+            :selected-request-id="selectedRequestId"
+            :initial-requests="requestSnapshot"
+            @notice="handleNotice"
+          />
         </KeepAlive>
         <Models v-if="currentTab === 'models'" @log="addLog" @status="setStatus" @notice="handleNotice" />
         <Settings v-else-if="currentTab === 'settings'" @log="addLog" @status-refresh="refreshStatus" />

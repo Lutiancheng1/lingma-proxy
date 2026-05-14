@@ -55,14 +55,15 @@ type Model struct {
 }
 
 type ChatRequest struct {
-	Model       string
-	Prompt      string
-	Messages    []Message
-	Images      []Image
-	Stream      bool
-	Temperature *float64
-	Tools       []toolemulation.ToolDef
-	ToolChoice  toolemulation.ToolChoice
+	Model           string
+	Prompt          string
+	Messages        []Message
+	Images          []Image
+	Stream          bool
+	Temperature     *float64
+	ReasoningEffort string
+	Tools           []toolemulation.ToolDef
+	ToolChoice      toolemulation.ToolChoice
 }
 
 type Image struct {
@@ -271,7 +272,7 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 			"model":        model,
 			"format":       "",
 			"is_vl":        len(imageURLs) > 0,
-			"is_reasoning": false,
+			"is_reasoning": remoteReasoningEnabled(request),
 			"api_key":      "",
 			"url":          "",
 			"source":       "",
@@ -296,6 +297,14 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 	}
 	body, err := json.Marshal(payload)
 	return string(body), err
+}
+
+func remoteReasoningEnabled(request ChatRequest) bool {
+	if strings.TrimSpace(request.ReasoningEffort) != "" {
+		return true
+	}
+	model := strings.ToLower(strings.TrimSpace(request.Model))
+	return strings.Contains(model, "thinking")
 }
 
 func nullableSlice[T any](items []T) any {

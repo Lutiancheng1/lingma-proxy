@@ -1337,6 +1337,14 @@ button {
   line-height: 1.12;
 }
 
+.data-table .col-time {
+  min-width: 104px;
+  width: 104px;
+  padding-left: 10px;
+  padding-right: 10px;
+  white-space: nowrap;
+}
+
 .data-table th {
   position: sticky;
   top: 0;

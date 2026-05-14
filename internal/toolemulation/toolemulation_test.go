@@ -134,6 +134,28 @@ func TestCoreToolExamplesSupportsCodexStyleToolNames(t *testing.T) {
 	}
 }
 
+func TestInjectToolingEditRuleFallsBackToExecCommandWhenNoPatchToolExists(t *testing.T) {
+	prompt := InjectTooling("", []ToolDef{
+		{
+			Name:        "exec_command",
+			Description: "Run a shell command",
+			InputSchema: map[string]any{
+				"properties": map[string]any{
+					"cmd": map[string]any{"type": "string"},
+				},
+				"required": []any{"cmd"},
+			},
+		},
+	}, ToolChoice{Mode: "auto"}, nil)
+
+	if !strings.Contains(prompt, "use exec_command with targeted shell commands to modify the file") {
+		t.Fatalf("prompt missing exec_command edit rule:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "call patch or write_file") {
+		t.Fatalf("prompt should not mention unavailable patch/write_file tools:\n%s", prompt)
+	}
+}
+
 func TestExtractToolsSupportsResponsesFunctionShape(t *testing.T) {
 	tools := ExtractTools([]any{
 		map[string]any{
@@ -242,6 +264,27 @@ func TestParseActionBlocksDropsCallsMissingRequiredArgs(t *testing.T) {
 	}
 	if !strings.Contains(clean, "\"path\"") {
 		t.Fatalf("clean should preserve unparseable action block, got %q", clean)
+	}
+}
+
+func TestParseActionBlocksDropsUnknownToolNames(t *testing.T) {
+	text := "```json action\n{\"tool\":\"apply_patch\",\"parameters\":{\"patch\":\"*** Begin Patch\"}}\n```"
+	calls, clean, err := ParseActionBlocks(text, []ToolDef{{
+		Name: "exec_command",
+		InputSchema: map[string]any{
+			"properties": map[string]any{
+				"cmd": map[string]any{"type": "string"},
+			},
+		},
+	}}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("expected no calls, got %+v", calls)
+	}
+	if !strings.Contains(clean, "\"apply_patch\"") {
+		t.Fatalf("clean should preserve unknown tool action block, got %q", clean)
 	}
 }
 

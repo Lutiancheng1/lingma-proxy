@@ -542,7 +542,11 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	content := []map[string]any{{"type": "text", "text": result.Text}}
+	content := make([]map[string]any, 0, 2+len(result.ToolCalls))
+	if shouldEmitAnthropicThinking(normalized, result) {
+		content = append(content, map[string]any{"type": "thinking", "thinking": result.ThoughtText})
+	}
+	content = append(content, map[string]any{"type": "text", "text": result.Text})
 	stopReason := "end_turn"
 	if len(result.ToolCalls) > 0 {
 		for _, tc := range result.ToolCalls {
@@ -699,6 +703,29 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 		}
 
 		index := 0
+		if shouldEmitAnthropicThinking(req, result) {
+			if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+				"type":          "content_block_start",
+				"index":         index,
+				"content_block": map[string]any{"type": "thinking", "thinking": ""},
+			}); err != nil {
+				return
+			}
+			if err := writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": index,
+				"delta": map[string]any{"type": "thinking_delta", "thinking": result.ThoughtText},
+			}); err != nil {
+				return
+			}
+			if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": index,
+			}); err != nil {
+				return
+			}
+			index++
+		}
 		if strings.TrimSpace(result.Text) != "" {
 			if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
 				"type":          "content_block_start",
@@ -791,22 +818,19 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 	}); err != nil {
 		return
 	}
-	if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
-		"type":  "content_block_start",
-		"index": 0,
-		"content_block": map[string]any{
-			"type": "text",
-			"text": "",
-		},
-	}); err != nil {
-		return
-	}
 
 	filter := newToolStreamFilter(len(req.Tools) > 0)
 	eventsCh := events
 	doneCh := done
 	var final *service.ChatResult
 	var finalErr error
+	thinkingEnabled := strings.TrimSpace(req.ReasoningEffort) != ""
+	thinkingOpen := false
+	textOpen := false
+	textIndex := 0
+	if thinkingEnabled {
+		textIndex = 1
+	}
 
 	for eventsCh != nil || doneCh != nil {
 		select {
@@ -817,19 +841,65 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 				eventsCh = nil
 				continue
 			}
-			for _, delta := range filter.Push(event.Delta) {
-				if delta == "" {
+			switch event.Type {
+			case service.StreamEventThinking:
+				if !thinkingEnabled || strings.TrimSpace(event.Delta) == "" {
 					continue
+				}
+				if !thinkingOpen {
+					if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+						"type":          "content_block_start",
+						"index":         0,
+						"content_block": map[string]any{"type": "thinking", "thinking": ""},
+					}); err != nil {
+						return
+					}
+					thinkingOpen = true
 				}
 				if err := writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
 					"type":  "content_block_delta",
 					"index": 0,
 					"delta": map[string]any{
-						"type": "text_delta",
-						"text": delta,
+						"type":     "thinking_delta",
+						"thinking": event.Delta,
 					},
 				}); err != nil {
 					return
+				}
+			default:
+				for _, delta := range filter.Push(event.Delta) {
+					if delta == "" {
+						continue
+					}
+					if thinkingOpen {
+						if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+							"type":  "content_block_stop",
+							"index": 0,
+						}); err != nil {
+							return
+						}
+						thinkingOpen = false
+					}
+					if !textOpen {
+						if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+							"type":          "content_block_start",
+							"index":         textIndex,
+							"content_block": map[string]any{"type": "text", "text": ""},
+						}); err != nil {
+							return
+						}
+						textOpen = true
+					}
+					if err := writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": textIndex,
+						"delta": map[string]any{
+							"type": "text_delta",
+							"text": delta,
+						},
+					}); err != nil {
+						return
+					}
 				}
 			}
 		case result, ok := <-doneCh:
@@ -868,9 +938,28 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 			if delta == "" {
 				continue
 			}
+			if thinkingOpen {
+				if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+					"type":  "content_block_stop",
+					"index": 0,
+				}); err != nil {
+					return
+				}
+				thinkingOpen = false
+			}
+			if !textOpen {
+				if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+					"type":          "content_block_start",
+					"index":         textIndex,
+					"content_block": map[string]any{"type": "text", "text": ""},
+				}); err != nil {
+					return
+				}
+				textOpen = true
+			}
 			if err := writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
 				"type":  "content_block_delta",
-				"index": 0,
+				"index": textIndex,
 				"delta": map[string]any{
 					"type": "text_delta",
 					"text": delta,
@@ -880,27 +969,44 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 			}
 		}
 	}
-	if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
-		"type":  "content_block_stop",
-		"index": 0,
-	}); err != nil {
-		return
+	if thinkingOpen {
+		if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": 0,
+		}); err != nil {
+			return
+		}
+		thinkingOpen = false
+	}
+	if textOpen {
+		if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": textIndex,
+		}); err != nil {
+			return
+		}
 	}
 	for i, tc := range final.ToolCalls {
+		blockIndex := i + 1
+		if textOpen {
+			blockIndex = textIndex + 1 + i
+		} else if thinkingEnabled {
+			blockIndex = 1 + i
+		}
 		_ = writeSSEEvent(w, flusher, "content_block_start", map[string]any{
 			"type":          "content_block_start",
-			"index":         i + 1,
+			"index":         blockIndex,
 			"content_block": map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": map[string]any{}},
 		})
 		argsJSON, _ := json.Marshal(tc.Arguments)
 		_ = writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
 			"type":  "content_block_delta",
-			"index": i + 1,
+			"index": blockIndex,
 			"delta": map[string]any{"type": "input_json_delta", "partial_json": string(argsJSON)},
 		})
 		_ = writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
 			"type":  "content_block_stop",
-			"index": i + 1,
+			"index": blockIndex,
 		})
 	}
 	stopReason := "end_turn"
@@ -1274,7 +1380,7 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 			flusher.Flush()
 			return
 		}
-		writeOpenAIResponseStreamCompleted(emitter, responseID, created, model, result, messageID, false)
+		writeOpenAIResponseStreamCompleted(emitter, responseID, created, model, result, messageID, false, shouldEmitResponsesReasoning(req, result))
 		return
 	}
 
@@ -1290,6 +1396,9 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 	var final *service.ChatResult
 	var finalErr error
 	pendingText := make([]string, 0, 16)
+	pendingThought := make([]string, 0, 16)
+	reasoningEnabled := strings.TrimSpace(req.ReasoningEffort) != ""
+	reasoningEmitted := false
 
 	for eventsCh != nil || doneCh != nil {
 		select {
@@ -1300,11 +1409,18 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 				eventsCh = nil
 				continue
 			}
-			for _, delta := range filter.Push(event.Delta) {
-				if delta == "" {
-					continue
+			switch event.Type {
+			case service.StreamEventThinking:
+				if reasoningEnabled && strings.TrimSpace(event.Delta) != "" {
+					pendingThought = append(pendingThought, event.Delta)
 				}
-				pendingText = append(pendingText, delta)
+			default:
+				for _, delta := range filter.Push(event.Delta) {
+					if delta == "" {
+						continue
+					}
+					pendingText = append(pendingText, delta)
+				}
 			}
 		case result, ok := <-doneCh:
 			if !ok {
@@ -1329,14 +1445,26 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 		flusher.Flush()
 		return
 	}
+	reasoningEnabled = shouldEmitResponsesReasoning(req, final)
+	if reasoningEnabled && len(pendingThought) > 0 {
+		reasoningText := strings.Join(pendingThought, "")
+		if err := writeOpenAIResponseReasoning(emitter, "rs_"+responseID, 0, reasoningText); err != nil {
+			return
+		}
+		reasoningEmitted = true
+	}
 	if len(final.ToolCalls) == 0 {
 		pendingText = append(pendingText, filter.Flush()...)
 		for _, delta := range pendingText {
 			if delta == "" {
 				continue
 			}
+			outputIndex := 0
+			if reasoningEmitted {
+				outputIndex = 1
+			}
 			if !messageStarted {
-				if err := writeOpenAIResponseMessageStarted(emitter, messageID, 0); err != nil {
+				if err := writeOpenAIResponseMessageStarted(emitter, messageID, outputIndex); err != nil {
 					return
 				}
 				messageStarted = true
@@ -1344,7 +1472,7 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 			if err := emitter.Event("response.output_text.delta", map[string]any{
 				"type":          "response.output_text.delta",
 				"item_id":       messageID,
-				"output_index":  0,
+				"output_index":  outputIndex,
 				"content_index": 0,
 				"delta":         delta,
 			}); err != nil {
@@ -1352,7 +1480,7 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 			}
 		}
 	}
-	writeOpenAIResponseStreamCompleted(emitter, responseID, created, model, final, messageID, messageStarted)
+	writeOpenAIResponseStreamCompleted(emitter, responseID, created, model, final, messageID, messageStarted, reasoningEmitted)
 }
 
 func shouldAggregateToolStream(req service.ChatRequest) bool {
@@ -1623,16 +1751,17 @@ func normalizeAnthropicRequest(req anthropicRequest) (service.ChatRequest, error
 	}
 
 	return service.ChatRequest{
-		Model:       strings.TrimSpace(req.Model),
-		System:      strings.TrimSpace(extractText(req.System)),
-		Messages:    messages,
-		Tools:       toolemulation.ExtractAnthropicTools(req.Tools),
-		ToolChoice:  toolChoice,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		TopK:        req.TopK,
-		Stop:        req.StopSequences,
-		MaxTokens:   req.MaxTokens,
+		Model:           strings.TrimSpace(req.Model),
+		System:          strings.TrimSpace(extractText(req.System)),
+		Messages:        messages,
+		Tools:           toolemulation.ExtractAnthropicTools(req.Tools),
+		ToolChoice:      toolChoice,
+		Temperature:     req.Temperature,
+		TopP:            req.TopP,
+		TopK:            req.TopK,
+		Stop:            req.StopSequences,
+		MaxTokens:       req.MaxTokens,
+		ReasoningEffort: extractAnthropicReasoningEffort(req.Thinking),
 	}, nil
 }
 
@@ -1911,6 +2040,55 @@ func extractReasoningEffort(reasoning any) string {
 	return stringFromAny(m["effort"])
 }
 
+func extractAnthropicReasoningEffort(thinking any) string {
+	m, ok := thinking.(map[string]any)
+	if !ok || len(m) == 0 {
+		return ""
+	}
+	if effort := strings.TrimSpace(stringFromAny(m["effort"])); effort != "" {
+		return effort
+	}
+	mode := strings.ToLower(strings.TrimSpace(stringFromAny(m["type"])))
+	switch mode {
+	case "", "enabled", "adaptive":
+		// treat adaptive as an enabled reasoning request with default effort
+	default:
+		return ""
+	}
+	budget := parseReasoningBudget(m["budget_tokens"])
+	switch {
+	case budget >= 4096:
+		return "high"
+	case budget > 0 && budget < 1024:
+		return "low"
+	default:
+		return "medium"
+	}
+}
+
+func parseReasoningBudget(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		if n, err := typed.Int64(); err == nil {
+			return int(n)
+		}
+	case string:
+		if typed == "" {
+			return 0
+		}
+		if n, err := strconv.Atoi(typed); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
 func maxTokens(a, b int) int {
 	if b > 0 {
 		return b
@@ -2042,7 +2220,7 @@ func writeOpenAIChatCompletion(w http.ResponseWriter, result *service.ChatResult
 func writeOpenAIResponse(w http.ResponseWriter, result *service.ChatResult) {
 	responseID := fmt.Sprintf("resp_%d", time.Now().UnixNano())
 	created := time.Now().Unix()
-	writeJSON(w, http.StatusOK, buildOpenAIResponseBody(responseID, created, result.Model, result, ""))
+	writeJSON(w, http.StatusOK, buildOpenAIResponseBody(responseID, created, result.Model, result, "", strings.TrimSpace(result.ThoughtText) != ""))
 }
 
 func buildOpenAIResponseMessageItem(messageID string, text string, status string) map[string]any {
@@ -2072,8 +2250,11 @@ func responseTextForResponses(result *service.ChatResult) string {
 	return strings.TrimSpace(result.Text)
 }
 
-func buildOpenAIResponseBody(responseID string, created int64, model string, result *service.ChatResult, messageID string) map[string]any {
+func buildOpenAIResponseBody(responseID string, created int64, model string, result *service.ChatResult, messageID string, includeReasoning bool) map[string]any {
 	output := make([]map[string]any, 0, 1+len(result.ToolCalls))
+	if includeReasoning && strings.TrimSpace(result.ThoughtText) != "" {
+		output = append(output, buildOpenAIResponseReasoningItem("rs_"+responseID, result.ThoughtText, "completed"))
+	}
 	text := responseTextForResponses(result)
 	if text != "" {
 		if strings.TrimSpace(messageID) == "" {
@@ -2156,8 +2337,80 @@ func writeOpenAIResponseMessageStarted(emitter *openAIResponseStreamEmitter, mes
 	})
 }
 
-func writeOpenAIResponseStreamCompleted(emitter *openAIResponseStreamEmitter, responseID string, created int64, model string, result *service.ChatResult, messageID string, messageStarted bool) {
+func buildOpenAIResponseReasoningItem(itemID string, reasoningText string, status string) map[string]any {
+	return map[string]any{
+		"id":     itemID,
+		"type":   "reasoning",
+		"status": status,
+		"summary": []map[string]any{{
+			"type": "summary_text",
+			"text": reasoningText,
+		}},
+	}
+}
+
+func writeOpenAIResponseReasoning(emitter *openAIResponseStreamEmitter, itemID string, outputIndex int, reasoningText string) error {
+	if err := emitter.Event("response.output_item.added", map[string]any{
+		"type":         "response.output_item.added",
+		"output_index": outputIndex,
+		"item":         buildOpenAIResponseReasoningItem(itemID, "", "in_progress"),
+	}); err != nil {
+		return err
+	}
+	if err := emitter.Event("response.reasoning_summary_part.added", map[string]any{
+		"type":          "response.reasoning_summary_part.added",
+		"item_id":       itemID,
+		"output_index":  outputIndex,
+		"summary_index": 0,
+		"part": map[string]any{
+			"type": "summary_text",
+			"text": "",
+		},
+	}); err != nil {
+		return err
+	}
+	if err := emitter.Event("response.reasoning_summary_text.delta", map[string]any{
+		"type":          "response.reasoning_summary_text.delta",
+		"item_id":       itemID,
+		"output_index":  outputIndex,
+		"summary_index": 0,
+		"delta":         reasoningText,
+	}); err != nil {
+		return err
+	}
+	if err := emitter.Event("response.reasoning_summary_text.done", map[string]any{
+		"type":          "response.reasoning_summary_text.done",
+		"item_id":       itemID,
+		"output_index":  outputIndex,
+		"summary_index": 0,
+		"text":          reasoningText,
+	}); err != nil {
+		return err
+	}
+	if err := emitter.Event("response.reasoning_summary_part.done", map[string]any{
+		"type":          "response.reasoning_summary_part.done",
+		"item_id":       itemID,
+		"output_index":  outputIndex,
+		"summary_index": 0,
+		"part": map[string]any{
+			"type": "summary_text",
+			"text": reasoningText,
+		},
+	}); err != nil {
+		return err
+	}
+	return emitter.Event("response.output_item.done", map[string]any{
+		"type":         "response.output_item.done",
+		"output_index": outputIndex,
+		"item":         buildOpenAIResponseReasoningItem(itemID, reasoningText, "completed"),
+	})
+}
+
+func writeOpenAIResponseStreamCompleted(emitter *openAIResponseStreamEmitter, responseID string, created int64, model string, result *service.ChatResult, messageID string, messageStarted bool, reasoningEmitted bool) {
 	outputIndex := 0
+	if reasoningEmitted {
+		outputIndex++
+	}
 	text := responseTextForResponses(result)
 	if text != "" {
 		if !messageStarted {
@@ -2231,10 +2484,24 @@ func writeOpenAIResponseStreamCompleted(emitter *openAIResponseStreamEmitter, re
 	}
 	_ = emitter.Event("response.completed", map[string]any{
 		"type":     "response.completed",
-		"response": buildOpenAIResponseBody(responseID, created, model, result, messageID),
+		"response": buildOpenAIResponseBody(responseID, created, model, result, messageID, reasoningEmitted),
 	})
 	_, _ = fmt.Fprint(emitter.w, "data: [DONE]\n\n")
 	emitter.flusher.Flush()
+}
+
+func shouldEmitAnthropicThinking(req service.ChatRequest, result *service.ChatResult) bool {
+	return strings.TrimSpace(req.ReasoningEffort) != "" && result != nil && strings.TrimSpace(result.ThoughtText) != ""
+}
+
+func shouldEmitResponsesReasoning(req service.ChatRequest, result *service.ChatResult) bool {
+	if strings.TrimSpace(req.ReasoningEffort) == "" {
+		return false
+	}
+	if result == nil {
+		return true
+	}
+	return strings.TrimSpace(result.ThoughtText) != ""
 }
 
 func streamingHeaders(w http.ResponseWriter) {

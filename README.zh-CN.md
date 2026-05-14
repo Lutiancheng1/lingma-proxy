@@ -23,9 +23,15 @@
 - **远端 API 模式（默认，推荐）**：读取 Lingma 本地登录缓存或显式凭据，直接调用 Lingma 远端接口。它更接近普通托管 API，不依赖 IDE 插件窗口、IPC 会话和插件执行环境；目前更推荐给 Claude Code / Hermes 这类本地 Agent。
 - **IPC 插件模式**：连接本机 Lingma IDE 插件的 WebSocket / Named Pipe。它更接近 IDE 插件上下文，但会继承 IDE 会话生命周期、插件本地状态和环境限制，主要作为兼容性兜底。
 
+## 运行前提与深度思考边界
+
+- 对 Claude Code、Codex CLI、Hermes Agent、CodeBuddy 等客户端，代理进程必须在请求进行期间持续运行。如果桌面 App 或 CLI 代理在流式响应中被手工退出，当前这轮请求需要由客户端重新发起。
+- **远端 API 模式** 只透传 reasoning / thinking 的请求意图。模型本身仍然可能在内部进行了推理，但当前上游 Lingma 远端 SSE 不会返回独立的结构化 thinking / reasoning block，因此代理拿不到这类结构化内容，也不会伪造这类返回。
+- **IPC 插件模式** 可以透传 Lingma IDE 本地协议里的独立 thinking 流，但前提是客户端显式请求 reasoning，且 Lingma IPC 上游真实返回了 thought chunk。当前本机实测里，Hermes CLI 和 Claude Code 都已经在 IPC 模式下真实显示出独立的 reasoning / thinking 内容；其中 Claude Code 依赖代理把 `thinking.type=adaptive` 正确识别为启用 reasoning。
+
 ## 当前版本
 
-当前桌面端版本线：`v1.5.0`
+当前桌面端版本线：`v1.5.1`
 
 版本更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
@@ -177,6 +183,56 @@ GitHub Actions 会在 Release 中产出：
 - `tool_choice`
 - `tool_result`
 - base64 图片块
+
+### Deep Thinking / Reasoning 支持说明
+
+深度思考支持和后端模式有关：
+
+| 后端模式 | 请求意图 | 结构化 reasoning 返回 |
+| --- | --- | --- |
+| 远端 API | 透传 | 当前上游远端 SSE 不提供独立 reasoning block；这表示上游响应结构没有暴露独立思考块，并不等于模型没有进行内部推理 |
+| IPC 插件 | 透传 | 当 Lingma IPC 返回 `agent_thought_chunk` 时支持 |
+
+当前行为：
+
+- Anthropic `/v1/messages`
+  - 远端模式：接受 `thinking` 参数，但通常只返回普通 `text` block。这并不代表模型没有思考，而是上游远端 API 没有把思考过程作为独立 block 返回。
+  - IPC 模式：当请求带 reasoning / thinking，且 Lingma IPC 确实返回独立 thought chunk 时，非流式返回单独 `thinking` block，流式返回 `thinking_delta`。
+- OpenAI `/v1/responses`
+  - 远端模式：接受 `reasoning` 参数，但不会额外暴露独立 `reasoning` item，因为上游远端流本身没有这个结构。这是上游响应形态的限制，不是代理把已有 reasoning 过滤掉了。
+  - IPC 模式：当请求带 reasoning，且 Lingma IPC 返回独立 thought chunk 时，非流式返回单独 `reasoning` item，流式返回 `response.reasoning_summary_*` 事件。
+
+代理不会凭空生成上游没有真实返回的思维链内容。
+
+真实客户端 IPC 展示验证：
+
+- **Hermes CLI**：已确认端到端可见。代理会发出 `thinking_delta`，Hermes CLI 会先展示独立 `Reasoning` 面板，再输出最终正文。
+- **Claude Code**：已确认端到端可见。真实请求携带 `thinking.type=adaptive`，代理会正确保留并返回独立 `thinking` block；Claude Code 的 `stream-json` 输出可见这段 thinking stream，随后再输出最终正文。
+
+### IPC 思考过程兼容矩阵（真实客户端）
+
+下面这张表对三个客户端统一使用同一条复杂固定探针：
+
+> `请比较 9.11 和 9.8 的大小，要求分步骤解释为什么；如果存在独立 reasoning 字段，请单独返回，不要把推理过程折叠进最终答案。`
+
+其中“IPC 协议层结构化 reasoning”表示直接通过 Lingma Proxy 的 IPC 路径探针（`/v1/messages` 或 `/v1/responses`）已经确认：Lingma IPC 上游确实发出了独立 thought chunk，且代理已经把它映射成结构化 thinking / reasoning 返回；“客户端展示”表示最终用户在该客户端里是否真的看到了独立思考面板/区块。
+
+| 模型 | IPC 协议层结构化 reasoning | Claude Code + IPC | Hermes CLI + IPC | Codex CLI + IPC |
+| --- | --- | --- | --- | --- |
+| `Auto` | ✅ | ✅ 可见独立 thinking block | ✅ 可见 `Reasoning` 面板 | ❌ 未显示独立 reasoning item |
+| `Kimi-K2.6` | ✅ | ✅ 可见独立 thinking block | ❌ 当前 Hermes 请求形态下未显示独立 reasoning 面板 | ❌ 未显示独立 reasoning item |
+| `MiniMax-M2.7` | ✅ | ✅ 可见独立 thinking block | ✅ 可见 `Reasoning` 面板 | ❌ 未显示独立 reasoning item |
+| `Qwen3-Coder` | ❌ | ❌ 无结构化 thinking block | ❌ 未显示独立 reasoning 面板 | ❌ 未显示独立 reasoning item |
+| `Qwen3-Max` | ❌ | ❌ 无结构化 thinking block | ❌ 未显示独立 reasoning 面板 | ❌ 未显示独立 reasoning item |
+| `Qwen3-Thinking` | ✅ | ✅ 可见独立 thinking block | ✅ 可见 `Reasoning` 面板 | ✅ 已显示独立 reasoning item |
+| `Qwen3.6-Plus` | ✅ | ✅ 可见独立 thinking block | ✅ 可见 `Reasoning` 面板 | ❌ 未显示独立 reasoning item |
+
+说明：
+
+- **远端 API 模式不在这个矩阵里**，因为当前上游远端 SSE 仍然不会返回独立的结构化 reasoning block。模型可能仍然做了内部推理，只是远端 API 没有把它作为结构化内容返回给代理。
+- 某个模型“协议层已经返回 thought chunk”，**不等于** 每个客户端都会把它显示成独立思考面板。Claude Code、Hermes、Codex 的请求形态和展示规则都不同。
+- 当前最稳的统一结论是：如果你希望在三个已测试 IPC 客户端里都尽量看到独立思考过程，优先使用 **`Qwen3-Thinking`**。
+- `Kimi-K2.6` 是一个典型例子：IPC 协议层能返回 thought chunk，Claude Code 能显示，但当前 Hermes / Codex 这套真实请求与展示路径还不会把它单独显示出来。
 
 ### 图片兼容与实测范围
 
@@ -393,7 +449,7 @@ cd lingma-proxy
 | **Claude Code** | ✅ 完整测试 | 文本聊天、工具调用、图片输入、图片+工具 | Anthropic API 兼容 |
 | **Hermes Agent** | ✅ 完整测试 | 文本聊天、工具编程任务、`--image` 图片理解 | OpenAI API 兼容 |
 | **CodeBuddy** | ✅ 完整测试 | 标准聊天、token 统计 | OpenAI 兼容自定义模型 |
-| **Codex CLI** | ✅ 完整测试 | 纯文本执行、多步工具调用、文件修改+diff、图片输入、图片+工具后续调用 | 需要 `/v1/responses` 端点，配置 `wire_api = "responses"`；已基于桌面版 `v1.5.0` 实测，重试恢复也已验证 |
+| **Codex CLI** | ✅ 完整测试 | 纯文本执行、多步工具调用、文件修改+diff、图片输入、图片+工具后续调用 | 需要 `/v1/responses` 端点，配置 `wire_api = "responses"`；已基于桌面版 `v1.5.1` 实测，重试恢复也已验证 |
 
 ### Claude Code
 
@@ -414,6 +470,8 @@ export ANTHROPIC_API_KEY="any"
 
 - `ANTHROPIC_BASE_URL` 不要带 `/v1`，Claude Code 会自己追加 Anthropic 路径。
 - 本地已验证：普通文本、tools、粘贴图片、图片 + tools 同轮请求都可用。
+- IPC 思考透传补充：Claude Code 的 `thinking.type=adaptive` 现在会被代理正确识别，不会再被误当成关闭 reasoning。基于本机 IPC 实测，代理返回了独立 `thinking` block，Claude Code 的 `stream-json` 输出也能看到这段 thinking stream。
+- Claude Code + IPC 逐模型复杂探针结果：`Auto`、`Kimi-K2.6`、`MiniMax-M2.7`、`Qwen3-Thinking`、`Qwen3.6-Plus` 都能看到独立思考；`Qwen3-Coder`、`Qwen3-Max` 不能。
 
 ### Hermes Agent
 
@@ -441,6 +499,11 @@ default_model: kmodel
 ```
 
 本地已验证：普通文本对话、带工具的代码任务、`hermes chat --image` 图片理解。
+
+IPC 思考透传补充：
+
+- Hermes IPC 模式已完整坐实：开启 reasoning 后，代理会输出 `thinking_delta`，Hermes CLI 会真实显示独立 `Reasoning` 面板。
+- Hermes + IPC 逐模型复杂探针结果：`Auto`、`MiniMax-M2.7`、`Qwen3-Thinking`、`Qwen3.6-Plus` 会显示独立 `Reasoning` 面板；`Kimi-K2.6`、`Qwen3-Coder`、`Qwen3-Max` 在当前 Hermes 请求形态下不会。
 
 ### CodeBuddy
 
@@ -481,6 +544,97 @@ wire_api = "responses"
 export OPENAI_API_KEY="any"
 codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json '只回复 OK'
 ```
+
+如果你希望 Codex CLI 在 `kmodel`、`Qwen3-Thinking` 这类 Lingma 自定义模型 ID 上真正向 `/v1/responses` 发送 `reasoning`，还需要额外提供 `model_catalog_json`。仅配置 `wire_api = "responses"` 还不够；对未知自定义模型，Codex 会回退到不带 reasoning 的默认能力元数据。
+
+示例 catalog（`/绝对路径/codex-model-catalog.json`）：
+
+```json
+{
+  "models": [
+    {
+      "slug": "kmodel",
+      "display_name": "Kimi-K2.6",
+      "description": "Lingma 远端 Kimi 模型",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "快速思考" },
+        { "effort": "medium", "description": "平衡思考" },
+        { "effort": "high", "description": "深度思考" },
+        { "effort": "xhigh", "description": "最高强度思考" }
+      ],
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "detailed",
+      "input_modalities": ["text", "image"]
+    },
+    {
+      "slug": "Qwen3-Thinking",
+      "display_name": "Qwen3-Thinking",
+      "description": "Lingma 远端 Qwen 推理模型",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "快速思考" },
+        { "effort": "medium", "description": "平衡思考" },
+        { "effort": "high", "description": "深度思考" },
+        { "effort": "xhigh", "description": "最高强度思考" }
+      ],
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "detailed",
+      "input_modalities": ["text", "image"]
+    }
+  ]
+}
+```
+
+然后在 Codex CLI 配置里显式指向它：
+
+```toml
+model = "kmodel"
+model_provider = "lingma_proxy"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+model_catalog_json = "/绝对路径/codex-model-catalog.json"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
+show_raw_agent_reasoning = true
+
+[model_providers.lingma_proxy]
+name = "Lingma Proxy"
+base_url = "http://127.0.0.1:8095/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+```
+
+这部分我们已经做过本地 A/B 验证：
+
+- 不带 `model_catalog_json` 时，Codex CLI 对 `kmodel` / `Qwen3-Thinking` **不会**发送 `reasoning`
+- 带 `model_catalog_json` 后，Codex CLI 会发送：
+  - `reasoning: {"effort":"high","summary":"detailed"}`
+  - `include: ["reasoning.encrypted_content"]`
+- 即便如此，当前 **Remote API** 上游返回仍然只有普通 `delta.content` 文本分片。它可能把“推理过程：...”混在正文里返回，但**不会**单独返回结构化 reasoning block。
+- 因此这里剩余的限制不在 Lingma Proxy 的 `/v1/responses` 映射，而在 Remote API 上游本身的响应结构；这也不应被误解成“模型没有思考”。
+
+Codex CLI 在 **IPC 模式** 下的 thinking 展示结论，需要和“协议层是否支持”分开看。下面这张表使用的是固定复杂探针：
+
+> `请比较 9.11 和 9.8 的大小，要求分步骤解释为什么；如果存在独立 reasoning 字段，请单独返回，不要把推理过程折叠进最终答案。`
+
+| 模型 | 直接调用 `/v1/responses`（IPC，带 reasoning） | Codex CLI + IPC + `model_catalog_json` 实际展示 |
+| --- | --- | --- |
+| `Auto` | ✅ 返回独立 `reasoning` item | ❌ 未显示独立 reasoning item |
+| `Kimi-K2.6` | ✅ 返回独立 `reasoning` item | ❌ 未显示独立 reasoning item |
+| `MiniMax-M2.7` | ✅ 返回独立 `reasoning` item | ❌ 未显示独立 reasoning item |
+| `Qwen3-Coder` | ❌ 未返回独立 `reasoning` item | ❌ 未显示独立 reasoning item |
+| `Qwen3-Max` | ❌ 未返回独立 `reasoning` item | ❌ 未显示独立 reasoning item |
+| `Qwen3-Thinking` | ✅ 返回独立 `reasoning` item | ✅ 已显示独立 reasoning item |
+| `Qwen3.6-Plus` | ✅ 返回独立 `reasoning` item | ❌ 未显示独立 reasoning item |
+
+说明：
+
+- 左列代表 **代理协议层** 能不能从 IPC 上游拿到独立 thought chunk，并映射成 Responses `reasoning` item。
+- 右列代表 **Codex CLI 当前这套真实请求形态** 下，JSONL 里是否真的出现 `type=reasoning` 的独立展示项。
+- 结论不能简单理解成“模型支持 thought chunk，就一定会被 Codex 展示出来”。Codex 自己的系统提示、客户端上下文、模型路由和本轮请求形态，都会影响最终是否真的吐出独立 reasoning 面板。
+- 当前最稳的结论是：**如果你希望在 Codex CLI 里尽量看到独立思考过程，优先使用 `Qwen3-Thinking`。**
+- 和 Claude Code / Hermes 相比，Codex IPC 对独立 reasoning 展示的要求目前最严格。
 
 本地已验证：在补齐 `/v1/responses` 兼容后，下面这些场景都能通过代理执行：
 
@@ -746,14 +900,14 @@ Release workflow 会执行：
 
 如果只是临时补打一轮远端包、不想改 App 内部版本号，可以使用 `v1.4.15-fix1` 这种后缀 tag。GitHub Release workflow 仍然会因为匹配 `v*` 而打出最新代码对应的包。
 
-### 建议的 v1.5.0 Release 文案
+### 建议的 v1.5.1 Release 文案
 
 可以直接作为 GitHub Release 正文使用：
 
 - 增加 OpenAI Responses API 兼容层，补齐 `/v1/responses` 和 `/api/v1/responses`，满足 Codex CLI 接入要求。
 - 修复 Codex 多步工具工作流：项目结构读取、命令执行、文件修改和 unified diff 返回现在都能通过 Lingma Proxy 稳定完成，不再因为事件序列不完整而反复重试 `502`。
 - 修复 Remote API 图片上下文兜底：带图请求在 IPC 提取图片后，仍可继续进入带工具的后续轮次。
-- 基于桌面版 `v1.5.0` 和 Brew 安装版 `codex-cli 0.130.0` 完整验证：纯文本、多步工具、文件修改 + diff、图片输入、图片 + 工具后续调用，以及桌面端重启后的重试恢复。
+- 基于桌面版 `v1.5.1` 和 Brew 安装版 `codex-cli 0.130.0` 完整验证：纯文本、多步工具、文件修改 + diff、图片输入、图片 + 工具后续调用，以及桌面端重启后的重试恢复。
 - 保持 Remote API 作为默认推荐后端，同时保留 IPC 插件模式作为兼容兜底。
 
 ## 与上游项目的关系
@@ -782,7 +936,7 @@ Release workflow 会执行：
 
 ## Star 增长趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=lutc5/lingma-ipc-proxy&type=Date)](https://star-history.com/#lutc5/lingma-ipc-proxy&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Lutiancheng1/lingma-proxy&type=Date)](https://star-history.com/#Lutiancheng1/lingma-proxy&Date)
 
 ## 致谢
 

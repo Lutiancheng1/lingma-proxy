@@ -222,6 +222,26 @@ func TestBuildBodyProjectsRemoteImages(t *testing.T) {
 	}
 }
 
+func TestBuildBodyEnablesRemoteReasoningWhenRequested(t *testing.T) {
+	client := New(Config{})
+	body, err := client.buildBody("req-1", ChatRequest{
+		Model:           "kmodel",
+		Prompt:          "请先思考再回答",
+		ReasoningEffort: "medium",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	modelConfig := payload["model_config"].(map[string]any)
+	if modelConfig["is_reasoning"] != true {
+		t.Fatalf("model_config.is_reasoning = %#v, want true", modelConfig["is_reasoning"])
+	}
+}
+
 func TestParseSSEPayloadExtractsNativeToolCallFragments(t *testing.T) {
 	payload := `{"body":"{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"file_path\\\":\\\"/tmp/a.txt\\\"}\"}}]}}]}","statusCodeValue":200}`
 	event, ok, err := parseSSEPayload(payload)

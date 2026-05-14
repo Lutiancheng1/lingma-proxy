@@ -8,16 +8,21 @@ const props = defineProps({
   selectedRequestId: {
     type: String,
     default: null
+  },
+  initialRequests: {
+    type: Array,
+    default: () => []
   }
 })
 
 const emit = defineEmits(['notice'])
 
-const requests = ref([])
+const requests = ref(Array.isArray(props.initialRequests) ? [...props.initialRequests] : [])
 const selected = ref(null)
 const query = ref('')
 const activeStatus = ref('all')
 const pendingSelectId = ref(null)
+const loading = ref(requests.value.length === 0)
 
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
@@ -34,6 +39,9 @@ const filtered = computed(() => {
 })
 
 async function refresh() {
+  if (requests.value.length === 0) {
+    loading.value = true
+  }
   try {
     requests.value = await GetRequests()
     // 数据加载完成后，如果有待选中的请求 ID，执行选中
@@ -43,6 +51,8 @@ async function refresh() {
     }
   } catch (e) {
     console.debug('Wails GetRequests unavailable in browser preview')
+  } finally {
+    loading.value = false
   }
 }
 
@@ -89,6 +99,12 @@ watch(() => props.selectedRequestId, (newId) => {
     selectRequestById(newId)
   }
 }, { immediate: true })
+
+watch(() => props.initialRequests, (nextRequests) => {
+  if (!Array.isArray(nextRequests) || nextRequests.length === 0) return
+  requests.value = [...nextRequests]
+  loading.value = false
+}, { deep: true })
 
 // 监听 requests 数据变化，如果有待选中的 ID 则执行选中
 watch(() => requests.value.length, (newLength, oldLength) => {
@@ -233,6 +249,7 @@ onUnmounted(() => {
           </tbody>
         </table>
       </div>
+      <div v-else-if="loading" class="empty-state">加载请求记录中...</div>
       <div v-else class="empty-state">暂无匹配请求。</div>
 
       <div v-if="selected !== null && filtered[selected]" class="detail-panel hidden-scrollbar">

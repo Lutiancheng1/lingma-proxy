@@ -165,6 +165,49 @@ func TestResponsesRequestSingleObjectPreservesRole(t *testing.T) {
 	}
 }
 
+func TestNormalizeAnthropicRequestMapsThinkingToReasoningEffort(t *testing.T) {
+	req := anthropicRequest{
+		Model:     "Qwen3.6-Plus",
+		MaxTokens: 256,
+		Thinking: map[string]any{
+			"type":          "enabled",
+			"budget_tokens": 2048,
+		},
+		Messages: []rawMessage{
+			{Role: "user", Content: "请先思考再回答"},
+		},
+	}
+
+	normalized, err := normalizeAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("normalizeAnthropicRequest() error = %v", err)
+	}
+	if normalized.ReasoningEffort != "medium" {
+		t.Fatalf("reasoning effort = %q", normalized.ReasoningEffort)
+	}
+}
+
+func TestNormalizeAnthropicRequestAdaptiveThinkingEnablesReasoning(t *testing.T) {
+	req := anthropicRequest{
+		Model:     "Qwen3-Thinking",
+		MaxTokens: 256,
+		Thinking: map[string]any{
+			"type": "adaptive",
+		},
+		Messages: []rawMessage{
+			{Role: "user", Content: "请先思考再回答"},
+		},
+	}
+
+	normalized, err := normalizeAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("normalizeAnthropicRequest() error = %v", err)
+	}
+	if normalized.ReasoningEffort != "medium" {
+		t.Fatalf("reasoning effort = %q", normalized.ReasoningEffort)
+	}
+}
+
 func TestOpenAIResponsesMethodNotAllowed(t *testing.T) {
 	server := NewServer("", service.New(service.Config{
 		Model:   "Qwen3-Coder",
@@ -191,7 +234,7 @@ func TestWriteOpenAIResponseStreamCompletedToolOnlyEmitsFunctionCallLifecycle(t 
 		}},
 	}
 
-	writeOpenAIResponseStreamCompleted(emitter, "resp_1", 123, "kmodel", result, "msg_1", false)
+	writeOpenAIResponseStreamCompleted(emitter, "resp_1", 123, "kmodel", result, "msg_1", false, false)
 
 	body := rec.Body.String()
 	if strings.Contains(body, "\"type\":\"message\"") {
@@ -221,6 +264,69 @@ func TestWriteOpenAIResponseStreamCompletedToolOnlyEmitsFunctionCallLifecycle(t 
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected %s in body: %s", want, body)
 		}
+	}
+}
+
+func TestBuildOpenAIResponseBodyIncludesReasoningItem(t *testing.T) {
+	result := &service.ChatResult{
+		Model:       "kmodel",
+		Text:        "final answer",
+		ThoughtText: "reasoning summary",
+	}
+	body := buildOpenAIResponseBody("resp_1", 123, "kmodel", result, "msg_1", true)
+	output, ok := body["output"].([]map[string]any)
+	if !ok {
+		t.Fatalf("output type = %T", body["output"])
+	}
+	if len(output) < 2 {
+		t.Fatalf("output len = %d", len(output))
+	}
+	if output[0]["type"] != "reasoning" {
+		t.Fatalf("first output item = %#v", output[0])
+	}
+	summary, ok := output[0]["summary"].([]map[string]any)
+	if !ok || len(summary) != 1 || summary[0]["text"] != "reasoning summary" {
+		t.Fatalf("reasoning summary = %#v", output[0]["summary"])
+	}
+}
+
+func TestWriteOpenAIResponseReasoningEmitsLifecycle(t *testing.T) {
+	rec := httptest.NewRecorder()
+	emitter := newOpenAIResponseStreamEmitter(rec, rec, "resp_1")
+	if err := writeOpenAIResponseReasoning(emitter, "rs_resp_1", 0, "reasoning summary"); err != nil {
+		t.Fatal(err)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"\"type\":\"response.output_item.added\"",
+		"\"type\":\"response.reasoning_summary_part.added\"",
+		"\"type\":\"response.reasoning_summary_text.delta\"",
+		"\"type\":\"response.reasoning_summary_text.done\"",
+		"\"type\":\"response.reasoning_summary_part.done\"",
+		"\"type\":\"response.output_item.done\"",
+		"\"type\":\"reasoning\"",
+		"reasoning summary",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in body: %s", want, body)
+		}
+	}
+}
+
+func TestShouldEmitThinkingHelpers(t *testing.T) {
+	req := service.ChatRequest{ReasoningEffort: "medium"}
+	result := &service.ChatResult{ThoughtText: "thought"}
+	if !shouldEmitAnthropicThinking(req, result) {
+		t.Fatal("expected anthropic thinking to emit")
+	}
+	if !shouldEmitResponsesReasoning(req, result) {
+		t.Fatal("expected responses reasoning to emit")
+	}
+	if shouldEmitAnthropicThinking(service.ChatRequest{}, result) {
+		t.Fatal("unexpected anthropic thinking without reasoning effort")
+	}
+	if shouldEmitResponsesReasoning(req, &service.ChatResult{}) {
+		t.Fatal("unexpected responses reasoning without thought text")
 	}
 }
 

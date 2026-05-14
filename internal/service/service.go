@@ -97,6 +97,7 @@ type ChatRequest struct {
 
 type ChatResult struct {
 	Text             string
+	ThoughtText      string
 	Model            string
 	InputTokens      int
 	OutputTokens     int
@@ -106,6 +107,7 @@ type ChatResult struct {
 	StopReason       string
 	UsedTokens       int
 	LimitTokens      int
+	ThinkingDuration int64
 	PipePath         string
 	Endpoint         string
 	Transport        string
@@ -114,6 +116,7 @@ type ChatResult struct {
 }
 
 type StreamEvent struct {
+	Type  string
 	Delta string
 }
 
@@ -152,12 +155,19 @@ type Service struct {
 }
 
 type promptRunResult struct {
-	PromptResult  map[string]any
-	FinishData    map[string]any
-	ContextUsage  map[string]any
-	AssistantText string
-	TimedOut      bool
+	PromptResult     map[string]any
+	FinishData       map[string]any
+	ContextUsage     map[string]any
+	AssistantText    string
+	ThoughtText      string
+	ThinkingDuration int64
+	TimedOut         bool
 }
+
+const (
+	StreamEventText     = "text"
+	StreamEventThinking = "thinking"
+)
 
 func New(cfg Config) *Service {
 	if strings.TrimSpace(cfg.Cwd) == "" {
@@ -332,12 +342,12 @@ func (s *Service) GenerateStream(ctx context.Context, req ChatRequest) (<-chan S
 		if s.backend() == BackendRemote {
 			generate = s.generateRemote
 		}
-		result, err := generate(ctx, req, func(delta string) {
-			if delta == "" {
+		result, err := generate(ctx, req, func(event StreamEvent) {
+			if event.Delta == "" {
 				return
 			}
 			select {
-			case events <- StreamEvent{Delta: delta}:
+			case events <- event:
 			case <-ctx.Done():
 			}
 		})
@@ -353,7 +363,7 @@ func (s *Service) GenerateStream(ctx context.Context, req ChatRequest) (<-chan S
 func (s *Service) generateWithReconnect(
 	ctx context.Context,
 	req ChatRequest,
-	onDelta func(string),
+	onDelta func(StreamEvent),
 ) (*ChatResult, error) {
 	result, err := s.generateLocked(ctx, req, onDelta)
 	if err == nil || !isRecoverableIPCError(err) {
@@ -367,7 +377,7 @@ func (s *Service) generateWithReconnect(
 func (s *Service) generateRemote(
 	ctx context.Context,
 	req ChatRequest,
-	onDelta func(string),
+	onDelta func(StreamEvent),
 ) (*ChatResult, error) {
 	return s.generateRemoteInternal(ctx, req, onDelta, false)
 }
@@ -375,7 +385,7 @@ func (s *Service) generateRemote(
 func (s *Service) generateRemoteInternal(
 	ctx context.Context,
 	req ChatRequest,
-	onDelta func(string),
+	onDelta func(StreamEvent),
 	emulateTools bool,
 ) (*ChatResult, error) {
 	if requestHasImages(req) {
@@ -417,7 +427,7 @@ func (s *Service) generateRemoteInternal(
 func (s *Service) generateRemoteWithImageContext(
 	ctx context.Context,
 	req ChatRequest,
-	onDelta func(string),
+	onDelta func(StreamEvent),
 ) (*ChatResult, error) {
 	imageReq := requestForImageContext(req)
 	imageResult, err := s.generateWithReconnect(ctx, imageReq, nil)
@@ -434,7 +444,7 @@ func (s *Service) generateRemoteWithModel(
 	req ChatRequest,
 	prompt string,
 	model string,
-	onDelta func(string),
+	onDelta func(StreamEvent),
 	emulateTools bool,
 ) (*ChatResult, bool, error) {
 	emitted := false
@@ -443,32 +453,34 @@ func (s *Service) generateRemoteWithModel(
 			emitted = true
 		}
 		if onDelta != nil {
-			onDelta(text)
+			onDelta(StreamEvent{Type: StreamEventText, Delta: text})
 		}
 	}
 	remoteResult, err := client.Chat(ctx, remote.ChatRequest{
-		Model:       model,
-		Prompt:      prompt,
-		Messages:    remoteMessagesFromRequest(req),
-		Images:      remoteImagesFromRequest(req),
-		Stream:      onDelta != nil,
-		Temperature: req.Temperature,
-		Tools:       req.Tools,
-		ToolChoice:  req.ToolChoice,
+		Model:           model,
+		Prompt:          prompt,
+		Messages:        remoteMessagesFromRequest(req),
+		Images:          remoteImagesFromRequest(req),
+		Stream:          onDelta != nil,
+		Temperature:     req.Temperature,
+		ReasoningEffort: req.ReasoningEffort,
+		Tools:           req.Tools,
+		ToolChoice:      req.ToolChoice,
 	}, delta)
 	if err != nil {
 		return nil, emitted, err
 	}
 	if len(remoteResult.ToolCalls) == 0 && shouldRetryRemoteNativeTool(req, remoteResult.Text) {
 		retryResult, retryErr := client.Chat(ctx, remote.ChatRequest{
-			Model:       model,
-			Prompt:      prompt,
-			Messages:    remoteMessagesFromRequest(req),
-			Images:      remoteImagesFromRequest(req),
-			Stream:      false,
-			Temperature: req.Temperature,
-			Tools:       req.Tools,
-			ToolChoice:  toolemulation.ToolChoice{Mode: "any"},
+			Model:           model,
+			Prompt:          prompt,
+			Messages:        remoteMessagesFromRequest(req),
+			Images:          remoteImagesFromRequest(req),
+			Stream:          false,
+			Temperature:     req.Temperature,
+			ReasoningEffort: req.ReasoningEffort,
+			Tools:           req.Tools,
+			ToolChoice:      toolemulation.ToolChoice{Mode: "any"},
 		}, nil)
 		if retryErr == nil && len(retryResult.ToolCalls) > 0 {
 			remoteResult = retryResult
@@ -493,14 +505,15 @@ func (s *Service) generateRemoteWithModel(
 	if emulateTools {
 		s.applyToolEmulation(ctx, req, prompt, result, onDelta, func(hintPrompt string) (string, int, error) {
 			retryResult, err := client.Chat(ctx, remote.ChatRequest{
-				Model:       model,
-				Prompt:      hintPrompt,
-				Messages:    remoteMessagesFromRequest(req),
-				Images:      remoteImagesFromRequest(req),
-				Stream:      false,
-				Temperature: req.Temperature,
-				Tools:       req.Tools,
-				ToolChoice:  req.ToolChoice,
+				Model:           model,
+				Prompt:          hintPrompt,
+				Messages:        remoteMessagesFromRequest(req),
+				Images:          remoteImagesFromRequest(req),
+				Stream:          false,
+				Temperature:     req.Temperature,
+				ReasoningEffort: req.ReasoningEffort,
+				Tools:           req.Tools,
+				ToolChoice:      req.ToolChoice,
 			}, nil)
 			if err != nil {
 				return "", 0, err
@@ -762,7 +775,7 @@ func isRemoteFallbackError(err error) bool {
 func (s *Service) generateLocked(
 	ctx context.Context,
 	req ChatRequest,
-	onDelta func(string),
+	onDelta func(StreamEvent),
 ) (result *ChatResult, err error) {
 	requestCtx, cancel := contextWithOptionalTimeout(ctx, s.cfg.Timeout)
 	defer cancel()
@@ -903,7 +916,7 @@ func (s *Service) applyToolEmulation(
 	req ChatRequest,
 	prompt string,
 	result *ChatResult,
-	onDelta func(string),
+	onDelta func(StreamEvent),
 	retry func(string) (string, int, error),
 ) {
 	if len(req.Tools) > 0 {
@@ -989,6 +1002,7 @@ func (s *Service) buildChatResult(
 	endpoint := s.currentPipePath()
 	return &ChatResult{
 		Text:             runResult.AssistantText,
+		ThoughtText:      runResult.ThoughtText,
 		Model:            valueOr(strings.TrimSpace(req.Model), "lingma"),
 		InputTokens:      estimateTokens(prompt),
 		OutputTokens:     estimateTokens(runResult.AssistantText),
@@ -998,6 +1012,7 @@ func (s *Service) buildChatResult(
 		StopReason:       nestedString(runResult.PromptResult, "stopReason"),
 		UsedTokens:       int(nestedInt64(runResult.ContextUsage, "usedTokens")),
 		LimitTokens:      int(nestedInt64(runResult.ContextUsage, "limitTokens")),
+		ThinkingDuration: runResult.ThinkingDuration,
 		PipePath:         endpoint,
 		Endpoint:         endpoint,
 		Transport:        string(s.currentTransport()),
@@ -1160,7 +1175,7 @@ func (s *Service) runPromptLocked(
 	images []Image,
 	requestID string,
 	meta map[string]any,
-	onDelta func(string),
+	onDelta func(StreamEvent),
 ) (*promptRunResult, error) {
 	notifications, cancel := client.Subscribe()
 	defer cancel()
@@ -1258,16 +1273,19 @@ func (s *Service) runPromptLocked(
 
 	result := &promptRunResult{PromptResult: map[string]any{}}
 	var builder strings.Builder
+	var thoughtBuilder strings.Builder
 
 	for {
 		select {
 		case <-ctx.Done():
 			result.AssistantText = builder.String()
+			result.ThoughtText = thoughtBuilder.String()
 			result.TimedOut = true
 			return result, nil
 		case notification, ok := <-notifications:
 			if !ok {
 				result.AssistantText = builder.String()
+				result.ThoughtText = thoughtBuilder.String()
 				if result.AssistantText == "" {
 					return nil, errors.New("Lingma IPC notification stream closed")
 				}
@@ -1282,12 +1300,24 @@ func (s *Service) runPromptLocked(
 
 			update := nestedMap(notification.Params, "update")
 			switch nestedString(update, "sessionUpdate") {
+			case "agent_thought_chunk":
+				chunk := nestedString(nestedMap(update, "content"), "text")
+				if chunk != "" {
+					thoughtBuilder.WriteString(chunk)
+					if onDelta != nil {
+						onDelta(StreamEvent{Type: StreamEventThinking, Delta: chunk})
+					}
+				}
+				duration := nestedInt64(nestedMap(update, "_meta"), "ai-coding/thinking-duration-millis")
+				if duration > result.ThinkingDuration {
+					result.ThinkingDuration = duration
+				}
 			case "agent_message_chunk":
 				chunk := nestedString(nestedMap(update, "content"), "text")
 				if chunk != "" {
 					builder.WriteString(chunk)
 					if onDelta != nil {
-						onDelta(chunk)
+						onDelta(StreamEvent{Type: StreamEventText, Delta: chunk})
 					}
 				}
 			case "notification":
@@ -1297,6 +1327,7 @@ func (s *Service) runPromptLocked(
 				case "chat_finish":
 					result.FinishData = nestedMap(update, "data")
 					result.AssistantText = builder.String()
+					result.ThoughtText = thoughtBuilder.String()
 					return result, nil
 				}
 			}
@@ -1359,6 +1390,13 @@ func buildLingmaPrompt(req ChatRequest, mode SessionMode, emulateTools bool) (st
 	}
 
 	system := strings.TrimSpace(req.System)
+	if reasoningHint := reasoningSystemHint(req.ReasoningEffort); reasoningHint != "" {
+		if system == "" {
+			system = reasoningHint
+		} else {
+			system = reasoningHint + "\n\n" + system
+		}
+	}
 	if emulateTools && len(req.Tools) > 0 && req.ToolChoice.Mode != "none" {
 		system = toolemulation.InjectTooling(system, req.Tools, req.ToolChoice, req.ParallelToolCalls)
 	}
@@ -1431,6 +1469,19 @@ func filteredMessages(messages []ChatMessage) []ChatMessage {
 		out = append(out, ChatMessage{Role: role, Text: text})
 	}
 	return out
+}
+
+func reasoningSystemHint(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "":
+		return ""
+	case "low":
+		return "Reasoning mode is enabled. Think briefly but deliberately before answering. Do not reveal private chain-of-thought; only provide the final answer."
+	case "high":
+		return "Reasoning mode is enabled. Take extra time to reason carefully before answering. Do not reveal private chain-of-thought; only provide the final answer and any concise user-facing rationale."
+	default:
+		return "Reasoning mode is enabled. Think carefully before answering. Do not reveal private chain-of-thought; only provide the final answer and any concise user-facing rationale."
+	}
 }
 
 func estimateTokens(text string) int {

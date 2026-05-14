@@ -20,9 +20,15 @@ The proxy now supports two backend modes:
 - **Remote API mode (default, recommended)**: imports the local Lingma login cache or an explicit credential file and calls Lingma remote APIs directly. This behaves closest to a normal hosted API, avoids IDE/plugin session and environment limits, and is currently the best mode for Claude Code / Hermes style agents.
 - **IPC plugin mode**: connects to the local Lingma IDE plugin over WebSocket / Named Pipe. This keeps behavior closest to the IDE plugin, but it can inherit IDE session lifetime, local plugin state, and environment constraints, so it is mainly a compatibility fallback.
 
+## Runtime Requirements and Reasoning Boundaries
+
+- For Claude Code, Codex CLI, Hermes Agent, CodeBuddy, and similar clients, the proxy process must stay running while requests are in flight. If the desktop app or CLI proxy is manually quit during a streaming response, the current request must be retried by the client.
+- **Remote API mode** only forwards the reasoning / thinking intent. The model may still perform internal reasoning, but the current upstream remote Lingma SSE does not expose a separate structured thinking / reasoning block, so the proxy cannot forward one and does not fabricate one.
+- **IPC plugin mode** can forward Lingma IDE's native independent thinking stream when the client requests reasoning and the upstream IPC session actually emits thought chunks. In local real-client validation, both Hermes CLI and Claude Code displayed separate reasoning / thinking output over IPC once the proxy correctly treated Claude's `thinking.type=adaptive` as an enabled reasoning request.
+
 ## Current Version
 
-The current desktop line is `v1.5.0`.
+The current desktop line is `v1.5.1`.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release history.
 
@@ -131,6 +137,56 @@ The proxy accepts common Anthropic request fields:
 - `tools`, `tool_choice`
 - image blocks through base64 sources
 - tool result continuation blocks
+
+### Reasoning / Thinking Support
+
+Reasoning support is backend-specific:
+
+| Backend mode | Request intent | Structured reasoning output |
+| --- | --- | --- |
+| Remote API | forwarded | not available from current upstream remote SSE; this means the upstream response shape does not expose a separate reasoning block, not that the model performed no internal reasoning |
+| IPC plugin | forwarded | supported when Lingma IPC emits `agent_thought_chunk` events |
+
+Current behavior:
+
+- Anthropic `/v1/messages`
+  - Remote mode: accepts `thinking`, but normally returns only standard text blocks. This does not prove the model did no internal reasoning; it means the upstream remote API did not expose it as a separate block.
+  - IPC mode: when reasoning is requested and Lingma IPC emits thought chunks, returns a separate `thinking` block in non-stream mode and `thinking_delta` in stream mode.
+- OpenAI `/v1/responses`
+  - Remote mode: accepts `reasoning`, but does not expose a separate `reasoning` item because the upstream remote stream does not provide one. This is an upstream response-shape limitation, not proxy-side filtering.
+  - IPC mode: when reasoning is requested and Lingma IPC emits thought chunks, returns a dedicated `reasoning` item in non-stream mode and `response.reasoning_summary_*` events in stream mode.
+
+Real-client IPC validation:
+
+- **Hermes CLI**: confirmed end-to-end. The proxy emitted `thinking_delta`, and Hermes rendered a visible standalone `Reasoning` panel before the final answer.
+- **Claude Code**: confirmed end-to-end after the `thinking.type=adaptive` compatibility fix. The proxy emitted `thinking_delta`, and Claude Code's `stream-json` output exposed the independent thinking block before the final text block.
+
+The proxy does not synthesize chain-of-thought text that was not actually emitted by the upstream Lingma channel.
+
+### IPC reasoning compatibility matrix (real clients)
+
+The matrix below uses the same fixed complex probe across clients:
+
+> `Please compare 9.11 and 9.8, explain the reasoning step by step, and if a separate reasoning field exists, return it separately instead of folding it into the final answer.`
+
+Protocol-layer result means a direct IPC-backed probe against Lingma Proxy (`/v1/messages` or `/v1/responses`) confirmed that the upstream IPC session emitted a real thought chunk and the proxy mapped it into a structured reasoning/thinking payload. Client rendering result means the end user actually sees an independent reasoning panel/block in that client.
+
+| Model | IPC protocol-layer structured reasoning | Claude Code + IPC | Hermes CLI + IPC | Codex CLI + IPC |
+| --- | --- | --- | --- | --- |
+| `Auto` | ✅ | ✅ visible thinking block | ✅ visible reasoning panel | ❌ no separate reasoning item rendered |
+| `Kimi-K2.6` | ✅ | ✅ visible thinking block | ❌ no visible reasoning panel in the current Hermes request shape | ❌ no separate reasoning item rendered |
+| `MiniMax-M2.7` | ✅ | ✅ visible thinking block | ✅ visible reasoning panel | ❌ no separate reasoning item rendered |
+| `Qwen3-Coder` | ❌ | ❌ no structured thinking block | ❌ no visible reasoning panel | ❌ no separate reasoning item rendered |
+| `Qwen3-Max` | ❌ | ❌ no structured thinking block | ❌ no visible reasoning panel | ❌ no separate reasoning item rendered |
+| `Qwen3-Thinking` | ✅ | ✅ visible thinking block | ✅ visible reasoning panel | ✅ separate reasoning item rendered |
+| `Qwen3.6-Plus` | ✅ | ✅ visible thinking block | ✅ visible reasoning panel | ❌ no separate reasoning item rendered |
+
+Notes:
+
+- **Remote API mode is intentionally excluded from this matrix** because the upstream remote SSE still does not expose a separate structured reasoning block. The model may still reason internally; the limitation is that the remote API does not return that reasoning as a structured payload we can pass through.
+- A model returning a real IPC thought chunk does **not** guarantee every client will surface it. Claude Code, Hermes, and Codex all have different request shapes and different rendering rules.
+- Today, the most reliable common choice for a visible reasoning panel across all three tested IPC clients is **`Qwen3-Thinking`**.
+- `Kimi-K2.6` is a good example of the distinction between protocol and rendering: the IPC protocol can return a thought chunk, Claude Code can show it, but the current Hermes and Codex request/rendering path still does not surface it as a separate reasoning panel.
 
 ### Image Compatibility and Validation
 
@@ -317,7 +373,7 @@ These examples are based on clients we have actually validated against Lingma Pr
 | **Claude Code** | ✅ Fully Tested | Text chat, tool use, image input, image + tools | Anthropic API compatible |
 | **Hermes Agent** | ✅ Fully Tested | Text chat, tool-enabled coding, `--image` flag | OpenAI API compatible |
 | **CodeBuddy** | ✅ Fully Tested | Standard chat, token usage accounting | OpenAI-compatible custom model |
-| **Codex CLI** | ✅ Fully Tested | Plain text execution, multi-step tool use, file edits + diff, image input, image + tool follow-up | Requires `/v1/responses` endpoint, `wire_api = "responses"`, validated against desktop app `v1.5.0`, retry recovery also verified |
+| **Codex CLI** | ✅ Fully Tested | Plain text execution, multi-step tool use, file edits + diff, image input, image + tool follow-up | Requires `/v1/responses` endpoint, `wire_api = "responses"`, validated against desktop app `v1.5.1`, retry recovery also verified |
 
 ### Claude Code
 
@@ -338,6 +394,8 @@ Notes:
 
 - `ANTHROPIC_BASE_URL` should not include `/v1`; Claude Code appends the Anthropic path itself.
 - Verified locally with text chat, tool use, pasted images, and image + tools in the same conversation.
+- IPC reasoning passthrough is fully validated in the local IPC environment: Claude Code sends `thinking.type=adaptive`, the proxy preserves it, and the resulting SSE now includes a separate `thinking` block that Claude Code surfaces in `stream-json` output.
+- Claude Code + IPC complex-probe matrix: `Auto`, `Kimi-K2.6`, `MiniMax-M2.7`, `Qwen3-Thinking`, and `Qwen3.6-Plus` all surfaced visible structured thinking; `Qwen3-Coder` and `Qwen3-Max` did not.
 
 ### Hermes Agent
 
@@ -348,6 +406,11 @@ Environment file example (`~/.hermes/.env`):
 ```bash
 OPENAI_API_KEY=any
 ```
+
+IPC reasoning note:
+
+- Hermes IPC validation is fully confirmed. With `api_mode: anthropic_messages` and reasoning enabled, the proxy emitted `thinking_delta` events and Hermes rendered a standalone `Reasoning` panel before the final answer.
+- Hermes + IPC complex-probe matrix: `Auto`, `MiniMax-M2.7`, `Qwen3-Thinking`, and `Qwen3.6-Plus` rendered a visible `Reasoning` panel; `Kimi-K2.6`, `Qwen3-Coder`, and `Qwen3-Max` did not in the current Hermes request shape.
 
 Config example (`~/.hermes/config.yaml`):
 
@@ -405,6 +468,96 @@ wire_api = "responses"
 export OPENAI_API_KEY="any"
 codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json '只回复 OK'
 ```
+
+If you want Codex CLI to send OpenAI Responses `reasoning` for Lingma custom model IDs such as `kmodel` or `Qwen3-Thinking`, you also need to provide model capability metadata through `model_catalog_json`. Without this catalog, Codex treats those IDs as unknown custom models and falls back to metadata that does not emit `reasoning`.
+
+Catalog example (`/absolute/path/to/codex-model-catalog.json`):
+
+```json
+{
+  "models": [
+    {
+      "slug": "kmodel",
+      "display_name": "Kimi-K2.6",
+      "description": "Lingma remote Kimi model",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast reasoning" },
+        { "effort": "medium", "description": "Balanced reasoning" },
+        { "effort": "high", "description": "Deep reasoning" },
+        { "effort": "xhigh", "description": "Maximum reasoning" }
+      ],
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "detailed",
+      "input_modalities": ["text", "image"]
+    },
+    {
+      "slug": "Qwen3-Thinking",
+      "display_name": "Qwen3-Thinking",
+      "description": "Lingma remote Qwen reasoning model",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Fast reasoning" },
+        { "effort": "medium", "description": "Balanced reasoning" },
+        { "effort": "high", "description": "Deep reasoning" },
+        { "effort": "xhigh", "description": "Maximum reasoning" }
+      ],
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "detailed",
+      "input_modalities": ["text", "image"]
+    }
+  ]
+}
+```
+
+Then point Codex CLI at that catalog:
+
+```toml
+model = "kmodel"
+model_provider = "lingma_proxy"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+model_catalog_json = "/absolute/path/to/codex-model-catalog.json"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
+show_raw_agent_reasoning = true
+
+[model_providers.lingma_proxy]
+name = "Lingma Proxy"
+base_url = "http://127.0.0.1:8095/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+```
+
+Catalog validation result:
+
+- Without `model_catalog_json`, Codex CLI does **not** send a `reasoning` object for `kmodel` / `Qwen3-Thinking`.
+- With `model_catalog_json`, Codex CLI sends:
+  - `reasoning: {"effort":"high","summary":"detailed"}`
+  - `include: ["reasoning.encrypted_content"]`
+- Even after that, the current **Remote API** upstream still streams only normal `delta.content` text chunks. It may include phrases such as `推理过程：...` inside the text, but it does **not** return a separate structured reasoning block. That means the remaining limitation is upstream response shape, not missing `/v1/responses` mapping in Lingma Proxy, and not proof that the model failed to reason internally.
+
+For **IPC mode**, it is important to separate protocol capability from what Codex CLI actually renders. The matrix below was validated with this fixed complex reasoning probe:
+
+> `Please compare 9.11 and 9.8, explain the reasoning step by step, and if a separate reasoning field exists, return it separately instead of folding it into the final answer.`
+
+| Model | Direct `/v1/responses` probe (IPC, with reasoning) | Codex CLI + IPC + `model_catalog_json` rendered reasoning |
+| --- | --- | --- |
+| `Auto` | ✅ returned a separate `reasoning` item | ❌ no separate reasoning item rendered |
+| `Kimi-K2.6` | ✅ returned a separate `reasoning` item | ❌ no separate reasoning item rendered |
+| `MiniMax-M2.7` | ✅ returned a separate `reasoning` item | ❌ no separate reasoning item rendered |
+| `Qwen3-Coder` | ❌ no separate `reasoning` item returned | ❌ no separate reasoning item rendered |
+| `Qwen3-Max` | ❌ no separate `reasoning` item returned | ❌ no separate reasoning item rendered |
+| `Qwen3-Thinking` | ✅ returned a separate `reasoning` item | ✅ separate reasoning item rendered |
+| `Qwen3.6-Plus` | ✅ returned a separate `reasoning` item | ❌ no separate reasoning item rendered |
+
+Notes:
+
+- The left column is the **protocol-layer result**: whether IPC upstream emitted independent thought chunks that Lingma Proxy could map into a Responses `reasoning` item.
+- The right column is the **actual Codex CLI rendering result** for the current real request shape: whether the JSONL stream contained a standalone `type=reasoning` item.
+- Do not assume “the model supports thought chunks” automatically means “Codex will always show a reasoning panel.” Codex system context, request shape, and upstream routing still affect whether a separate reasoning item appears.
+- The safest current recommendation is: **if you want Codex CLI to show a visible reasoning panel over IPC, prefer `Qwen3-Thinking`.**
+- Compared with Claude Code and Hermes, Codex IPC reasoning display is currently the strictest client path in our tests.
 
 Verified locally after adding `/v1/responses` compatibility. The following flows all passed against the proxy:
 
@@ -621,7 +774,7 @@ Recommended local release-candidate checklist:
 
 The GitHub release workflow is triggered by:
 
-- pushing a tag such as `v1.5.0`
+- pushing a tag such as `v1.5.1`
 - manually running the `Release` workflow with a tag input
 
 Recommended remote release checklist:
@@ -634,19 +787,19 @@ Recommended remote release checklist:
 
 If you need a temporary packaging tag without changing the app's internal version line, use a suffix tag such as `v1.4.15-fix1`. The GitHub workflow will still package the latest code because the workflow matches `v*`.
 
-### Suggested release summary for v1.5.0
+### Suggested release summary for v1.5.1
 
 Use the following as the GitHub Release body draft:
 
 - Added stable OpenAI Responses API compatibility for Codex CLI (`/v1/responses`, `/api/v1/responses`).
 - Fixed Codex multi-step tool workflows so project-structure reading, command execution, file edits, and unified diff output complete through Lingma Proxy instead of failing with repeated `502` retries.
 - Fixed Remote API image-context fallback so image-bearing requests can continue into tool-enabled turns after IPC image extraction.
-- Verified the desktop app `v1.5.0` against Brew-installed `codex-cli 0.130.0`, including plain text, multi-step tools, file edit + diff, image input, image + tool follow-up, and retry recovery after desktop app restart.
+- Verified the desktop app `v1.5.1` against Brew-installed `codex-cli 0.130.0`, including plain text, multi-step tools, file edit + diff, image input, image + tool follow-up, and retry recovery after desktop app restart.
 - Kept Remote API as the default recommended backend while retaining IPC plugin mode as a compatibility fallback.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=lutc5/lingma-ipc-proxy&type=Date)](https://star-history.com/#lutc5/lingma-ipc-proxy&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Lutiancheng1/lingma-proxy&type=Date)](https://star-history.com/#Lutiancheng1/lingma-proxy&Date)
 
 ## Acknowledgements
 
