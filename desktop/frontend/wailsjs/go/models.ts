@@ -151,6 +151,7 @@ export namespace main {
 	    }
 	}
 	export class RequestRecord {
+	    id?: string;
 	    createdAt?: string;
 	    time: string;
 	    method: string;
@@ -159,6 +160,8 @@ export namespace main {
 	    statusCode: number;
 	    duration: string;
 	    size?: string;
+	    hasReqBody?: boolean;
+	    hasRespBody?: boolean;
 	    inputTokens?: number;
 	    outputTokens?: number;
 	    totalTokens?: number;
@@ -171,6 +174,7 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.createdAt = source["createdAt"];
 	        this.time = source["time"];
 	        this.method = source["method"];
@@ -179,6 +183,8 @@ export namespace main {
 	        this.statusCode = source["statusCode"];
 	        this.duration = source["duration"];
 	        this.size = source["size"];
+	        this.hasReqBody = source["hasReqBody"];
+	        this.hasRespBody = source["hasRespBody"];
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
 	        this.totalTokens = source["totalTokens"];

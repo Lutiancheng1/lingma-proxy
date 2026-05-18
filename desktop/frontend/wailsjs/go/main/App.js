@@ -30,12 +30,28 @@ export function GetDetectionInfo() {
   return window['go']['main']['App']['GetDetectionInfo']();
 }
 
+export function GetLogDetail(arg1) {
+  return window['go']['main']['App']['GetLogDetail'](arg1);
+}
+
+export function GetLogSummaries() {
+  return window['go']['main']['App']['GetLogSummaries']();
+}
+
 export function GetLogs() {
   return window['go']['main']['App']['GetLogs']();
 }
 
 export function GetModels() {
   return window['go']['main']['App']['GetModels']();
+}
+
+export function GetRequestDetail(arg1) {
+  return window['go']['main']['App']['GetRequestDetail'](arg1);
+}
+
+export function GetRequestSummaries() {
+  return window['go']['main']['App']['GetRequestSummaries']();
 }
 
 export function GetRequests() {

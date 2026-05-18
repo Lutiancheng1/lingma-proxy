@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Tightened desktop-side request/log rendering to keep only summaries in hot UI state and load full request or log bodies on demand.
+- Reduced dashboard refresh pressure further by polling lightweight request summaries instead of full request payloads.
+- Added in-panel `Cmd/Ctrl+F` search for desktop request/response detail viewers, including scoped search boxes, highlighted matches, and next/previous navigation inside the active content pane.
+- Fixed desktop request-stream selection edge cases: same-second requests now use stable UUIDs, Dashboard-to-Requests first-click jump no longer loses selection, and request rows keep a stable “has body / no body” summary to avoid layout jitter.
+- Corrected desktop and README model metadata copy: `Qwen3-Coder` now uses a conservative `256k` label, while `Qwen3.6-Plus` and `Qwen3-Thinking` are documented as `1M` and `Qwen3-Max` as `256k` based on the latest verified Bailian-side metadata.
+- Bumped the local desktop validation line to `1.5.2`.
+- 请求流和日志页进一步收紧为“摘要列表 + 详情按需加载”，避免前端热路径长期持有完整正文。
+- 仪表盘继续降载，轮询时优先拉取轻量请求摘要而不是完整请求体。
+- 请求内容 / 响应内容区域新增 `Cmd/Ctrl+F` 局部搜索，支持右上角搜索框、命中高亮、上下跳转，并且只作用于当前激活的内容面板。
+- 修复请求流选中与跳转细节：同秒请求改用 UUID 防止多条同时高亮；首页最近请求首次跳转到请求流时不再丢失选中；列表稳定保留“包含请求体 / 无请求体”摘要，避免点击后行高抖动。
+- 修正文案：模型上下文单位统一为 `256k / 1M` 口径，`Qwen3-Coder` 为保守的 `256k`，`Qwen3.6-Plus`、`Qwen3-Thinking` 为 `1M`，`Qwen3-Max` 为 `256k`。
+- 本地桌面端候选版本线提升到 `1.5.2`。
+
 ## v1.5.1 - 2026-05-15
 
 - Clarified the Remote API reasoning boundary: the proxy forwards `thinking` / `reasoning` intent, but the current upstream remote SSE does not expose a separate structured reasoning block. This should not be interpreted as “the model did not reason internally”.

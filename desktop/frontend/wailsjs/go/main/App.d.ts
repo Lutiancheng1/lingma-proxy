@@ -17,9 +17,17 @@ export function GetConfig():Promise<service.Config>;
 
 export function GetDetectionInfo():Promise<main.DetectionInfo>;
 
+export function GetLogDetail(arg1:string):Promise<main.AppLog>;
+
+export function GetLogSummaries():Promise<Array<main.AppLog>>;
+
 export function GetLogs():Promise<Array<main.AppLog>>;
 
 export function GetModels():Promise<Array<main.ModelInfo>>;
+
+export function GetRequestDetail(arg1:string):Promise<main.RequestRecord>;
+
+export function GetRequestSummaries():Promise<Array<main.RequestRecord>>;
 
 export function GetRequests():Promise<Array<main.RequestRecord>>;
 

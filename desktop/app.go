@@ -22,22 +22,29 @@ import (
 	"lingma-ipc-proxy/internal/remote"
 	"lingma-ipc-proxy/internal/service"
 
+	"github.com/google/uuid"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const (
-	desktopAppVersion          = "1.5.1"
+	desktopAppVersion          = "1.5.2"
 	feedbackPayloadCharLimit   = 16000
 	feedbackStringFieldLimit   = 4096
 	feedbackDefaultRangePreset = "30m"
 	feedbackDesktopFolderName  = "Lingma Proxy Feedback"
 	proxyWarmupTimeout         = 30 * time.Second
+	appStateFlushInterval      = 3 * time.Second
+	appStatePersistRequestMax  = 300
+	appStatePersistLogMax      = 1000
+	appStatePersistBodyLimit   = 12000
+	listSummaryMessageLimit    = 240
 )
 
 // App struct
 // RequestRecord stores a single HTTP request summary
 type RequestRecord struct {
+	ID           string `json:"id,omitempty"`
 	CreatedAt    string `json:"createdAt,omitempty"`
 	Time         string `json:"time"`
 	Method       string `json:"method"`
@@ -46,6 +53,8 @@ type RequestRecord struct {
 	StatusCode   int    `json:"statusCode"`
 	Duration     string `json:"duration"`
 	Size         string `json:"size,omitempty"`
+	HasReqBody   bool   `json:"hasReqBody,omitempty"`
+	HasRespBody  bool   `json:"hasRespBody,omitempty"`
 	InputTokens  int    `json:"inputTokens,omitempty"`
 	OutputTokens int    `json:"outputTokens,omitempty"`
 	TotalTokens  int    `json:"totalTokens,omitempty"`
@@ -86,6 +95,9 @@ type App struct {
 	requests  []RequestRecord
 	logs      []AppLog
 	stats     TokenStats
+
+	stateFlushTimer *time.Timer
+	stateFlushAt    time.Time
 }
 
 // ModelInfo represents a model returned by /v1/models
@@ -271,6 +283,7 @@ func (a *App) forceQuit() {
 		return
 	}
 	a.quitting = true
+	a.flushAppStateLocked()
 	a.mu.Unlock()
 
 	a.emitLog("info", "正在停止代理并退出应用")
@@ -305,7 +318,7 @@ func (a *App) emitLog(level string, message string) {
 	}
 	a.saveAppStateLocked()
 	a.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "log", entry)
+	runtime.EventsEmit(a.ctx, "log", summarizeLogEntry(entry))
 }
 
 // GetStatus returns the current proxy status
@@ -480,6 +493,7 @@ func (a *App) StartProxy() error {
 		inputTokens, outputTokens := extractTokenUsage(respBody)
 		model := extractRequestModel(reqBody)
 		record := RequestRecord{
+			ID:           uuid.NewString(),
 			CreatedAt:    time.Now().Format(time.RFC3339),
 			Time:         time.Now().Format("15:04:05"),
 			Method:       method,
@@ -488,6 +502,8 @@ func (a *App) StartProxy() error {
 			StatusCode:   statusCode,
 			Duration:     duration.Round(time.Millisecond).String(),
 			Size:         formatPayloadSize(len(reqBody) + len(respBody)),
+			HasReqBody:   strings.TrimSpace(reqBody) != "",
+			HasRespBody:  strings.TrimSpace(respBody) != "",
 			InputTokens:  inputTokens,
 			OutputTokens: outputTokens,
 			TotalTokens:  inputTokens + outputTokens,
@@ -502,7 +518,7 @@ func (a *App) StartProxy() error {
 		a.accumulateTokenStatsLocked(record)
 		a.saveAppStateLocked()
 		a.mu.Unlock()
-		runtime.EventsEmit(a.ctx, "requests:updated", a.GetRequests())
+		runtime.EventsEmit(a.ctx, "requests:updated")
 		runtime.EventsEmit(a.ctx, "usage:updated", a.GetTokenStats())
 	}
 
@@ -569,12 +585,43 @@ func (a *App) GetLogs() []AppLog {
 	return out
 }
 
+// GetLogSummaries returns recent logs with truncated messages for lightweight list rendering.
+func (a *App) GetLogSummaries() []AppLog {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]AppLog, len(a.logs))
+	for i, entry := range a.logs {
+		cloned := entry
+		cloned.Message = trimListMessage(entry.Message)
+		out[i] = cloned
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+func (a *App) GetLogDetail(createdAt string) (AppLog, error) {
+	target := strings.TrimSpace(createdAt)
+	if target == "" {
+		return AppLog{}, fmt.Errorf("log createdAt is required")
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for i := len(a.logs) - 1; i >= 0; i-- {
+		if a.logs[i].CreatedAt == target {
+			return a.logs[i], nil
+		}
+	}
+	return AppLog{}, fmt.Errorf("log not found")
+}
+
 func (a *App) ClearLogs() {
 	a.mu.Lock()
 	a.logs = nil
 	a.saveAppStateLocked()
 	a.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "logs:updated", a.GetLogs())
+	runtime.EventsEmit(a.ctx, "logs:updated", a.GetLogSummaries())
 }
 
 func (a *App) ChooseFeedbackExportPath() (string, error) {
@@ -764,12 +811,46 @@ func (a *App) GetRequests() []RequestRecord {
 	return out
 }
 
+// GetRequestSummaries returns recent request records without large request/response bodies.
+func (a *App) GetRequestSummaries() []RequestRecord {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]RequestRecord, len(a.requests))
+	for i, record := range a.requests {
+		cloned := record
+		cloned.ReqBody = ""
+		cloned.RespBody = ""
+		out[i] = cloned
+	}
+	// reverse so newest first
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+func (a *App) GetRequestDetail(idOrCreatedAt string) (RequestRecord, error) {
+	target := strings.TrimSpace(idOrCreatedAt)
+	if target == "" {
+		return RequestRecord{}, fmt.Errorf("request id is required")
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for i := len(a.requests) - 1; i >= 0; i-- {
+		if a.requests[i].ID == target || a.requests[i].CreatedAt == target {
+			return a.requests[i], nil
+		}
+	}
+	return RequestRecord{}, fmt.Errorf("request not found")
+}
+
 // ClearRequests clears the request history
 func (a *App) ClearRequests() {
 	a.mu.Lock()
 	a.requests = nil
 	a.saveAppStateLocked()
 	a.mu.Unlock()
+	runtime.EventsEmit(a.ctx, "requests:updated")
 	a.emitLog("info", "Request history cleared")
 }
 
@@ -928,6 +1009,9 @@ func (a *App) loadAppState() error {
 		if backfillRequestCreatedAt(state.Requests, info.ModTime()) {
 			migrated = true
 		}
+		if backfillRequestIDs(state.Requests) {
+			migrated = true
+		}
 		if backfillLogCreatedAt(state.Logs, info.ModTime()) {
 			migrated = true
 		}
@@ -942,12 +1026,33 @@ func (a *App) loadAppState() error {
 	}
 	a.reconcileTokenStatsLocked()
 	if migrated {
-		a.saveAppStateLocked()
+		a.flushAppStateLocked()
 	}
 	return nil
 }
 
 func (a *App) saveAppStateLocked() {
+	a.stateFlushAt = time.Now().Add(appStateFlushInterval)
+	if a.stateFlushTimer != nil {
+		a.stateFlushTimer.Reset(appStateFlushInterval)
+		return
+	}
+	a.stateFlushTimer = time.AfterFunc(appStateFlushInterval, func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if time.Now().Before(a.stateFlushAt) {
+			return
+		}
+		a.flushAppStateLocked()
+	})
+}
+
+func (a *App) flushAppStateLocked() {
+	if a.stateFlushTimer != nil {
+		a.stateFlushTimer.Stop()
+		a.stateFlushTimer = nil
+	}
+	a.stateFlushAt = time.Time{}
 	path, err := appStatePath()
 	if err != nil {
 		runtime.LogWarningf(a.ctx, "resolve app state path failed: %v", err)
@@ -958,8 +1063,8 @@ func (a *App) saveAppStateLocked() {
 		return
 	}
 	state := appStateFile{
-		Requests: a.requests,
-		Logs:     a.logs,
+		Requests: trimPersistedRequests(a.requests),
+		Logs:     trimPersistedLogs(a.logs),
 		Stats:    a.stats,
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
@@ -970,6 +1075,58 @@ func (a *App) saveAppStateLocked() {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		runtime.LogWarningf(a.ctx, "write app state failed: %v", err)
 	}
+}
+
+func trimPersistedRequests(records []RequestRecord) []RequestRecord {
+	if len(records) == 0 {
+		return nil
+	}
+	start := 0
+	if len(records) > appStatePersistRequestMax {
+		start = len(records) - appStatePersistRequestMax
+	}
+	out := make([]RequestRecord, 0, len(records)-start)
+	for _, record := range records[start:] {
+		cloned := record
+		cloned.ReqBody = trimStatePayload(record.ReqBody)
+		cloned.RespBody = trimStatePayload(record.RespBody)
+		out = append(out, cloned)
+	}
+	return out
+}
+
+func trimPersistedLogs(records []AppLog) []AppLog {
+	if len(records) == 0 {
+		return nil
+	}
+	start := 0
+	if len(records) > appStatePersistLogMax {
+		start = len(records) - appStatePersistLogMax
+	}
+	out := make([]AppLog, len(records)-start)
+	copy(out, records[start:])
+	return out
+}
+
+func trimStatePayload(text string) string {
+	if len(text) <= appStatePersistBodyLimit {
+		return text
+	}
+	return text[:appStatePersistBodyLimit] + "\n... [truncated for desktop state cache]"
+}
+
+func trimListMessage(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if len(trimmed) <= listSummaryMessageLimit {
+		return trimmed
+	}
+	return trimmed[:listSummaryMessageLimit] + "..."
+}
+
+func summarizeLogEntry(entry AppLog) AppLog {
+	cloned := entry
+	cloned.Message = trimListMessage(entry.Message)
+	return cloned
 }
 
 func appStatePath() (string, error) {
@@ -1258,6 +1415,21 @@ func backfillRequestCreatedAt(records []RequestRecord, anchor time.Time) bool {
 	})
 }
 
+func backfillRequestIDs(records []RequestRecord) bool {
+	if len(records) == 0 {
+		return false
+	}
+	mutated := false
+	for i := range records {
+		if strings.TrimSpace(records[i].ID) != "" {
+			continue
+		}
+		records[i].ID = uuid.NewString()
+		mutated = true
+	}
+	return mutated
+}
+
 func backfillLogCreatedAt(records []AppLog, anchor time.Time) bool {
 	return backfillCreatedAt(anchor, len(records), func(i int) string {
 		return records[i].CreatedAt
@@ -1330,6 +1502,7 @@ func sanitizeRequests(requests []RequestRecord) []RequestRecord {
 	out := make([]RequestRecord, 0, len(requests))
 	for _, record := range requests {
 		out = append(out, RequestRecord{
+			ID:           record.ID,
 			CreatedAt:    record.CreatedAt,
 			Time:         record.Time,
 			Method:       record.Method,
@@ -1338,6 +1511,8 @@ func sanitizeRequests(requests []RequestRecord) []RequestRecord {
 			StatusCode:   record.StatusCode,
 			Duration:     record.Duration,
 			Size:         record.Size,
+			HasReqBody:   record.HasReqBody,
+			HasRespBody:  record.HasRespBody,
 			InputTokens:  record.InputTokens,
 			OutputTokens: record.OutputTokens,
 			TotalTokens:  record.TotalTokens,

@@ -21,43 +21,43 @@ function modelSpec(model) {
   const text = `${model.id} ${model.name}`.toLowerCase()
   if (text.includes('kmodel') || text.includes('kimi')) {
     return {
-      context: '256K',
+      context: '256k',
       capability: '文本/图像/视频/工具',
       source: 'Kimi 官方',
     }
   }
   if (text.includes('mmodel') || text.includes('minimax')) {
     return {
-      context: '200K',
+      context: '200k',
       capability: 'Agent / Tool Use',
       source: 'MiniMax 官方',
     }
   }
   if (text.includes('coder')) {
     return {
-      context: '1M',
-      capability: '思考 / Function Calling / 结构化输出',
-      source: '阿里云百炼 Qwen3-Coder',
+      context: '256k',
+      capability: 'Agentic Coding / Function Calling',
+      source: 'Qwen 官方 / 阿里云百炼',
     }
   }
   if (text.includes('thinking')) {
     return {
-      context: '256K',
+      context: '1M',
       capability: '思考 / Function Calling / 推理',
       source: '阿里云百炼 Qwen3',
     }
   }
   if (text.includes('qwen_max') || text.includes('qwen3-max')) {
     return {
-      context: '256K',
-      capability: '思考 / Function Calling / 内置工具',
+      context: '256k',
+      capability: 'Agent / Tool Invocation',
       source: '阿里云百炼 Qwen3-Max',
     }
   }
   if (text.includes('qmodel') || text.includes('qwen3.6')) {
     return {
       context: '1M',
-      capability: 'Function Calling / 内置工具 / 结构化输出',
+      capability: '通用 / 多模态 / 代码增强',
       source: '阿里云百炼 Qwen3.6-Plus',
     }
   }

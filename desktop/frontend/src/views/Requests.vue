@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ClearRequests, GetRequests } from '../../wailsjs/go/main/App.js'
+import { ClearRequests, GetRequestDetail, GetRequestSummaries } from '../../wailsjs/go/main/App.js'
 import { ClipboardSetText, EventsOff, EventsOn } from '../../wailsjs/runtime'
 import JsonViewer from '../components/JsonViewer.vue'
 
@@ -15,14 +15,24 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['notice'])
+const emit = defineEmits(['notice', 'request-selected'])
 
 const requests = ref(Array.isArray(props.initialRequests) ? [...props.initialRequests] : [])
-const selected = ref(null)
+const selectedKey = ref(null)
+const selectedDetail = ref(null)
+const detailLoading = ref(false)
 const query = ref('')
 const activeStatus = ref('all')
 const pendingSelectId = ref(null)
 const loading = ref(requests.value.length === 0)
+const activeDetailPane = ref('request')
+const requestViewerRef = ref(null)
+const responseViewerRef = ref(null)
+let refreshTimer = null
+
+function requestKey(request) {
+  return request?.id || request?.createdAt || request?.time || ''
+}
 
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
@@ -43,14 +53,13 @@ async function refresh() {
     loading.value = true
   }
   try {
-    requests.value = await GetRequests()
-    // 数据加载完成后，如果有待选中的请求 ID，执行选中
+    requests.value = await GetRequestSummaries()
     if (pendingSelectId.value) {
       selectRequestById(pendingSelectId.value)
       pendingSelectId.value = null
     }
   } catch (e) {
-    console.debug('Wails GetRequests unavailable in browser preview')
+    console.debug('Wails GetRequestSummaries unavailable in browser preview')
   } finally {
     loading.value = false
   }
@@ -63,7 +72,8 @@ async function clear() {
     console.debug('Wails ClearRequests unavailable in browser preview')
   }
   requests.value = []
-  selected.value = null
+  selectedKey.value = null
+  selectedDetail.value = null
 }
 
 function statusClass(code) {
@@ -72,25 +82,49 @@ function statusClass(code) {
   return 'warn'
 }
 
-function selectRow(index) {
-  selected.value = selected.value === index ? null : index
+async function loadDetail(requestId) {
+  const key = (requestId || '').trim()
+  if (!key) {
+    selectedDetail.value = null
+    return
+  }
+  detailLoading.value = true
+  try {
+    selectedDetail.value = await GetRequestDetail(key)
+  } catch (e) {
+    console.debug('Wails GetRequestDetail unavailable in browser preview')
+    selectedDetail.value = requests.value.find((item) => requestKey(item) === key) || null
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function selectRow(request) {
+  const key = requestKey(request)
+  if (!key) return
+  if (selectedKey.value === key) {
+    selectedKey.value = null
+    selectedDetail.value = null
+    return
+  }
+  selectedKey.value = key
+  await loadDetail(key)
 }
 
 function selectRequestById(requestId) {
   if (!requestId) return
-  const index = filtered.value.findIndex(req => req.createdAt === requestId || req.time === requestId)
-  if (index !== -1) {
-    selected.value = index
-    // 滚动到选中的行
+  const match = filtered.value.find((req) => req.id === requestId || req.createdAt === requestId || req.time === requestId)
+  if (match) {
+    selectedKey.value = requestKey(match)
+    loadDetail(requestKey(match))
+    emit('request-selected', requestId)
     setTimeout(() => {
       const row = document.querySelector('.data-table tbody tr.selected')
-      if (row) {
-        row.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      }
+      row?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 100)
-  } else if (requests.value.length === 0) {
-    // 如果数据还没加载，保存待选中的 ID
+  } else {
     pendingSelectId.value = requestId
+    emit('request-selected', requestId)
   }
 }
 
@@ -106,7 +140,6 @@ watch(() => props.initialRequests, (nextRequests) => {
   loading.value = false
 }, { deep: true })
 
-// 监听 requests 数据变化，如果有待选中的 ID 则执行选中
 watch(() => requests.value.length, (newLength, oldLength) => {
   if (newLength > 0 && oldLength === 0 && pendingSelectId.value) {
     selectRequestById(pendingSelectId.value)
@@ -151,6 +184,13 @@ function safeEventsOff(name) {
   }
 }
 
+function scheduleRefresh() {
+  clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(() => {
+    refresh()
+  }, 180)
+}
+
 function formatDateTime(request) {
   if (request.createdAt) {
     try {
@@ -178,15 +218,38 @@ function formatDateTime(request) {
   return request.time || '-'
 }
 
+function rowSubText(request) {
+  return request?.hasReqBody ? '包含请求体' : '无请求体'
+}
+
+function setActiveDetailPane(pane) {
+  activeDetailPane.value = pane
+}
+
+function activeViewer() {
+  return activeDetailPane.value === 'response' ? responseViewerRef.value : requestViewerRef.value
+}
+
+function onGlobalKeydown(event) {
+  if (!selectedKey.value) return
+  const shortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f'
+  if (!shortcut) return
+  event.preventDefault()
+  activeViewer()?.toggleFinder?.()
+}
+
 onMounted(() => {
   refresh()
-  safeEventsOn('requests:updated', (data) => {
-    requests.value = data || []
+  safeEventsOn('requests:updated', () => {
+    scheduleRefresh()
   })
+  window.addEventListener('keydown', onGlobalKeydown)
 })
 
 onUnmounted(() => {
+  clearTimeout(refreshTimer)
   safeEventsOff('requests:updated')
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 </script>
 
@@ -232,15 +295,15 @@ onUnmounted(() => {
           <tbody>
             <tr
               v-for="(request, index) in filtered"
-              :key="index"
-              :class="{ selected: selected === index }"
-              @click="selectRow(index)"
+              :key="request.id || request.createdAt || `${request.time}-${index}`"
+              :class="{ selected: selectedKey === requestKey(request) }"
+              @click="selectRow(request)"
             >
               <td>{{ formatDateTime(request) }}</td>
               <td><span class="method-chip">{{ request.method }}</span></td>
               <td>
                 <div class="cell-main">{{ request.path }}</div>
-                <div class="cell-sub">{{ request.reqBody ? '包含请求体' : '无请求体' }}</div>
+                <div class="cell-sub">{{ rowSubText(request) }}</div>
               </td>
               <td>{{ request.model || '-' }}</td>
               <td><span class="status-chip" :class="statusClass(request.statusCode)">{{ request.statusCode }}</span></td>
@@ -252,29 +315,42 @@ onUnmounted(() => {
       <div v-else-if="loading" class="empty-state">加载请求记录中...</div>
       <div v-else class="empty-state">暂无匹配请求。</div>
 
-      <div v-if="selected !== null && filtered[selected]" class="detail-panel hidden-scrollbar">
-        <div class="detail-section">
-          <div class="detail-toolbar">
-            <h3>请求内容</h3>
-            <div class="detail-actions">
-              <button type="button" class="ghost-button" @click="copyText(filtered[selected].reqBody, '请求内容')">
-                复制
-              </button>
+      <div v-if="selectedKey" class="detail-panel hidden-scrollbar">
+        <div v-if="detailLoading" class="empty-state">加载完整请求详情中...</div>
+        <template v-else>
+          <div class="detail-section">
+            <div class="detail-toolbar">
+              <h3>请求内容</h3>
+              <div class="detail-actions">
+                <button type="button" class="ghost-button" @click="copyText(selectedDetail?.reqBody, '请求内容')">
+                  复制
+                </button>
+              </div>
             </div>
+            <JsonViewer
+              ref="requestViewerRef"
+              :body="selectedDetail?.reqBody"
+              empty-text="空请求体"
+              @activated="setActiveDetailPane('request')"
+            />
           </div>
-          <JsonViewer :body="filtered[selected].reqBody" empty-text="空请求体" />
-        </div>
-        <div class="detail-section">
-          <div class="detail-toolbar">
-            <h3>响应内容</h3>
-            <div class="detail-actions">
-              <button type="button" class="ghost-button" @click="copyText(filtered[selected].respBody, '响应内容')">
-                复制
-              </button>
+          <div class="detail-section">
+            <div class="detail-toolbar">
+              <h3>响应内容</h3>
+              <div class="detail-actions">
+                <button type="button" class="ghost-button" @click="copyText(selectedDetail?.respBody, '响应内容')">
+                  复制
+                </button>
+              </div>
             </div>
+            <JsonViewer
+              ref="responseViewerRef"
+              :body="selectedDetail?.respBody"
+              empty-text="空响应体"
+              @activated="setActiveDetailPane('response')"
+            />
           </div>
-          <JsonViewer :body="filtered[selected].respBody" empty-text="空响应体" />
-        </div>
+        </template>
       </div>
     </section>
   </div>

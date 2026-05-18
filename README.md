@@ -28,7 +28,7 @@ The proxy now supports two backend modes:
 
 ## Current Version
 
-The current desktop line is `v1.5.1`.
+The current desktop line is `v1.5.2`.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release history.
 
@@ -373,7 +373,7 @@ These examples are based on clients we have actually validated against Lingma Pr
 | **Claude Code** | ✅ Fully Tested | Text chat, tool use, image input, image + tools | Anthropic API compatible |
 | **Hermes Agent** | ✅ Fully Tested | Text chat, tool-enabled coding, `--image` flag | OpenAI API compatible |
 | **CodeBuddy** | ✅ Fully Tested | Standard chat, token usage accounting | OpenAI-compatible custom model |
-| **Codex CLI** | ✅ Fully Tested | Plain text execution, multi-step tool use, file edits + diff, image input, image + tool follow-up | Requires `/v1/responses` endpoint, `wire_api = "responses"`, validated against desktop app `v1.5.1`, retry recovery also verified |
+| **Codex CLI** | ✅ Fully Tested | Plain text execution, multi-step tool use, file edits + diff, image input, image + tool follow-up | Requires `/v1/responses` endpoint, `wire_api = "responses"`, validated against desktop app `v1.5.2`, retry recovery also verified |
 
 ### Claude Code
 
@@ -599,11 +599,12 @@ The proxy only reports models actually exposed by your Lingma plugin. The table 
 
 | Model | Best use | Context / capability basis |
 | --- | --- | --- |
-| `Kimi-K2.6` (`kmodel` in remote mode) | Default recommendation for remote API mode and third-party agents | Kimi's [official API docs](https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart) describe native text/image/video input, a 256K context window, and multi-step tool invocation support. Local Claude Code testing showed cleaner native tool execution in remote mode. |
-| `MiniMax-M2.7` (`mmodel` in remote mode) | Fast fallback | NVIDIA's [MiniMax M2.7 model card](https://developer.nvidia.com/blog/minimax-m2-7-advances-scalable-agentic-workflows-on-nvidia-platforms-for-complex-ai-applications/) describes a language MoE model with 200K input context and agentic use cases; local proxy testing passed read/search/terminal/web/patch/vision smoke tests and was fast in previous runs. |
-| `Qwen3-Coder` | Code-specialized fallback | Qwen's [official blog](https://qwenlm.github.io/blog/qwen3-coder/) describes 256K native context, up to 1M with extrapolation, and agentic coding/tool protocols. |
-| `Qwen3.6-Plus` | General/vision fallback | Exposed by Lingma and passed local smoke tests, but this repository does not have an official Lingma-specific context-length source for it. |
-| `Qwen3-Max` | Fast general/vision model | Exposed by Lingma and strong in simple tests, but less stable on forced edit/read tool calls in this proxy. |
+| `Kimi-K2.6` (`kmodel` in remote mode) | Default recommendation for remote API mode and third-party agents | Kimi's [official API docs](https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart) describe native text/image/video input, a `256k` context window, and multi-step tool invocation support. Local Claude Code testing showed cleaner native tool execution in remote mode. |
+| `MiniMax-M2.7` (`mmodel` in remote mode) | Fast fallback | NVIDIA's [MiniMax M2.7 model card](https://developer.nvidia.com/blog/minimax-m2-7-advances-scalable-agentic-workflows-on-nvidia-platforms-for-complex-ai-applications/) describes a language MoE model with `200k` input context and agentic use cases; local proxy testing passed read/search/terminal/web/patch/vision smoke tests and was fast in previous runs. |
+| `Qwen3-Coder` | Code-specialized fallback | Qwen's [official materials](https://github.com/qwenlm/qwen-code/blob/main/docs/users/configuration/model-providers.md) position it as a coding-focused model. This repository uses the conservative `256k` context wording instead of advertising `1M` as a stable default in the Lingma integration. |
+| `Qwen3.6-Plus` | General/vision fallback | User-verified Alibaba Cloud Bailian metadata indicates a `1M` context window. In local Lingma Proxy testing it behaves as a general/vision-capable fallback. |
+| `Qwen3-Max` | Fast general/vision model | User-verified Alibaba Cloud Bailian metadata indicates a `256k` context window. In this proxy it is strong on simpler tool/vision tasks, but less stable on forced edit/read chains. |
+| `Qwen3-Thinking` | Reasoning-first IPC recommendation | User-verified Alibaba Cloud Bailian metadata indicates a `1M` context window. It remains the safest current pick when you want visible IPC reasoning panels across the tested clients. |
 
 Default model when the client omits `model`: `kmodel` (`Kimi-K2.6` in the remote model list).
 
@@ -774,7 +775,7 @@ Recommended local release-candidate checklist:
 
 The GitHub release workflow is triggered by:
 
-- pushing a tag such as `v1.5.1`
+- pushing a tag such as `v1.5.2`
 - manually running the `Release` workflow with a tag input
 
 Recommended remote release checklist:
@@ -787,14 +788,14 @@ Recommended remote release checklist:
 
 If you need a temporary packaging tag without changing the app's internal version line, use a suffix tag such as `v1.4.15-fix1`. The GitHub workflow will still package the latest code because the workflow matches `v*`.
 
-### Suggested release summary for v1.5.1
+### Suggested release summary for v1.5.2
 
 Use the following as the GitHub Release body draft:
 
 - Added stable OpenAI Responses API compatibility for Codex CLI (`/v1/responses`, `/api/v1/responses`).
 - Fixed Codex multi-step tool workflows so project-structure reading, command execution, file edits, and unified diff output complete through Lingma Proxy instead of failing with repeated `502` retries.
 - Fixed Remote API image-context fallback so image-bearing requests can continue into tool-enabled turns after IPC image extraction.
-- Verified the desktop app `v1.5.1` against Brew-installed `codex-cli 0.130.0`, including plain text, multi-step tools, file edit + diff, image input, image + tool follow-up, and retry recovery after desktop app restart.
+- Verified the desktop app `v1.5.2` against Brew-installed `codex-cli 0.130.0`, including plain text, multi-step tools, file edit + diff, image input, image + tool follow-up, and retry recovery after desktop app restart.
 - Kept Remote API as the default recommended backend while retaining IPC plugin mode as a compatibility fallback.
 
 ## Star History

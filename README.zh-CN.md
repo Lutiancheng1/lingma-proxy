@@ -31,7 +31,7 @@
 
 ## 当前版本
 
-当前桌面端版本线：`v1.5.1`
+当前桌面端版本线：`v1.5.2`
 
 版本更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
@@ -449,7 +449,7 @@ cd lingma-proxy
 | **Claude Code** | ✅ 完整测试 | 文本聊天、工具调用、图片输入、图片+工具 | Anthropic API 兼容 |
 | **Hermes Agent** | ✅ 完整测试 | 文本聊天、工具编程任务、`--image` 图片理解 | OpenAI API 兼容 |
 | **CodeBuddy** | ✅ 完整测试 | 标准聊天、token 统计 | OpenAI 兼容自定义模型 |
-| **Codex CLI** | ✅ 完整测试 | 纯文本执行、多步工具调用、文件修改+diff、图片输入、图片+工具后续调用 | 需要 `/v1/responses` 端点，配置 `wire_api = "responses"`；已基于桌面版 `v1.5.1` 实测，重试恢复也已验证 |
+| **Codex CLI** | ✅ 完整测试 | 纯文本执行、多步工具调用、文件修改+diff、图片输入、图片+工具后续调用 | 需要 `/v1/responses` 端点，配置 `wire_api = "responses"`；已基于桌面版 `v1.5.2` 实测，重试恢复也已验证 |
 
 ### Claude Code
 
@@ -678,11 +678,12 @@ codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --js
 
 | 模型 | 推荐场景 | 参数 / 能力依据 |
 | --- | --- | --- |
-| `Kimi-K2.6`（远端模式 ID 为 `kmodel`） | 远端 API 模式和第三方 Agent 默认推荐 | Kimi [官方 API 文档](https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart) 标注原生 text/image/video、多步工具调用和 256K 上下文。本地 Claude Code 远端模式测试里工具执行更自然。 |
-| `MiniMax-M2.7`（远端模式 ID 为 `mmodel`） | 速度优先备选 | NVIDIA 的 [MiniMax M2.7 模型卡](https://developer.nvidia.com/blog/minimax-m2-7-advances-scalable-agentic-workflows-on-nvidia-platforms-for-complex-ai-applications/) 标注 200K input context、MoE 语言模型和 agentic 场景；此前本地代理压测 read/search/terminal/web/patch/vision 全部通过，响应速度较快。 |
-| `Qwen3-Coder` | 代码专项和工具协议备选 | Qwen [官方博客](https://qwenlm.github.io/blog/qwen3-coder/) 标注 256K 原生上下文、可扩展到 1M，以及 agentic coding / function calling 协议。 |
-| `Qwen3.6-Plus` | 通用 / 视觉备选 | Lingma 暴露且本地实测可用，但本仓库没有找到 Lingma 专属的官方上下文长度来源。 |
-| `Qwen3-Max` | 快速通用 / 视觉备选 | 简单工具和视觉测试表现好，但强制 read/patch 场景在本代理里不如 MiniMax / Kimi 稳。 |
+| `Kimi-K2.6`（远端模式 ID 为 `kmodel`） | 远端 API 模式和第三方 Agent 默认推荐 | Kimi [官方 API 文档](https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart) 标注原生 text/image/video、多步工具调用和 `256k` 上下文。本地 Claude Code 远端模式测试里工具执行更自然。 |
+| `MiniMax-M2.7`（远端模式 ID 为 `mmodel`） | 速度优先备选 | NVIDIA 的 [MiniMax M2.7 模型卡](https://developer.nvidia.com/blog/minimax-m2-7-advances-scalable-agentic-workflows-on-nvidia-platforms-for-complex-ai-applications/) 标注 `200k` input context、MoE 语言模型和 agentic 场景；此前本地代理压测 read/search/terminal/web/patch/vision 全部通过，响应速度较快。 |
+| `Qwen3-Coder` | 代码专项和工具协议备选 | Qwen [官方资料](https://github.com/qwenlm/qwen-code/blob/main/docs/users/configuration/model-providers.md) 明确其定位是代码专项模型。本仓库在 Lingma 集成场景下采用更保守的 `256k` 上下文文案，不把 `1M` 当作稳定默认能力宣传。 |
+| `Qwen3.6-Plus` | 通用 / 视觉备选 | 按用户核对的阿里云百炼参数，`Qwen3.6-Plus` 为 `1M` 上下文窗口；在本地 Lingma Proxy 测试里适合作为通用 / 视觉备选。 |
+| `Qwen3-Max` | 快速通用 / 视觉备选 | 按用户核对的阿里云百炼参数，`Qwen3-Max` 为 `256k` 上下文窗口；简单工具和视觉测试表现好，但强制 read/patch 场景在本代理里不如 MiniMax / Kimi 稳。 |
+| `Qwen3-Thinking` | IPC 思考显示优先推荐 | 按用户核对的阿里云百炼参数，`Qwen3-Thinking` 为 `1M` 上下文窗口；如果你希望在已测试的 IPC 客户端里尽量看到独立思考过程，优先选它。 |
 
 当客户端请求没有携带 `model` 字段时，代理默认使用：`kmodel`（远端模型列表里的 Kimi-K2.6）。
 
@@ -900,14 +901,14 @@ Release workflow 会执行：
 
 如果只是临时补打一轮远端包、不想改 App 内部版本号，可以使用 `v1.4.15-fix1` 这种后缀 tag。GitHub Release workflow 仍然会因为匹配 `v*` 而打出最新代码对应的包。
 
-### 建议的 v1.5.1 Release 文案
+### 建议的 v1.5.2 Release 文案
 
 可以直接作为 GitHub Release 正文使用：
 
 - 增加 OpenAI Responses API 兼容层，补齐 `/v1/responses` 和 `/api/v1/responses`，满足 Codex CLI 接入要求。
 - 修复 Codex 多步工具工作流：项目结构读取、命令执行、文件修改和 unified diff 返回现在都能通过 Lingma Proxy 稳定完成，不再因为事件序列不完整而反复重试 `502`。
 - 修复 Remote API 图片上下文兜底：带图请求在 IPC 提取图片后，仍可继续进入带工具的后续轮次。
-- 基于桌面版 `v1.5.1` 和 Brew 安装版 `codex-cli 0.130.0` 完整验证：纯文本、多步工具、文件修改 + diff、图片输入、图片 + 工具后续调用，以及桌面端重启后的重试恢复。
+- 基于桌面版 `v1.5.2` 和 Brew 安装版 `codex-cli 0.130.0` 完整验证：纯文本、多步工具、文件修改 + diff、图片输入、图片 + 工具后续调用，以及桌面端重启后的重试恢复。
 - 保持 Remote API 作为默认推荐后端，同时保留 IPC 插件模式作为兼容兜底。
 
 ## 与上游项目的关系

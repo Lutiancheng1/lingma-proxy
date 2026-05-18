@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { GetModels, GetConfig, GetRequests, GetStatus, GetTokenStats, QuitApp, RefreshModels, StartProxy, StopProxy } from '../../wailsjs/go/main/App.js'
+import { GetModels, GetConfig, GetRequestSummaries, GetStatus, GetTokenStats, QuitApp, RefreshModels, StartProxy, StopProxy } from '../../wailsjs/go/main/App.js'
 import { ClipboardSetText } from '../../wailsjs/runtime'
 import { modelIcon } from '../modelIcons'
 
@@ -26,6 +26,7 @@ const activeHealthStat = ref('')
 const now = ref(Date.now())
 let interval = null
 let clockInterval = null
+let fastRefreshTick = 0
 
 const endpoint = computed(() => (status.value.addr ? `http://${status.value.addr}` : '未启动'))
 const isRunning = computed(() => Boolean(status.value.running))
@@ -121,16 +122,18 @@ function formatNumber(value) {
   return n.toLocaleString('zh-CN')
 }
 
-async function refresh() {
+async function refresh(light = false) {
   try {
     const nextStatus = await GetStatus()
     status.value = nextStatus
     emit('status', nextStatus)
-    requests.value = await GetRequests()
-    tokenStats.value = await GetTokenStats()
-    config.value = await GetConfig()
-    if (nextStatus.running) {
-      models.value = await GetModels()
+    if (!light) {
+      requests.value = await GetRequestSummaries()
+      tokenStats.value = await GetTokenStats()
+      config.value = await GetConfig()
+      if (nextStatus.running) {
+        models.value = await GetModels()
+      }
     }
   } catch (e) {
     emit('log', 'error', '刷新仪表盘失败：' + (e.message || String(e)))
@@ -230,7 +233,7 @@ function statusClass(code) {
 }
 
 function openRequestDetail(request) {
-  emit('open-request-detail', request.createdAt || request.time)
+  emit('open-request-detail', request.id || request.createdAt || request.time)
 }
 
 function formatDateTime(request) {
@@ -262,7 +265,12 @@ function formatDateTime(request) {
 
 onMounted(() => {
   refresh()
-  interval = setInterval(refresh, 2500)
+  interval = setInterval(() => {
+    if (document.hidden) return
+    fastRefreshTick += 1
+    const light = fastRefreshTick % 4 !== 0
+    refresh(light)
+  }, 2500)
   clockInterval = setInterval(() => {
     now.value = Date.now()
   }, 1000)

@@ -6,7 +6,7 @@ import Models from './views/Models.vue'
 import Requests from './views/Requests.vue'
 import Settings from './views/Settings.vue'
 import { ClipboardSetText, EventsOff, EventsOn } from '../wailsjs/runtime'
-import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetLogs, GetRequests, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager } from '../wailsjs/go/main/App.js'
+import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetLogSummaries, GetRequestSummaries, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager } from '../wailsjs/go/main/App.js'
 import lingmaIcon from './assets/images/lingma-icon.png'
 
 const currentTab = ref('dashboard')
@@ -44,6 +44,7 @@ const feedbackForm = reactive({
 })
 let systemThemeQuery = null
 let toastTimer = null
+let requestsRefreshTimer = null
 
 const navigation = [
   { key: 'dashboard', label: '仪表盘', icon: 'bi-house-door' },
@@ -90,10 +91,10 @@ function handleNotice(message) {
 function handleOpenRequestDetail(requestId) {
   selectedRequestId.value = requestId
   currentTab.value = 'requests'
-  // 清除选中状态，以便下次点击同一个请求时也能触发
-  setTimeout(() => {
-    selectedRequestId.value = null
-  }, 500)
+}
+
+function handleRequestSelectionAck() {
+  selectedRequestId.value = null
 }
 
 function resolveTheme() {
@@ -136,11 +137,20 @@ async function refreshStatus() {
 
 async function primeRequests() {
   try {
-    const items = await GetRequests()
+    const items = await GetRequestSummaries()
     requestSnapshot.value = Array.isArray(items) ? items : []
   } catch (e) {
     console.debug('Wails GetRequests unavailable in app shell')
   }
+}
+
+function scheduleRequestSnapshotRefresh() {
+  clearTimeout(requestsRefreshTimer)
+  requestsRefreshTimer = setTimeout(() => {
+    if (currentTab.value === 'requests' || requestSnapshot.value.length === 0) {
+      primeRequests()
+    }
+  }, 180)
 }
 
 async function copyEndpoint() {
@@ -286,7 +296,7 @@ onMounted(() => {
   applyTheme()
   refreshStatus()
   primeRequests()
-  GetLogs().then((items) => {
+  GetLogSummaries().then((items) => {
     logs.value = Array.isArray(items) ? items : []
   }).catch(() => {})
   safeEventsOn('models:updated', (data) => {
@@ -300,7 +310,6 @@ onMounted(() => {
     } else {
       addLog(data.level || 'info', data.message || '')
     }
-    refreshStatus()
   })
   safeEventsOn('logs:updated', (data) => {
     logs.value = Array.isArray(data) ? data : []
@@ -311,19 +320,15 @@ onMounted(() => {
   safeEventsOn('status:updated', (nextStatus) => {
     status.value = nextStatus
   })
-  safeEventsOn('requests:updated', async (data) => {
-    if (Array.isArray(data)) {
-      requestSnapshot.value = data
-    } else {
-      await primeRequests()
-    }
-    refreshStatus()
+  safeEventsOn('requests:updated', () => {
+    scheduleRequestSnapshotRefresh()
   })
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleAppShortcut, true)
   clearTimeout(toastTimer)
+  clearTimeout(requestsRefreshTimer)
   systemThemeQuery?.removeEventListener?.('change', applyTheme)
   safeEventsOff('models:updated')
   safeEventsOff('log')
@@ -367,7 +372,7 @@ onUnmounted(() => {
         <span class="status-dot" :class="{ running: status.running }"></span>
         <div>
           <strong>{{ status.running ? 'Proxy Running' : 'Proxy Stopped' }}</strong>
-          <small>v1.5.1</small>
+          <small>v1.5.2</small>
         </div>
       </div>
     </aside>
@@ -415,6 +420,7 @@ onUnmounted(() => {
             :selected-request-id="selectedRequestId"
             :initial-requests="requestSnapshot"
             @notice="handleNotice"
+            @request-selected="handleRequestSelectionAck"
           />
         </KeepAlive>
         <Models v-if="currentTab === 'models'" @log="addLog" @status="setStatus" @notice="handleNotice" />
