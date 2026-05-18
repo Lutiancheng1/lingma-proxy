@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"lingma-ipc-proxy/internal/feishu"
 	"lingma-ipc-proxy/internal/httpapi"
 	"lingma-ipc-proxy/internal/lingmaipc"
 	"lingma-ipc-proxy/internal/remote"
@@ -106,6 +107,8 @@ type App struct {
 
 	mu        sync.RWMutex
 	cfg       service.Config
+	bridgeCfg feishu.Config
+	bridge    *feishu.Manager
 	server    *httpapi.Server
 	running   bool
 	quitting  bool
@@ -193,7 +196,24 @@ func NewApp() *App {
 // startup is called when the app starts
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.cfg = defaultConfig()
+	a.cfg, a.bridgeCfg = loadDesktopConfig()
+	a.bridge = feishu.NewManager(feishu.ManagerOptions{
+		ProxyURL: func() string {
+			a.mu.RLock()
+			defer a.mu.RUnlock()
+			if strings.TrimSpace(a.addr) != "" {
+				return "http://" + a.addr + "/v1/chat/completions"
+			}
+			return fmt.Sprintf("http://%s:%d/v1/chat/completions", a.cfg.Host, a.cfg.Port)
+		},
+		Logf: func(level, message string) {
+			a.emitLog(level, message)
+		},
+		Emit: func(status feishu.Status) {
+			runtime.EventsEmit(a.ctx, "feishu:status", status)
+		},
+	})
+	a.bridge.SetConfig(a.bridgeCfg)
 	if err := a.loadAppState(); err != nil {
 		runtime.LogWarningf(a.ctx, "failed to load app state: %v", err)
 	}
@@ -442,48 +462,6 @@ func (a *App) UpdateConfig(cfg service.Config) error {
 	return nil
 }
 
-func (a *App) saveConfig(cfg service.Config) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	dir := filepath.Join(home, ".config", "lingma-proxy")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	timeoutSec := int(cfg.Timeout.Seconds())
-	fileCfg := map[string]any{
-		"host":                    cfg.Host,
-		"port":                    cfg.Port,
-		"backend":                 string(cfg.Backend),
-		"transport":               string(cfg.Transport),
-		"pipe":                    cfg.Pipe,
-		"websocket_url":           cfg.WebSocketURL,
-		"remote_base_url":         cfg.RemoteBaseURL,
-		"remote_auth_file":        cfg.RemoteAuthFile,
-		"remote_version":          cfg.RemoteVersion,
-		"cwd":                     cfg.Cwd,
-		"current_file_path":       cfg.CurrentFilePath,
-		"mode":                    cfg.Mode,
-		"model":                   cfg.Model,
-		"shell_type":              cfg.ShellType,
-		"session_mode":            string(cfg.SessionMode),
-		"timeout":                 timeoutSec,
-		"warmup_timeout":          int(cfg.WarmupTimeout.Seconds()),
-		"remote_fallback_enabled": cfg.RemoteFallbackEnabled,
-		"remote_fallback_models":  cfg.RemoteFallbackModels,
-	}
-
-	data, err := json.MarshalIndent(fileCfg, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	path := filepath.Join(dir, "config.json")
-	return os.WriteFile(path, data, 0644)
-}
-
 // StartProxy starts the lingma-ipc-proxy HTTP server
 func (a *App) StartProxy() error {
 	a.mu.Lock()
@@ -578,6 +556,19 @@ func (a *App) StartProxy() error {
 		}
 		runtime.LogInfof(a.ctx, "%s warmup completed", backendLabel(cfg.Backend))
 		a.emitLog("info", fmt.Sprintf("%s warmup completed", backendLabel(cfg.Backend)))
+	}()
+	go func() {
+		a.mu.RLock()
+		bridgeCfg := a.bridgeCfg
+		bridge := a.bridge
+		a.mu.RUnlock()
+		if bridge == nil || !bridgeCfg.Enabled || !bridgeCfg.AutoStart {
+			return
+		}
+		bridge.SetConfig(bridgeCfg)
+		if err := bridge.Start(context.Background()); err != nil {
+			a.emitLog("warn", fmt.Sprintf("Feishu bridge auto-start failed: %v", err))
+		}
 	}()
 
 	return nil
@@ -782,6 +773,9 @@ func (a *App) StopProxy() error {
 	if err := server.Shutdown(ctx); err != nil {
 		a.emitLog("warn", fmt.Sprintf("Proxy stop forced after graceful shutdown timeout: %v", err))
 		return err
+	}
+	if a.bridge != nil {
+		_ = a.bridge.Stop()
 	}
 
 	runtime.LogInfo(a.ctx, "proxy stopped")
@@ -1814,98 +1808,6 @@ func defaultConfig() service.Config {
 		WarmupTimeout:         proxyWarmupTimeout,
 		RemoteFallbackEnabled: true,
 		RemoteFallbackModels:  service.DefaultRemoteFallbackModels(),
-	}
-
-	// Try to load config file from multiple locations
-	configPaths := configSearchPaths()
-	for _, configPath := range configPaths {
-		if info, err := os.Stat(configPath); err == nil && !info.IsDir() {
-			if data, err := os.ReadFile(configPath); err == nil {
-				var fileCfg struct {
-					Host                  string   `json:"host"`
-					Port                  int      `json:"port"`
-					Backend               string   `json:"backend"`
-					Transport             string   `json:"transport"`
-					Pipe                  string   `json:"pipe"`
-					WebSocketURL          string   `json:"websocket_url"`
-					RemoteBaseURL         string   `json:"remote_base_url"`
-					RemoteAuthFile        string   `json:"remote_auth_file"`
-					RemoteVersion         string   `json:"remote_version"`
-					Cwd                   string   `json:"cwd"`
-					CurrentFilePath       string   `json:"current_file_path"`
-					Mode                  string   `json:"mode"`
-					Model                 string   `json:"model"`
-					ShellType             string   `json:"shell_type"`
-					SessionMode           string   `json:"session_mode"`
-					TimeoutSeconds        int      `json:"timeout"`
-					WarmupTimeoutSeconds  int      `json:"warmup_timeout"`
-					RemoteFallbackEnabled *bool    `json:"remote_fallback_enabled"`
-					RemoteFallbackModels  []string `json:"remote_fallback_models"`
-				}
-				if err := json.Unmarshal(data, &fileCfg); err == nil {
-					if fileCfg.Host != "" {
-						cfg.Host = fileCfg.Host
-					}
-					if fileCfg.Port > 0 {
-						cfg.Port = fileCfg.Port
-					}
-					if fileCfg.Backend != "" {
-						cfg.Backend = service.BackendMode(fileCfg.Backend)
-					}
-					if fileCfg.Transport != "" {
-						if t, err := lingmaipc.ParseTransport(fileCfg.Transport); err == nil {
-							cfg.Transport = t
-						}
-					}
-					if fileCfg.Pipe != "" {
-						cfg.Pipe = fileCfg.Pipe
-					}
-					if fileCfg.WebSocketURL != "" {
-						cfg.WebSocketURL = fileCfg.WebSocketURL
-					}
-					if fileCfg.RemoteBaseURL != "" {
-						cfg.RemoteBaseURL = fileCfg.RemoteBaseURL
-					}
-					if fileCfg.RemoteAuthFile != "" {
-						cfg.RemoteAuthFile = fileCfg.RemoteAuthFile
-					}
-					if fileCfg.RemoteVersion != "" {
-						cfg.RemoteVersion = fileCfg.RemoteVersion
-					}
-					if fileCfg.Cwd != "" {
-						cfg.Cwd = fileCfg.Cwd
-					}
-					if fileCfg.CurrentFilePath != "" {
-						cfg.CurrentFilePath = fileCfg.CurrentFilePath
-					}
-					if fileCfg.Mode != "" {
-						cfg.Mode = fileCfg.Mode
-					}
-					if fileCfg.Model != "" {
-						cfg.Model = fileCfg.Model
-					}
-					if fileCfg.ShellType != "" {
-						cfg.ShellType = fileCfg.ShellType
-					}
-					if fileCfg.SessionMode != "" {
-						cfg.SessionMode = service.SessionMode(fileCfg.SessionMode)
-					}
-					if fileCfg.TimeoutSeconds >= 0 {
-						cfg.Timeout = time.Duration(fileCfg.TimeoutSeconds) * time.Second
-					}
-					if fileCfg.WarmupTimeoutSeconds > 0 {
-						cfg.WarmupTimeout = time.Duration(fileCfg.WarmupTimeoutSeconds) * time.Second
-					}
-					if fileCfg.RemoteFallbackEnabled != nil {
-						cfg.RemoteFallbackEnabled = *fileCfg.RemoteFallbackEnabled
-					}
-					if len(fileCfg.RemoteFallbackModels) > 0 {
-						cfg.RemoteFallbackModels = cleanConfigStrings(fileCfg.RemoteFallbackModels)
-					}
-				}
-				break // loaded successfully
-			}
-		}
 	}
 
 	return cfg

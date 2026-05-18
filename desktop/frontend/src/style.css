@@ -1606,6 +1606,19 @@ button:disabled {
   row-gap: 14px;
 }
 
+.actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.actions-row button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+}
+
 .field label {
   color: var(--muted);
   font-size: 12px;
