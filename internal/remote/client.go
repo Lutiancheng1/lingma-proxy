@@ -129,8 +129,6 @@ func (c *Client) Warmup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
 	_, err = c.ListModels(ctx)
 	return err
 }

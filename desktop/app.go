@@ -567,7 +567,7 @@ func (a *App) StartProxy() error {
 
 	// Warm up backend and fetch models in background so the HTTP endpoint
 	// becomes available immediately after the desktop app launches/restarts.
-	go a.fetchModels(addr)
+	go a.fetchModels(addr, effectiveWarmupTimeout(cfg))
 	go func() {
 		warmupCtx, cancel := context.WithTimeout(context.Background(), effectiveWarmupTimeout(cfg))
 		defer cancel()
@@ -854,13 +854,14 @@ func (a *App) RefreshModels() ([]ModelInfo, error) {
 	a.mu.RLock()
 	running := a.running
 	addr := a.addr
+	cfg := a.cfg
 	a.mu.RUnlock()
 
 	if !running || addr == "" {
 		return nil, fmt.Errorf("proxy is not running")
 	}
 
-	models, err := a.fetchModels(addr)
+	models, err := a.fetchModels(addr, effectiveWarmupTimeout(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -900,12 +901,24 @@ func (a *App) SelectModel(modelID string) (ProxyStatus, error) {
 	return a.GetStatus(), nil
 }
 
-func (a *App) fetchModels(addr string) ([]ModelInfo, error) {
+func (a *App) fetchModels(addr string, timeout time.Duration) ([]ModelInfo, error) {
 	url := fmt.Sprintf("http://%s/v1/models", addr)
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+	if timeout <= 0 {
+		timeout = proxyWarmupTimeout
+	}
+	reqCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		runtime.LogWarningf(a.ctx, "fetch models failed: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("模型探测超时（%ds）", int(timeout.Seconds()))
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
