@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased (target: v1.5.3)
+## Unreleased (target: v1.5.4)
+
+## v1.5.4 - 2026-05-19
+
+- Fixed desktop model discovery timeout handling so manual model refresh now honors the configured warmup timeout instead of failing after a stale hard-coded 5-second path.
+- Removed the extra low-level timeout clamp from remote model listing so the warmup / refresh timeout configured in desktop settings can propagate end-to-end.
+- Verified the hotfix build line on top of `v1.5.3`, keeping the packaged desktop release flow intact.
+- 修复桌面端模型探测超时链路：手动“刷新模型”现在真正遵循“探测超时秒数”配置，不再走遗留的 5 秒硬编码超时。
+- 移除底层模型列表请求的额外固定超时截断，确保设置页里的 warmup / 探测超时能够端到端生效。
+- 基于 `v1.5.3` 完成热修验证，桌面端打包和发布链路保持不变。
 
 ## v1.5.3 - 2026-05-18
 

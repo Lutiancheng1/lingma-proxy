@@ -29,7 +29,7 @@ The proxy now supports two backend modes:
 ## Current Version
 
 <!-- VERSION:CURRENT:BEGIN -->
-Current desktop app version: `v1.5.3`.
+Current desktop app version: `v1.5.4`.
 
 The canonical source is [VERSION](./VERSION). Run `./scripts/sync-version.sh` to propagate it into [desktop/wails.json](./desktop/wails.json), the desktop UI, and release-facing docs.
 <!-- VERSION:CURRENT:END -->
