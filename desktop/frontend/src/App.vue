@@ -7,7 +7,7 @@ import Requests from './views/Requests.vue'
 import Settings from './views/Settings.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { ClipboardSetText } from '../wailsjs/runtime'
-import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetAppVersion, GetLogSummaries, GetRequestSummaries, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager, ShowWindow } from '../wailsjs/go/main/App.js'
+import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetAppVersion, GetLogSummaries, GetRequestSummaries, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager } from '../wailsjs/go/main/App.js'
 import lingmaIcon from './assets/images/lingma-icon.png'
 import { safeEventsOff, safeEventsOn, safeInvoke } from './utils/wailsSafe'
 
@@ -281,7 +281,6 @@ function handleAppShortcut(event) {
 
 onMounted(() => {
   document.getElementById('boot-splash')?.remove()
-  safeInvoke(() => ShowWindow(), undefined, 'ShowWindow unavailable in browser preview')
   window.addEventListener('keydown', handleAppShortcut, true)
   systemThemeQuery = window.matchMedia?.('(prefers-color-scheme: dark)')
   systemThemeQuery?.addEventListener?.('change', applyTheme)
