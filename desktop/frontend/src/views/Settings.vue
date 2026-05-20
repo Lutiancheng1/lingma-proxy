@@ -2,12 +2,13 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { BrowserOpenURL } from '../../wailsjs/runtime'
 import {
-  BindFeishuCLIWithAppSecret,
   GetConfig,
   GetDetectionInfo,
   GetFeishuBridgeConfig,
   GetFeishuBridgeStatus,
+  GetModels,
   InstallFeishuCLI,
+  RefreshFeishuBridgeStatus,
   StartFeishuBridge,
   StartFeishuCLILogin,
   StartFeishuCLISetupNew,
@@ -17,7 +18,7 @@ import {
 } from '../../wailsjs/go/main/App.js'
 import { safeEventsOff, safeEventsOn } from '../utils/wailsSafe'
 
-const emit = defineEmits(['log', 'status-refresh'])
+const emit = defineEmits(['log', 'status-refresh', 'notice'])
 
 const config = ref({})
 const detection = ref(null)
@@ -29,19 +30,31 @@ const bridgeConfig = ref({
   model: 'kmodel',
   maxToolRounds: 5,
   setupMode: 'new',
-  appId: '',
 })
 const bridgeStatus = ref(null)
+const bridgeStatusLoaded = ref(false)
 const bridgeSaving = ref(false)
 const bridgeBusy = ref(false)
-const manualBindExpanded = ref(false)
-const manualAppID = ref('')
-const manualAppSecret = ref('')
+const bridgeRefreshing = ref(false)
 const openSelect = ref('')
 const fallbackModelsText = ref('')
+const availableBridgeModels = ref([])
 const isIPCBackend = computed(() => (config.value.Backend || 'ipc') === 'ipc')
 const formattedTokenExpireAt = computed(() => formatDateTime(detection.value?.remoteTokenExpireAt))
 const bridgeCurrentModel = computed(() => bridgeConfig.value.model || bridgeStatus.value?.currentModel || 'kmodel')
+const bridgeModelOptions = computed(() => {
+  const items = Array.isArray(availableBridgeModels.value) ? [...availableBridgeModels.value] : []
+  const currentID = String(bridgeConfig.value.model || bridgeStatus.value?.currentModel || '').trim()
+  if (currentID && !items.some((item) => item.id === currentID)) {
+    items.unshift({ id: currentID, name: currentID })
+  }
+  return items
+})
+const bridgeModelLabel = computed(() => {
+  const currentID = String(bridgeConfig.value.model || bridgeStatus.value?.currentModel || '').trim()
+  const option = bridgeModelOptions.value.find((item) => item.id === currentID)
+  return option?.name || option?.id || '请选择模型'
+})
 const bridgeReady = computed(() => {
   const status = bridgeStatus.value
   return Boolean(
@@ -54,6 +67,57 @@ const bridgeReady = computed(() => {
     status?.auth?.authorized,
   )
 })
+const bridgeStatusPending = computed(() => {
+  return !bridgeStatusLoaded.value || (bridgeRefreshing.value && !bridgeStatus.value?.lastCheckedAt)
+})
+const bridgeSetupLinkVisible = computed(() => Boolean(bridgeStatus.value?.setupUrl) && !bridgeStatus.value?.config?.configured)
+const bridgeLoginLinkVisible = computed(() => Boolean(bridgeStatus.value?.loginUrl) && !bridgeStatus.value?.auth?.authorized)
+const bridgeBrowserHintVisible = computed(() => bridgeSetupLinkVisible.value || bridgeLoginLinkVisible.value)
+const bridgeStartButtonLabel = computed(() => {
+  if (bridgeBusy.value) return bridgeStatus.value?.running ? '停止中...' : '启动中...'
+  if (bridgeStatus.value?.running) return '停止 Bridge'
+  if (bridgeConfig.value.enabled) return '启动 Bridge'
+  return '启用并启动 Bridge'
+})
+const bridgeStepItems = computed(() => {
+  const status = bridgeStatus.value
+  if (!bridgeStatusLoaded.value) {
+    return [
+      { key: 'install', title: '安装 CLI 与 Skills', done: false, active: true, detail: '应用已启动后台预检测，正在读取当前安装状态…' },
+      { key: 'setup', title: '初始化飞书应用', done: false, active: false, detail: '等待检测当前 CLI 配置和应用初始化结果…' },
+      { key: 'auth', title: '登录并授权', done: false, active: false, detail: '等待检测当前授权状态…' },
+    ]
+  }
+  return [
+    {
+      key: 'install',
+      title: '安装 CLI 与 Skills',
+      done: Boolean(status?.node?.found && status?.npm?.found && status?.npx?.found && status?.cli?.found && status?.skillsReady),
+      active: Boolean(status?.installRunning),
+      detail: status?.skillsReady ? 'Node / npm / npx / lark-cli / skills 已就绪' : '先安装飞书 CLI，并确认必需 skills 完整',
+    },
+    {
+      key: 'setup',
+      title: '初始化飞书应用',
+      done: Boolean(status?.config?.configured),
+      active: Boolean(status?.setupRunning),
+      detail: status?.config?.configured ? `${status?.config?.appId || '已配置'} · ${status?.config?.brand || 'feishu'}` : '点击“首次初始化（推荐）”，在浏览器完成应用创建',
+    },
+    {
+      key: 'auth',
+      title: '登录并授权',
+      done: Boolean(status?.auth?.authorized),
+      active: Boolean(status?.loginRunning),
+      detail: status?.auth?.authorized ? `${status?.auth?.userName || '已授权'} · ${status?.auth?.tokenStatus || 'valid'}` : '点击“登录授权”，在浏览器完成账号授权',
+    },
+  ]
+})
+const lastBridgeSnapshot = ref({
+  configured: false,
+  authorized: false,
+  running: false,
+})
+let bridgeStatusPollTimer = null
 
 const selectOptions = {
   Backend: [
@@ -97,6 +161,11 @@ function chooseOption(field, value) {
   refreshDetection()
 }
 
+function chooseBridgeModel(modelID) {
+  bridgeConfig.value.model = modelID
+  openSelect.value = ''
+}
+
 function formatDateTime(value) {
   if (!value) return ''
   const date = new Date(value)
@@ -116,23 +185,29 @@ onMounted(async () => {
   try {
     config.value = await GetConfig()
     bridgeConfig.value = await GetFeishuBridgeConfig()
-    manualAppID.value = bridgeConfig.value.appId || ''
+    availableBridgeModels.value = await GetModels()
     fallbackModelsText.value = Array.isArray(config.value.RemoteFallbackModels)
       ? config.value.RemoteFallbackModels.join('\n')
       : ''
     await refreshDetection()
-    await refreshBridgeStatus()
+    const cachedStatus = await GetFeishuBridgeStatus()
+    applyBridgeStatus(cachedStatus, false)
+    bridgeStatusLoaded.value = Boolean(cachedStatus?.lastCheckedAt || cachedStatus?.config?.configured || cachedStatus?.auth?.authorized || cachedStatus?.cli?.found)
+    if (!bridgeStatusLoaded.value) {
+      await refreshBridgeStatus(false)
+    }
   } catch (e) {
     emit('log', 'error', '配置加载失败：' + (e.message || String(e)))
   }
 
   safeEventsOn('feishu:status', (nextStatus) => {
-    bridgeStatus.value = nextStatus
+    applyBridgeStatus(nextStatus, true)
   })
 })
 
 onUnmounted(() => {
   safeEventsOff('feishu:status')
+  stopBridgeStatusPolling()
 })
 
 async function refreshDetection() {
@@ -143,11 +218,70 @@ async function refreshDetection() {
   }
 }
 
-async function refreshBridgeStatus() {
+function applyBridgeStatus(nextStatus, announce = false) {
+  const prev = { ...lastBridgeSnapshot.value }
+  bridgeStatus.value = nextStatus
+  bridgeStatusLoaded.value = true
+  lastBridgeSnapshot.value = {
+    configured: Boolean(nextStatus?.config?.configured),
+    authorized: Boolean(nextStatus?.auth?.authorized),
+    running: Boolean(nextStatus?.running),
+  }
+  syncBridgeStatusPolling(nextStatus)
+  if (!announce) return
+  if (!prev.configured && nextStatus?.config?.configured) {
+    emit('notice', `飞书 CLI 应用初始化已完成：${nextStatus?.config?.appId || '已配置'}`)
+  }
+  if (!prev.authorized && nextStatus?.auth?.authorized) {
+    emit('notice', `飞书 CLI 授权已完成：${nextStatus?.auth?.userName || '当前账号'}`)
+  }
+  if (!prev.running && nextStatus?.running) {
+    emit('notice', 'Feishu Bridge 已开始监听飞书消息')
+  }
+}
+
+function shouldPollBridgeStatus(status) {
+  return Boolean(
+    status && (
+      status.installRunning ||
+      status.setupRunning ||
+      status.loginRunning ||
+      (status.setupUrl && !status.config?.configured) ||
+      (status.loginUrl && !status.auth?.authorized)
+    ),
+  )
+}
+
+function stopBridgeStatusPolling() {
+  if (bridgeStatusPollTimer) {
+    clearInterval(bridgeStatusPollTimer)
+    bridgeStatusPollTimer = null
+  }
+}
+
+function syncBridgeStatusPolling(status) {
+  if (!shouldPollBridgeStatus(status)) {
+    stopBridgeStatusPolling()
+    return
+  }
+  if (bridgeStatusPollTimer) return
+  bridgeStatusPollTimer = setInterval(() => {
+    refreshBridgeStatus(false, false)
+  }, 2500)
+}
+
+async function refreshBridgeStatus(announce = true, showLoading = true) {
   try {
-    bridgeStatus.value = await GetFeishuBridgeStatus()
+    if (showLoading) {
+      bridgeRefreshing.value = true
+    }
+    applyBridgeStatus(await RefreshFeishuBridgeStatus(), announce)
   } catch (e) {
     emit('log', 'warn', 'Feishu Bridge 状态加载失败：' + (e.message || String(e)))
+  } finally {
+    if (showLoading) {
+      bridgeRefreshing.value = false
+    }
   }
 }
 
@@ -175,14 +309,15 @@ async function saveBridgeConfig() {
     bridgeConfig.value = {
       ...bridgeConfig.value,
       brand: 'feishu',
-      appId: manualAppID.value.trim(),
       maxToolRounds: Number(bridgeConfig.value.maxToolRounds) || 5,
     }
     await UpdateFeishuBridgeConfig(bridgeConfig.value)
+    emit('notice', 'Feishu Bridge 配置已保存')
     emit('log', 'info', 'Feishu Bridge 配置已保存')
-    await refreshBridgeStatus()
+    return true
   } catch (e) {
     emit('log', 'error', 'Feishu Bridge 配置保存失败：' + (e.message || String(e)))
+    return false
   } finally {
     bridgeSaving.value = false
   }
@@ -192,8 +327,9 @@ async function withBridgeAction(message, action) {
   bridgeBusy.value = true
   try {
     await action()
+    emit('notice', message)
     emit('log', 'info', message)
-    await refreshBridgeStatus()
+    await refreshBridgeStatus(true, false)
   } catch (e) {
     emit('log', 'error', message + '失败：' + (e.message || String(e)))
   } finally {
@@ -211,18 +347,7 @@ async function installBridgeCLI() {
 }
 
 async function startBridgeSetupNew() {
-  manualBindExpanded.value = false
   await withBridgeAction('飞书 CLI 首次初始化已启动', () => StartFeishuCLISetupNew())
-}
-
-async function bindExistingApp() {
-  await withBridgeAction('飞书 CLI 已开始绑定现有应用', async () => {
-    await BindFeishuCLIWithAppSecret(manualAppID.value.trim(), manualAppSecret.value)
-    manualAppSecret.value = ''
-    bridgeConfig.value.appId = manualAppID.value.trim()
-    bridgeConfig.value.setupMode = 'manual'
-    await UpdateFeishuBridgeConfig(bridgeConfig.value)
-  })
 }
 
 async function startBridgeLogin() {
@@ -230,7 +355,8 @@ async function startBridgeLogin() {
 }
 
 async function enableBridgeAndStart() {
-  await saveBridgeConfig()
+  const saved = await saveBridgeConfig()
+  if (!saved) return
   await withBridgeAction('Feishu Bridge 已启动', async () => {
     bridgeConfig.value.enabled = true
     await UpdateFeishuBridgeConfig(bridgeConfig.value)
@@ -244,6 +370,54 @@ async function stopBridge() {
     await UpdateFeishuBridgeConfig(bridgeConfig.value)
     await StopFeishuBridge()
   })
+}
+
+async function handleBridgePrimaryAction() {
+  if (bridgeStatus.value?.running) {
+    await stopBridge()
+    return
+  }
+  await enableBridgeAndStart()
+}
+
+function isBridgeStepClickable(step) {
+  if (!step || step.done) return false
+  if (bridgeBusy.value || bridgeRefreshing.value) return false
+  return bridgeStatusLoaded.value
+}
+
+function bridgeStepCTA(step) {
+  if (!isBridgeStepClickable(step)) return ''
+  return {
+    install: '点击安装',
+    setup: bridgeStatus.value?.setupUrl ? '继续初始化' : '开始初始化',
+    auth: bridgeStatus.value?.loginUrl ? '继续授权' : '开始授权',
+  }[step.key] || '继续'
+}
+
+async function handleBridgeStepClick(step) {
+  if (!isBridgeStepClickable(step)) return
+  if (step.key === 'install') {
+    await installBridgeCLI()
+    return
+  }
+  if (step.key === 'setup') {
+    if (bridgeStatus.value?.setupUrl) {
+      openBridgeURL(bridgeStatus.value.setupUrl)
+      emit('notice', '已打开飞书应用初始化链接')
+      return
+    }
+    await startBridgeSetupNew()
+    return
+  }
+  if (step.key === 'auth') {
+    if (bridgeStatus.value?.loginUrl) {
+      openBridgeURL(bridgeStatus.value.loginUrl)
+      emit('notice', '已打开飞书授权链接')
+      return
+    }
+    await startBridgeLogin()
+  }
 }
 </script>
 
@@ -414,7 +588,8 @@ async function stopBridge() {
         </div>
       </div>
 
-      <div class="glass-panel">
+      <div class="panel-stack">
+        <div class="glass-panel">
         <div class="panel-header">
           <div>
             <h2>会话与环境</h2>
@@ -428,7 +603,7 @@ async function stopBridge() {
         </div>
         <fieldset class="settings-fieldset" :disabled="!isIPCBackend">
         <div class="form-grid compact-form-grid">
-          <div class="field">
+            <div class="field">
             <label>模式</label>
             <div class="custom-select" :class="{ open: openSelect === 'Mode' }">
               <button type="button" @click="toggleSelect('Mode')">
@@ -492,20 +667,32 @@ async function stopBridge() {
             <label>当前文件</label>
             <input v-model="config.CurrentFilePath" type="text" placeholder="可选" />
           </div>
-          <div class="field span-2">
-            <label>工作目录</label>
-            <input v-model="config.Cwd" type="text" placeholder="Lingma 创建 session 时使用的 cwd" />
+            <div class="field span-2">
+              <label>工作目录</label>
+              <input v-model="config.Cwd" type="text" placeholder="Lingma 创建 session 时使用的 cwd" />
+            </div>
           </div>
-        </div>
         </fieldset>
-      </div>
-    </section>
+        </div>
 
-    <section class="grid-2 settings-grid">
-      <div class="glass-panel">
-        <div class="panel-header">
+        <div class="glass-panel">
+          <div class="panel-header">
           <div>
-            <h2>Feishu Bot Bridge</h2>
+            <div class="panel-title-row">
+              <h2>Feishu Bot Bridge</h2>
+              <div class="inline-help">
+                <button type="button" class="inline-help-trigger" aria-label="查看会话命令说明">
+                  <i class="bi bi-question-circle" aria-hidden="true"></i>
+                </button>
+                <div class="inline-help-popover">
+                  <strong>会话命令</strong>
+                  <span><code>/help</code>：查看命令帮助</span>
+                  <span><code>/compact</code>：手动压缩当前会话上下文</span>
+                  <span><code>/summary</code>：查看当前会话摘要</span>
+                  <span><code>/reset</code>：清空当前飞书会话上下文</span>
+                </div>
+              </div>
+            </div>
             <p>通过本机 lark-cli 把飞书 Bot 消息桥接到 Lingma Proxy。默认关闭，不影响现有代理功能。</p>
           </div>
           <span class="status-chip" :class="bridgeStatus?.running ? 'ok' : 'warn'">
@@ -513,7 +700,7 @@ async function stopBridge() {
           </span>
         </div>
 
-        <div class="form-grid compact-form-grid">
+          <div class="form-grid compact-form-grid">
           <div class="field">
             <label>启用 Bridge</label>
             <label class="switch">
@@ -530,62 +717,121 @@ async function stopBridge() {
           </div>
           <div class="field">
             <label>模型</label>
-            <input v-model="bridgeConfig.model" type="text" :placeholder="bridgeCurrentModel" />
-          </div>
-          <div class="field">
-            <label>最大 Tool 轮次</label>
-            <input v-model.number="bridgeConfig.maxToolRounds" type="number" min="1" max="8" />
+            <div class="custom-select" :class="{ open: openSelect === 'BridgeModel' }">
+              <button type="button" @click="toggleSelect('BridgeModel')">
+                <span>{{ bridgeModelLabel }}</span>
+                <i class="bi bi-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div v-if="openSelect === 'BridgeModel'" class="select-menu">
+                <button
+                  v-for="model in bridgeModelOptions"
+                  :key="model.id"
+                  :class="{ selected: model.id === bridgeConfig.model }"
+                  type="button"
+                  @click="chooseBridgeModel(model.id)"
+                >
+                  {{ model.name || model.id }}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="hint-box compact-hint">
+        <div class="actions-row bridge-actions-top">
+          <button class="primary-button" type="button" :disabled="bridgeBusy" @click="saveBridgeConfig">
+            {{ bridgeSaving ? '保存中...' : '保存 Bridge 配置' }}
+          </button>
+          <button
+            class="primary-button"
+            type="button"
+            :class="{ 'danger-button': bridgeStatus && bridgeStatus.running }"
+            :disabled="bridgeBusy || (!(bridgeStatus && bridgeStatus.running) && !bridgeReady)"
+            @click="handleBridgePrimaryAction"
+          >
+            {{ bridgeStartButtonLabel }}
+          </button>
+        </div>
+
+          <div class="hint-box compact-hint">
           <strong>推荐接入路径</strong>
-          <span>先安装飞书 CLI，再走“首次初始化（推荐）”和“登录授权”。只有前置条件全部满足后，Bridge 才允许启动。</span>
+          <span>按顺序完成“安装 CLI 与 Skills” → “初始化飞书应用” → “登录并授权”，全部完成后再保存配置并启动 Bridge。</span>
         </div>
 
-        <div v-if="bridgeStatus" class="detect-card">
+          <div class="bridge-progress">
+          <button
+            v-for="step in bridgeStepItems"
+            :key="step.key"
+            class="bridge-progress-item"
+            :class="{ done: step.done, active: step.active, clickable: isBridgeStepClickable(step) }"
+            type="button"
+            :disabled="!isBridgeStepClickable(step)"
+            @click="handleBridgeStepClick(step)"
+          >
+            <div class="bridge-progress-head">
+              <strong>{{ step.title }}</strong>
+              <div class="bridge-progress-meta">
+                <span class="bridge-progress-state">
+                  {{ step.done ? '已完成' : (step.active ? '进行中' : '待完成') }}
+                </span>
+                <span v-if="isBridgeStepClickable(step)" class="bridge-progress-cta">
+                  {{ bridgeStepCTA(step) }}
+                  <i class="bi bi-arrow-right-short" aria-hidden="true"></i>
+                </span>
+              </div>
+            </div>
+            <p>{{ step.detail }}</p>
+          </button>
+        </div>
+
+          <div v-if="bridgeStatus" class="detect-card">
           <div class="detect-title">
             <strong>当前状态</strong>
-            <button type="button" @click="refreshBridgeStatus">刷新</button>
+            <button type="button" :disabled="bridgeRefreshing" @click="refreshBridgeStatus">
+              {{ bridgeRefreshing ? '检测中...' : '刷新状态' }}
+            </button>
           </div>
           <dl>
             <div>
               <dt>平台</dt>
-              <dd>{{ bridgeStatus.platform }} · {{ bridgeStatus.arch }}</dd>
+              <dd>{{ bridgeStatusPending ? '-' : `${bridgeStatus.platform} · ${bridgeStatus.arch}` }}</dd>
             </div>
             <div>
               <dt>Node / npm / npx</dt>
-              <dd :class="{ 'warn-text': !bridgeStatus.node?.found || !bridgeStatus.npm?.found || !bridgeStatus.npx?.found }">
-                {{ bridgeStatus.node?.version || '缺失' }} / {{ bridgeStatus.npm?.version || '缺失' }} / {{ bridgeStatus.npx?.version || '缺失' }}
+              <dd :class="{ 'warn-text': !bridgeStatusPending && (!bridgeStatus.node?.found || !bridgeStatus.npm?.found || !bridgeStatus.npx?.found) }">
+                {{ bridgeStatusPending ? '-' : `${bridgeStatus.node?.version || '缺失'} / ${bridgeStatus.npm?.version || '缺失'} / ${bridgeStatus.npx?.version || '缺失'}` }}
               </dd>
             </div>
             <div>
               <dt>lark-cli</dt>
-              <dd :class="{ 'warn-text': !bridgeStatus.cli?.found }">
-                {{ bridgeStatus.cli?.version || '未安装' }}
+              <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.cli?.found }">
+                {{ bridgeStatusPending ? '-' : (bridgeStatus.cli?.version || '未安装') }}
               </dd>
             </div>
             <div>
               <dt>Skills</dt>
-              <dd :class="{ 'warn-text': !bridgeStatus.skillsReady }">
-                {{ bridgeStatus.skillsReady ? '已就绪' : '缺失或未完整安装' }}
+              <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.skillsReady }">
+                {{ bridgeStatusPending ? '-' : (bridgeStatus.skillsReady ? '已就绪' : '缺失或未完整安装') }}
               </dd>
             </div>
             <div>
               <dt>CLI 配置</dt>
-              <dd :class="{ 'warn-text': !bridgeStatus.config?.configured }">
-                {{ bridgeStatus.config?.configured ? `${bridgeStatus.config?.appId || '已配置'} · ${bridgeStatus.config?.brand || 'feishu'}` : (bridgeStatus.config?.message || '未初始化') }}
+              <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.config?.configured }">
+                {{ bridgeStatusPending ? '-' : (bridgeStatus.config?.configured ? `${bridgeStatus.config?.appId || '已配置'} · ${bridgeStatus.config?.brand || 'feishu'}` : (bridgeStatus.config?.message || '未初始化')) }}
               </dd>
             </div>
             <div>
               <dt>授权状态</dt>
-              <dd :class="{ 'warn-text': !bridgeStatus.auth?.authorized }">
-                {{ bridgeStatus.auth?.authorized ? `${bridgeStatus.auth?.userName || '已授权'} · ${bridgeStatus.auth?.tokenStatus || 'ok'}` : (bridgeStatus.auth?.message || '未授权') }}
+              <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.auth?.authorized }">
+                {{ bridgeStatusPending ? '-' : (bridgeStatus.auth?.authorized ? `${bridgeStatus.auth?.userName || '已授权'} · ${bridgeStatus.auth?.tokenStatus || 'ok'}` : (bridgeStatus.auth?.message || '未授权')) }}
               </dd>
             </div>
             <div>
               <dt>运行状态</dt>
-              <dd>{{ bridgeStatus.running ? `运行中 · ${bridgeStatus.lastStartedAt || ''}` : '未运行' }}</dd>
+              <dd>{{ bridgeStatusPending ? '-' : (bridgeStatus.running ? `运行中 · ${formatDateTime(bridgeStatus.lastStartedAt) || bridgeStatus.lastStartedAt || ''}` : '未运行') }}</dd>
+            </div>
+            <div v-if="bridgeStatusPending || bridgeStatus.lastCheckedAt">
+              <dt>最近检测</dt>
+              <dd>{{ bridgeStatusPending ? '-' : (formatDateTime(bridgeStatus.lastCheckedAt) || bridgeStatus.lastCheckedAt) }}</dd>
             </div>
             <div v-if="bridgeStatus.lastOutput">
               <dt>最近输出</dt>
@@ -598,57 +844,14 @@ async function stopBridge() {
           </dl>
         </div>
 
-        <div v-if="bridgeStatus?.skills?.length" class="hint-box compact-hint">
-          <strong>必需 Skills</strong>
-          <span>{{ bridgeStatus.skills.map((item) => `${item.name}${item.found ? '' : '（缺失）'}`).join('、') }}</span>
-        </div>
-
-        <div class="actions-row">
-          <button class="primary-button" type="button" :disabled="bridgeBusy" @click="saveBridgeConfig">
-            {{ bridgeSaving ? '保存中...' : '保存 Bridge 配置' }}
-          </button>
-          <button type="button" :disabled="bridgeBusy" @click="installBridgeCLI">安装飞书 CLI</button>
-          <button type="button" :disabled="bridgeBusy" @click="startBridgeSetupNew">首次初始化（推荐）</button>
-          <button type="button" :disabled="bridgeBusy" @click="startBridgeLogin">登录授权</button>
-        </div>
-
-        <div class="actions-row">
-          <button class="primary-button" type="button" :disabled="bridgeBusy || !bridgeReady" @click="enableBridgeAndStart">
-            启用并启动 Bridge
-          </button>
-          <button type="button" :disabled="bridgeBusy || !bridgeStatus?.running" @click="stopBridge">停止 Bridge</button>
-          <button type="button" :disabled="bridgeBusy" @click="manualBindExpanded = !manualBindExpanded">
-            {{ manualBindExpanded ? '收起已有 App 配置' : '我已有 App ID / Secret' }}
-          </button>
-        </div>
-
-        <div v-if="bridgeStatus?.setupUrl || bridgeStatus?.loginUrl" class="hint-box">
+          <div v-if="bridgeBrowserHintVisible" class="hint-box">
           <strong>浏览器继续</strong>
           <span>首次初始化和登录授权需要在浏览器中完成，点击下方链接继续。</span>
           <div class="actions-row">
-            <button v-if="bridgeStatus?.setupUrl" type="button" @click="openBridgeURL(bridgeStatus.setupUrl)">打开初始化链接</button>
-            <button v-if="bridgeStatus?.loginUrl" type="button" @click="openBridgeURL(bridgeStatus.loginUrl)">打开授权链接</button>
+            <button v-if="bridgeSetupLinkVisible" type="button" @click="openBridgeURL(bridgeStatus.setupUrl)">打开初始化链接</button>
+            <button v-if="bridgeLoginLinkVisible" type="button" @click="openBridgeURL(bridgeStatus.loginUrl)">打开授权链接</button>
           </div>
         </div>
-
-        <div v-if="manualBindExpanded" class="hint-box">
-          <strong>已有应用（高级）</strong>
-          <span>仅当你已经拥有 App ID / App Secret 时使用。保存后会调用 `lark-cli config init --app-id ... --app-secret-stdin --brand feishu`。</span>
-          <div class="form-grid compact-form-grid">
-            <div class="field span-2">
-              <label>App ID</label>
-              <input v-model="manualAppID" type="text" placeholder="cli_xxx" />
-            </div>
-            <div class="field span-2">
-              <label>App Secret</label>
-              <input v-model="manualAppSecret" type="password" placeholder="输入后只写入系统钥匙串，不落盘" />
-            </div>
-          </div>
-          <div class="actions-row">
-            <button class="primary-button" type="button" :disabled="bridgeBusy || !manualAppID || !manualAppSecret" @click="bindExistingApp">
-              绑定现有应用
-            </button>
-          </div>
         </div>
       </div>
     </section>

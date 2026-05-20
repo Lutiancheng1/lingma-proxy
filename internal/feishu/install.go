@@ -3,19 +3,18 @@ package feishu
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"runtime"
 	"strings"
 )
 
 func detectBinary(name string, versionArgs ...string) BinaryStatus {
-	path, err := exec.LookPath(name)
+	path, err := lookPathWithResolvedEnv(name)
 	if err != nil {
 		return BinaryStatus{Found: false}
 	}
 	status := BinaryStatus{Found: true, Path: path}
 	if len(versionArgs) > 0 {
-		cmd := exec.Command(path, versionArgs...)
+		cmd := commandWithEnv(path, versionArgs...)
 		if output, err := cmd.CombinedOutput(); err == nil {
 			status.Version = strings.TrimSpace(string(output))
 		}
@@ -54,7 +53,7 @@ func nodeInstallHint(goos string) string {
 }
 
 func installCLI(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "npx", "@larksuite/cli@latest", "install")
+	cmd := commandContextWithEnv(ctx, "npx", "@larksuite/cli@latest", "install")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("install lark-cli failed: %w: %s", err, strings.TrimSpace(string(output)))

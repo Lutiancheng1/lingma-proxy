@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -18,8 +19,41 @@ type ToolCall struct {
 	} `json:"function"`
 }
 
+type ToolExecutionResult struct {
+	Output        string
+	MissingScopes []string
+	ConsoleURL    string
+	Hint          string
+}
+
+type permissionRequirement struct {
+	Scopes     []string
+	ConsoleURL string
+	Hint       string
+}
+
+var scopeHintPattern = regexp.MustCompile(`auth login --scope\s+"([^"]+)"`)
+
 func toolDefinitions() []map[string]any {
 	return []map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "lark_cli_exec",
+				"description": "通用飞书 CLI 执行入口。适用于云盘、邮箱、通讯录、妙记、视频会议、幻灯片、白板、审批、考勤、OKR 等当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；如果未显式指定 --as，则会自动追加 --as user。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"argv": map[string]any{
+							"type":        "array",
+							"description": "lark-cli 的参数数组，例如 [\"drive\", \"file\", \"list\"] 或 [\"mail\", \"thread\", \"list\", \"--limit\", \"10\"]",
+							"items":       map[string]any{"type": "string"},
+						},
+					},
+					"required": []string{"argv"},
+				},
+			},
+		},
 		{
 			"type": "function",
 			"function": map[string]any{
@@ -181,6 +215,21 @@ func toolDefinitions() []map[string]any {
 
 func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 	switch toolName {
+	case "lark_cli_exec":
+		argv := stringListArg(args, "argv")
+		if len(argv) == 0 {
+			return nil, fmt.Errorf("argv 不能为空")
+		}
+		if strings.EqualFold(argv[0], "lark-cli") {
+			argv = argv[1:]
+		}
+		if len(argv) == 0 {
+			return nil, fmt.Errorf("argv 不能为空")
+		}
+		if !containsAsFlag(argv) {
+			argv = append(argv, "--as", "user")
+		}
+		return append([]string{"lark-cli"}, argv...), nil
 	case "lark_calendar_agenda":
 		cmd := []string{"lark-cli", "calendar", "+agenda", "--as", "user"}
 		if value := stringArg(args, "start"); value != "" {
@@ -289,32 +338,119 @@ func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 	}
 }
 
-func executeTool(toolName string, args map[string]any) string {
+func executeTool(toolName string, args map[string]any) ToolExecutionResult {
 	cmdArgs, err := buildToolCommand(toolName, args)
 	if err != nil {
-		return "[error] " + err.Error()
+		return ToolExecutionResult{Output: "[error] " + err.Error()}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout())
 	defer cancel()
-	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+	cmd := commandContextWithEnv(ctx, cmdArgs[0], cmdArgs[1:]...)
 	output, err := cmd.CombinedOutput()
 	result := strings.TrimSpace(string(output))
+	perm := parsePermissionRequirement(result)
+	result = normalizeToolOutput(result)
 	if result == "" && err == nil {
 		result = "[no output]"
 	}
 	if len(result) > 4000 {
-		result = result[:4000] + "\n... (truncated)"
+		result = result[:4000] + "\n... (truncated; do not infer unseen content)"
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		return "[error] command timed out (30s)"
+		return ToolExecutionResult{Output: "[error] command timed out (30s)"}
 	}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && result != "" {
-			return fmt.Sprintf("[error] %s (exit=%d)", result, exitErr.ExitCode())
+			return ToolExecutionResult{
+				Output:        fmt.Sprintf("[error] %s (exit=%d)", result, exitErr.ExitCode()),
+				MissingScopes: perm.Scopes,
+				ConsoleURL:    perm.ConsoleURL,
+				Hint:          perm.Hint,
+			}
 		}
-		return "[error] " + err.Error()
+		return ToolExecutionResult{
+			Output:        "[error] " + err.Error(),
+			MissingScopes: perm.Scopes,
+			ConsoleURL:    perm.ConsoleURL,
+			Hint:          perm.Hint,
+		}
+	}
+	return ToolExecutionResult{Output: result}
+}
+
+func normalizeToolOutput(result string) string {
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return result
+	}
+	if summary := summarizeChatListResult(result); summary != "" {
+		return summary
 	}
 	return result
+}
+
+func summarizeChatListResult(result string) string {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		return ""
+	}
+	data, _ := payload["data"].(map[string]any)
+	if data == nil {
+		return ""
+	}
+	rawChats, ok := data["chats"].([]any)
+	if !ok {
+		return ""
+	}
+	if len(rawChats) == 0 {
+		return "{\n  \"ok\": true,\n  \"identity\": \"user\",\n  \"summary\": \"当前没有可列出的会话\",\n  \"chats\": []\n}"
+	}
+	type chatSummary struct {
+		Name      string `json:"name"`
+		ChatID    string `json:"chat_id"`
+		Scope     string `json:"scope"`
+		ChatScope string `json:"chat_scope"`
+	}
+	summaries := make([]chatSummary, 0, len(rawChats))
+	for _, raw := range rawChats {
+		item, _ := raw.(map[string]any)
+		if item == nil {
+			continue
+		}
+		name := strings.TrimSpace(fmt.Sprint(item["name"]))
+		if name == "" || name == "<nil>" {
+			name = "(未命名会话)"
+		}
+		isExternal := strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["external"])), "true")
+		scope := "内部会话"
+		if isExternal {
+			scope = "外部聊天"
+		}
+		summaries = append(summaries, chatSummary{
+			Name:      name,
+			ChatID:    strings.TrimSpace(fmt.Sprint(item["chat_id"])),
+			Scope:     scope,
+			ChatScope: map[bool]string{true: "external", false: "internal"}[isExternal],
+		})
+	}
+	if len(summaries) == 0 {
+		return ""
+	}
+	limit := 20
+	if len(summaries) < limit {
+		limit = len(summaries)
+	}
+	out := map[string]any{
+		"ok":       payload["ok"],
+		"identity": payload["identity"],
+		"summary":  fmt.Sprintf("当前返回 %d 个会话；以下仅列出前 %d 个真实结果，请勿推断未展示项。", len(summaries), limit),
+		"chats":    summaries[:limit],
+	}
+	text, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(text)
 }
 
 func stringArg(args map[string]any, key string) string {
@@ -343,6 +479,161 @@ func boolArg(args map[string]any, key string) bool {
 	default:
 		return false
 	}
+}
+
+func stringListArg(args map[string]any, key string) []string {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				items = append(items, item)
+			}
+		}
+		return items
+	case []any:
+		items := make([]string, 0, len(typed))
+		for _, raw := range typed {
+			item := strings.TrimSpace(fmt.Sprint(raw))
+			if item != "" {
+				items = append(items, item)
+			}
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func containsAsFlag(argv []string) bool {
+	for i := 0; i < len(argv); i++ {
+		if argv[i] == "--as" && i+1 < len(argv) {
+			return true
+		}
+		if strings.HasPrefix(argv[i], "--as=") {
+			return true
+		}
+	}
+	return false
+}
+
+func parsePermissionRequirement(text string) permissionRequirement {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return permissionRequirement{}
+	}
+	requirement := permissionRequirement{}
+
+	var payload map[string]any
+	if json.Unmarshal([]byte(text), &payload) == nil {
+		requirement.Scopes = append(requirement.Scopes, extractScopesFromValue(payload["permission_violations"])...)
+		if value, ok := payload["console_url"].(string); ok {
+			requirement.ConsoleURL = strings.TrimSpace(value)
+		}
+		if value, ok := payload["hint"].(string); ok {
+			requirement.Hint = strings.TrimSpace(value)
+		}
+		if errValue, ok := payload["error"].(map[string]any); ok {
+			requirement.Scopes = append(requirement.Scopes, extractScopesFromValue(errValue["permission_violations"])...)
+			if value, ok := errValue["console_url"].(string); ok && requirement.ConsoleURL == "" {
+				requirement.ConsoleURL = strings.TrimSpace(value)
+			}
+			if value, ok := errValue["hint"].(string); ok && requirement.Hint == "" {
+				requirement.Hint = strings.TrimSpace(value)
+			}
+			if value, ok := errValue["message"].(string); ok && len(requirement.Scopes) == 0 {
+				requirement.Scopes = append(requirement.Scopes, extractScopesFromHint(value)...)
+			}
+		}
+	}
+
+	if requirement.Hint == "" {
+		for _, line := range strings.Split(text, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.Contains(line, "auth login --scope") {
+				requirement.Hint = line
+				break
+			}
+		}
+	}
+	if len(requirement.Scopes) == 0 && requirement.Hint != "" {
+		requirement.Scopes = append(requirement.Scopes, extractScopesFromHint(requirement.Hint)...)
+	}
+	requirement.Scopes = uniqueNonEmpty(requirement.Scopes)
+	return requirement
+}
+
+func extractScopesFromHint(text string) []string {
+	if matches := scopeHintPattern.FindStringSubmatch(text); len(matches) == 2 {
+		return []string{strings.TrimSpace(matches[1])}
+	}
+	const marker = "missing required scope(s):"
+	lower := strings.ToLower(text)
+	idx := strings.Index(lower, marker)
+	if idx == -1 {
+		return nil
+	}
+	scopeText := strings.TrimSpace(text[idx+len(marker):])
+	scopeText = strings.Trim(scopeText, " .。")
+	if scopeText == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(scopeText, func(r rune) bool {
+		return r == ',' || r == ';' || r == '，' || r == '；'
+	})
+	return uniqueNonEmpty(parts)
+}
+
+func extractScopesFromValue(value any) []string {
+	switch typed := value.(type) {
+	case []any:
+		var scopes []string
+		for _, item := range typed {
+			scopes = append(scopes, extractScopesFromValue(item)...)
+		}
+		return scopes
+	case map[string]any:
+		var scopes []string
+		if raw, ok := typed["scope"]; ok {
+			if scope := strings.TrimSpace(fmt.Sprint(raw)); scope != "" && scope != "<nil>" {
+				scopes = append(scopes, scope)
+			}
+		}
+		if raw, ok := typed["scopes"]; ok {
+			scopes = append(scopes, extractScopesFromValue(raw)...)
+		}
+		return scopes
+	case string:
+		scope := strings.TrimSpace(typed)
+		if scope == "" {
+			return nil
+		}
+		return []string{scope}
+	default:
+		return nil
+	}
+}
+
+func uniqueNonEmpty(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }
 
 func toolTimeout() time.Duration {

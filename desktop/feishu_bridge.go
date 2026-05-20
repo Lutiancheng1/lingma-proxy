@@ -241,6 +241,37 @@ func (a *App) GetFeishuBridgeStatus() feishu.Status {
 	return a.bridge.Status()
 }
 
+func (a *App) RefreshFeishuBridgeStatus() feishu.Status {
+	if a.bridge == nil {
+		manager := feishu.NewManager(feishu.ManagerOptions{})
+		manager.SetConfig(a.GetFeishuBridgeConfig())
+		status := manager.Probe(context.Background())
+		a.logFeishuProbeStatus(status)
+		return status
+	}
+	a.bridge.SetConfig(a.GetFeishuBridgeConfig())
+	status := a.bridge.Probe(context.Background())
+	a.logFeishuProbeStatus(status)
+	return status
+}
+
+func (a *App) logFeishuProbeStatus(status feishu.Status) {
+	a.emitLogWithSource("feishu-bridge", "info", fmt.Sprintf("Feishu probe paths: node=%s npm=%s npx=%s lark-cli=%s",
+		displayBinaryPath(status.Node.Path),
+		displayBinaryPath(status.NPM.Path),
+		displayBinaryPath(status.NPX.Path),
+		displayBinaryPath(status.CLI.Path),
+	))
+}
+
+func displayBinaryPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "<missing>"
+	}
+	return trimmed
+}
+
 func (a *App) InstallFeishuCLI() error {
 	if a.bridge == nil {
 		return fmt.Errorf("feishu bridge manager not initialized")

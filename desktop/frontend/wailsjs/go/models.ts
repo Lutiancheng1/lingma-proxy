@@ -127,6 +127,7 @@ export namespace feishu {
 	    loginUrl?: string;
 	    lastOutput?: string;
 	    lastError?: string;
+	    lastCheckedAt?: string;
 	    lastStartedAt?: string;
 	    currentModel?: string;
 	    requiredSkills?: string[];
@@ -155,6 +156,7 @@ export namespace feishu {
 	        this.loginUrl = source["loginUrl"];
 	        this.lastOutput = source["lastOutput"];
 	        this.lastError = source["lastError"];
+	        this.lastCheckedAt = source["lastCheckedAt"];
 	        this.lastStartedAt = source["lastStartedAt"];
 	        this.currentModel = source["currentModel"];
 	        this.requiredSkills = source["requiredSkills"];
@@ -186,6 +188,10 @@ export namespace main {
 	export class AppLog {
 	    createdAt?: string;
 	    time: string;
+	    source?: string;
+	    sessionId?: string;
+	    chatId?: string;
+	    messageId?: string;
 	    level: string;
 	    message: string;
 	
@@ -197,6 +203,10 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.createdAt = source["createdAt"];
 	        this.time = source["time"];
+	        this.source = source["source"];
+	        this.sessionId = source["sessionId"];
+	        this.chatId = source["chatId"];
+	        this.messageId = source["messageId"];
 	        this.level = source["level"];
 	        this.message = source["message"];
 	    }

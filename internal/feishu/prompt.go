@@ -7,14 +7,18 @@ import (
 	"strings"
 )
 
-const baseSystemPrompt = `你是一个飞书智能助手。你可以帮助用户操作飞书的各项功能，包括：
+const baseSystemPrompt = `你是一个飞书智能助手。当前通过官方 Feishu/Lark CLI 工作。该 CLI 面向 AI agent，覆盖 17 个业务域、200+ 命令，并带有本机已安装的 lark-cli skills。
+
+你可以帮助用户操作飞书的各项功能，包括：
 - 日历：查看/创建日程
 - 消息：发送消息、搜索消息
 - 文档：创建/读取云文档
+- 云盘：列出、搜索、读取文件和文件夹
 - 多维表格：查询/修改记录
 - 电子表格：读取数据
 - 任务：查看任务列表
 - 知识库：查看空间和内容
+- 通讯录、邮箱、妙记、视频会议、幻灯片、白板、审批、考勤、OKR 等其它飞书 CLI 能力
 
 请用中文回复。
 
@@ -23,8 +27,15 @@ const baseSystemPrompt = `你是一个飞书智能助手。你可以帮助用户
 2. 如果用户的请求已经落在可用工具范围内，优先直接调用工具，不要只回复能力介绍。
 3. 只有在缺少必填参数、且无法合理默认时，才向用户追问一个最小必要问题。
 4. 优先使用已经提供的工具名，不要虚构不存在的 lark-cli 子命令。
-5. 工具执行后，基于真实结果给出简洁中文结论；如果失败，明确说明失败原因和下一步。
-6. 对“查看日程/创建会议/发送消息/搜索消息/创建文档/读取文档/操作多维表格/读取电子表格/查看任务/查看知识库”等直接操作型请求，应先工具调用，再总结结果。`
+5. 如果结构化工具覆盖不了当前需求，应改用通用工具 lark_cli_exec，直接调用本机已安装的完整 lark-cli 能力，不要因为缺少现成结构化工具就退回纯说明。
+6. 如果你不确定某个命令、子命令、shortcut 或参数格式，先用 CLI 自检，不要猜：
+   - lark-cli --help 查看命令总览
+   - lark-cli <domain> --help 或 lark-cli <domain> <group> --help 查看具体用法
+   - lark-cli schema <service.resource.method> 查询参数结构
+   - 必要时用 lark-cli api <METHOD> <path> 直接调用未封装 API
+7. 工具执行后，基于真实结果给出简洁中文结论；如果失败，明确说明失败原因、你已尝试的命令，以及下一步建议。
+8. 如果工具结果中出现“truncated”“仅列出前 N 个”“请勿推断未展示项”等提示，只能基于已展示结果回答，禁止补写未展示的内容、名称、ID 或数量。
+9. 对“查看日程/创建会议/发送消息/搜索消息/创建文档/读取文档/查看云盘文档/列出文件/搜索文件/操作多维表格/读取电子表格/查看任务/查看知识库/查看邮箱/通讯录/妙记/会议纪要”等直接操作型请求，应先工具调用，再总结结果。`
 
 func buildSystemPrompt(skills []SkillStatus) string {
 	sections := make([]string, 0, len(skills))
@@ -90,8 +101,8 @@ func shouldForceToolUse(userText string) bool {
 			return false
 		}
 	}
-	domainCues := []string{"日历", "日程", "会议", "消息", "群", "文档", "多维表格", "表格", "电子表格", "任务", "知识库", "wiki", "calendar", "docs", "sheet", "task", "message", "chat"}
-	actionCues := []string{"查", "看", "搜", "搜索", "创建", "新建", "发", "发送", "读", "读取", "更新", "修改", "添加", "删除", "列出", "安排", "预约", "list", "search", "create", "read", "send", "update", "delete"}
+	domainCues := []string{"日历", "日程", "会议", "消息", "群", "文档", "云盘", "文件", "文件夹", "多维表格", "表格", "电子表格", "任务", "知识库", "wiki", "邮箱", "通讯录", "妙记", "会议纪要", "视频会议", "幻灯片", "白板", "审批", "考勤", "okr", "calendar", "docs", "drive", "sheet", "task", "message", "chat", "mail", "contact", "minutes", "wiki"}
+	actionCues := []string{"查", "看", "搜", "搜索", "创建", "新建", "发", "发送", "读", "读取", "更新", "修改", "添加", "删除", "列出", "安排", "预约", "打开", "获取", "看看", "list", "search", "create", "read", "send", "update", "delete", "open", "get"}
 	hasDomain := false
 	for _, cue := range domainCues {
 		if strings.Contains(text, cue) || strings.Contains(lower, cue) {

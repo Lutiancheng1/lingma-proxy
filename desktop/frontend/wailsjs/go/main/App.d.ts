@@ -48,6 +48,10 @@ export function MinimizeWindow():Promise<void>;
 
 export function OpenPathInFileManager(arg1:string):Promise<void>;
 
+export function RecordBootMilestone(arg1:string):Promise<void>;
+
+export function RefreshFeishuBridgeStatus():Promise<feishu.Status>;
+
 export function RefreshModels():Promise<Array<main.ModelInfo>>;
 
 export function RequestQuitShortcut():Promise<void>;

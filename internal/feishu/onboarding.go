@@ -62,7 +62,7 @@ func readCLIConfigStatus() ConfigStatus {
 }
 
 func readAuthStatus(ctx context.Context) AuthStatus {
-	cmd := exec.CommandContext(ctx, "lark-cli", "auth", "status", "--verify")
+	cmd := commandContextWithEnv(ctx, "lark-cli", "auth", "status", "--verify")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return AuthStatus{Message: strings.TrimSpace(string(output))}
@@ -105,14 +105,14 @@ func commandShell(goos string) (string, []string) {
 func storeSecret(serviceName, appID, secret string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		cmd := exec.Command("security", "add-generic-password", "-U", "-a", appID, "-s", serviceName, "-w", secret)
+		cmd := commandWithEnv("security", "add-generic-password", "-U", "-a", appID, "-s", serviceName, "-w", secret)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("store secret in keychain failed: %w: %s", err, strings.TrimSpace(string(output)))
 		}
 		return nil
 	case "windows":
 		target := serviceName + ":" + appID
-		cmd := exec.Command("cmdkey", "/generic:"+target, "/user:"+appID, "/pass:"+secret)
+		cmd := commandWithEnv("cmdkey", "/generic:"+target, "/user:"+appID, "/pass:"+secret)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("store secret in credential manager failed: %w: %s", err, strings.TrimSpace(string(output)))
 		}

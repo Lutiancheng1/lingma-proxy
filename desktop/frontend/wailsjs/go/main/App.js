@@ -90,6 +90,14 @@ export function OpenPathInFileManager(arg1) {
   return window['go']['main']['App']['OpenPathInFileManager'](arg1);
 }
 
+export function RecordBootMilestone(arg1) {
+  return window['go']['main']['App']['RecordBootMilestone'](arg1);
+}
+
+export function RefreshFeishuBridgeStatus() {
+  return window['go']['main']['App']['RefreshFeishuBridgeStatus']();
+}
+
 export function RefreshModels() {
   return window['go']['main']['App']['RefreshModels']();
 }

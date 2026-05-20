@@ -53,6 +53,7 @@ type Status struct {
 	LoginURL       string        `json:"loginUrl,omitempty"`
 	LastOutput     string        `json:"lastOutput,omitempty"`
 	LastError      string        `json:"lastError,omitempty"`
+	LastCheckedAt  string        `json:"lastCheckedAt,omitempty"`
 	LastStartedAt  string        `json:"lastStartedAt,omitempty"`
 	CurrentModel   string        `json:"currentModel,omitempty"`
 	RequiredSkills []string      `json:"requiredSkills,omitempty"`

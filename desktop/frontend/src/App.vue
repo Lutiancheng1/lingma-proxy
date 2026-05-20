@@ -7,7 +7,7 @@ import Requests from './views/Requests.vue'
 import Settings from './views/Settings.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { ClipboardSetText } from '../wailsjs/runtime'
-import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetAppVersion, GetLogSummaries, GetRequestSummaries, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager } from '../wailsjs/go/main/App.js'
+import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetAppVersion, GetLogSummaries, GetRequestSummaries, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager, ShowWindow } from '../wailsjs/go/main/App.js'
 import lingmaIcon from './assets/images/lingma-icon.png'
 import { safeEventsOff, safeEventsOn, safeInvoke } from './utils/wailsSafe'
 
@@ -50,6 +50,10 @@ let systemThemeQuery = null
 let toastTimer = null
 let requestsRefreshTimer = null
 
+function markBoot(name) {
+  window?.go?.main?.App?.RecordBootMilestone?.(name)?.catch?.(() => {})
+}
+
 const navigation = [
   { key: 'dashboard', label: '仪表盘', icon: 'bi-house-door' },
   { key: 'requests', label: '请求流', icon: 'bi-file-earmark-text' },
@@ -58,9 +62,9 @@ const navigation = [
   { key: 'logs', label: '日志', icon: 'bi-terminal' },
 ]
 
-function addLog(level, message) {
+function addLog(level, message, source = 'app') {
   const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  logs.value.unshift({ time, level, message })
+  logs.value.unshift({ time, level, source, message })
   if (logs.value.length > 500) {
     logs.value = logs.value.slice(0, 500)
   }
@@ -280,18 +284,14 @@ function handleAppShortcut(event) {
 }
 
 onMounted(() => {
+  markBoot('App.vue:onMounted:begin')
+  document.getElementById('boot-splash')?.remove()
+  markBoot('App.vue:onMounted:splash-removed')
+  safeInvoke(() => ShowWindow(), undefined, 'ShowWindow unavailable in browser preview')
   window.addEventListener('keydown', handleAppShortcut, true)
   systemThemeQuery = window.matchMedia?.('(prefers-color-scheme: dark)')
   systemThemeQuery?.addEventListener?.('change', applyTheme)
   applyTheme()
-  refreshStatus()
-  safeInvoke(() => GetAppVersion(), 'dev', 'GetAppVersion unavailable in app shell').then((value) => {
-    if (value) appVersion.value = value
-  })
-  primeRequests()
-  GetLogSummaries().then((items) => {
-    logs.value = Array.isArray(items) ? items : []
-  }).catch(() => {})
   safeEventsOn('models:updated', (data) => {
     status.value.models = Array.isArray(data) ? data.length : status.value.models
     addLog('info', `模型列表已更新：${status.value.models} 个模型`)
@@ -301,7 +301,7 @@ onMounted(() => {
       logs.value.unshift(data)
       if (logs.value.length > 500) logs.value = logs.value.slice(0, 500)
     } else {
-      addLog(data.level || 'info', data.message || '')
+      addLog(data.level || 'info', data.message || '', data.source || 'app')
     }
   })
   safeEventsOn('logs:updated', (data) => {
@@ -318,6 +318,17 @@ onMounted(() => {
   })
   safeEventsOn('requests:updated', () => {
     scheduleRequestSnapshotRefresh()
+  })
+  refreshStatus()
+  safeInvoke(() => GetAppVersion(), 'dev', 'GetAppVersion unavailable in app shell').then((value) => {
+    if (value) appVersion.value = value
+  })
+  primeRequests()
+  GetLogSummaries().then((items) => {
+    logs.value = Array.isArray(items) ? items : []
+  }).catch(() => {})
+  requestAnimationFrame(() => {
+    markBoot('App.vue:onMounted:first-animation-frame')
   })
 })
 
@@ -419,9 +430,9 @@ onUnmounted(() => {
             @notice="handleNotice"
             @request-selected="handleRequestSelectionAck"
           />
+          <Settings v-else-if="currentTab === 'settings'" @log="addLog" @status-refresh="refreshStatus" @notice="handleNotice" />
         </KeepAlive>
         <Models v-if="currentTab === 'models'" @log="addLog" @status="setStatus" @notice="handleNotice" />
-        <Settings v-else-if="currentTab === 'settings'" @log="addLog" @status-refresh="refreshStatus" />
         <Logs v-else-if="currentTab === 'logs'" :logs="logs" @clear="clearLocalLogs" @notice="handleNotice" />
       </main>
     </section>

@@ -87,6 +87,10 @@ type RequestRecord struct {
 type AppLog struct {
 	CreatedAt string `json:"createdAt,omitempty"`
 	Time      string `json:"time"`
+	Source    string `json:"source,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	ChatID    string `json:"chatId,omitempty"`
+	MessageID string `json:"messageId,omitempty"`
 	Level     string `json:"level"`
 	Message   string `json:"message"`
 }
@@ -122,6 +126,7 @@ type App struct {
 
 	stateFlushTimer *time.Timer
 	stateFlushAt    time.Time
+	bootStartedAt   time.Time
 }
 
 // ModelInfo represents a model returned by /v1/models
@@ -196,7 +201,10 @@ func NewApp() *App {
 // startup is called when the app starts
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.bootStartedAt = time.Now()
+	a.logBootMilestone("startup:begin")
 	a.cfg, a.bridgeCfg = loadDesktopConfig()
+	a.logBootMilestone("startup:config-loaded")
 	a.bridge = feishu.NewManager(feishu.ManagerOptions{
 		ProxyURL: func() string {
 			a.mu.RLock()
@@ -206,36 +214,59 @@ func (a *App) startup(ctx context.Context) {
 			}
 			return fmt.Sprintf("http://%s:%d/v1/chat/completions", a.cfg.Host, a.cfg.Port)
 		},
-		Logf: func(level, message string) {
-			a.emitLog(level, message)
+		Logf: func(level, message string, meta feishu.LogMeta) {
+			a.emitLogWithSourceMeta("feishu-bridge", level, message, meta.SessionID, meta.ChatID, meta.MessageID)
 		},
 		Emit: func(status feishu.Status) {
 			runtime.EventsEmit(a.ctx, "feishu:status", status)
 		},
+		Persist: func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.saveAppStateLocked()
+		},
 	})
 	a.bridge.SetConfig(a.bridgeCfg)
+	a.logBootMilestone("startup:app-state-load:begin")
 	if err := a.loadAppState(); err != nil {
 		runtime.LogWarningf(a.ctx, "failed to load app state: %v", err)
+		a.emitLogWithSource("boot", "warn", fmt.Sprintf("app-state sync load failed: %v", err))
 	}
+	a.logBootMilestone("startup:app-state-load:end")
 
 	// Auto-save default config on first run so users can find/edit it later
 	if err := a.saveConfig(a.cfg); err != nil {
 		runtime.LogWarningf(a.ctx, "failed to save default config: %v", err)
 	}
+	a.logBootMilestone("startup:config-saved")
 
 	// Auto-start proxy so the app is usable immediately
 	go func() {
+		a.logBootMilestone("startup:auto-start-proxy:begin")
 		if err := a.StartProxy(); err != nil {
 			a.emitLog("error", fmt.Sprintf("Auto-start failed: %v. %s", err, transportFallbackHint()))
 		} else {
 			a.emitLog("info", "Proxy auto-started")
 		}
+		a.logBootMilestone("startup:auto-start-proxy:end")
 	}()
+	a.logBootMilestone("startup:end")
 }
 
 // onDomReady is called when the frontend DOM is ready
 func (a *App) onDomReady(ctx context.Context) {
 	a.ctx = ctx
+	a.logBootMilestone("backend:onDomReady")
+	go func() {
+		time.Sleep(900 * time.Millisecond)
+		a.logBootMilestone("feishu-probe:scheduled")
+		a.mu.RLock()
+		bridge := a.bridge
+		a.mu.RUnlock()
+		if bridge != nil {
+			bridge.Probe(context.Background())
+		}
+	}()
 }
 
 // onSecondInstanceLaunch is called when user clicks the dock icon while app is already running.
@@ -334,9 +365,44 @@ func (a *App) forceQuit() {
 }
 
 func (a *App) emitLog(level string, message string) {
+	a.emitLogWithSource("app", level, message)
+}
+
+func (a *App) logBootMilestone(name string) {
+	now := time.Now()
+	elapsed := "n/a"
+	if !a.bootStartedAt.IsZero() {
+		elapsed = now.Sub(a.bootStartedAt).Round(time.Millisecond).String()
+	}
+	message := fmt.Sprintf("%s @ %s (+%s)", strings.TrimSpace(name), now.Format(time.RFC3339Nano), elapsed)
+	runtime.LogInfof(a.ctx, "[boot] %s", message)
+	a.emitLogWithSource("boot", "info", message)
+}
+
+func (a *App) RecordBootMilestone(name string) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return
+	}
+	a.logBootMilestone("frontend:" + trimmed)
+}
+
+func (a *App) emitLogWithSource(source string, level string, message string) {
+	a.emitLogWithSourceMeta(source, level, message, "", "", "")
+}
+
+func (a *App) emitLogWithSourceMeta(source string, level string, message string, sessionID string, chatID string, messageID string) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "app"
+	}
 	entry := AppLog{
 		CreatedAt: time.Now().Format(time.RFC3339),
 		Time:      time.Now().Format("15:04:05"),
+		Source:    source,
+		SessionID: strings.TrimSpace(sessionID),
+		ChatID:    strings.TrimSpace(chatID),
+		MessageID: strings.TrimSpace(messageID),
 		Level:     level,
 		Message:   message,
 	}
@@ -974,9 +1040,10 @@ func formatPayloadSize(bytes int) string {
 }
 
 type appStateFile struct {
-	Requests []RequestRecord `json:"requests"`
-	Logs     []AppLog        `json:"logs"`
-	Stats    TokenStats      `json:"stats"`
+	Requests            []RequestRecord                        `json:"requests"`
+	Logs                []AppLog                               `json:"logs"`
+	Stats               TokenStats                             `json:"stats"`
+	FeishuConversations map[string]feishu.ConversationSnapshot `json:"feishuConversations,omitempty"`
 }
 
 func (a *App) loadAppState() error {
@@ -1013,6 +1080,9 @@ func (a *App) loadAppState() error {
 	a.requests = state.Requests
 	a.logs = state.Logs
 	a.stats = state.Stats
+	if a.bridge != nil {
+		a.bridge.LoadConversationSnapshot(state.FeishuConversations)
+	}
 	if a.stats.ByModel == nil {
 		a.stats.ByModel = map[string]int{}
 	}
@@ -1055,9 +1125,10 @@ func (a *App) flushAppStateLocked() {
 		return
 	}
 	state := appStateFile{
-		Requests: trimPersistedRequests(a.requests),
-		Logs:     trimPersistedLogs(a.logs),
-		Stats:    a.stats,
+		Requests:            trimPersistedRequests(a.requests),
+		Logs:                trimPersistedLogs(a.logs),
+		Stats:               a.stats,
+		FeishuConversations: a.feishuConversationSnapshotLocked(),
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -1067,6 +1138,13 @@ func (a *App) flushAppStateLocked() {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		runtime.LogWarningf(a.ctx, "write app state failed: %v", err)
 	}
+}
+
+func (a *App) feishuConversationSnapshotLocked() map[string]feishu.ConversationSnapshot {
+	if a.bridge == nil {
+		return nil
+	}
+	return a.bridge.ConversationSnapshot()
 }
 
 func trimPersistedRequests(records []RequestRecord) []RequestRecord {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -29,7 +28,7 @@ type listedSkill struct {
 }
 
 func discoverSkills(ctx context.Context) ([]SkillStatus, error) {
-	cmd := exec.CommandContext(ctx, "npx", "skills", "ls", "-g", "--json")
+	cmd := commandContextWithEnv(ctx, "npx", "skills", "ls", "-g", "--json")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("list skills failed: %w: %s", err, strings.TrimSpace(string(output)))

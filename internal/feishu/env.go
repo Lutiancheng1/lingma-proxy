@@ -1,0 +1,145 @@
+package feishu
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+)
+
+var (
+	commandEnvOnce sync.Once
+	commandEnv     []string
+	commandPath    string
+)
+
+func resolvedCommandEnv() []string {
+	commandEnvOnce.Do(func() {
+		commandPath = resolvedPATH()
+		base := os.Environ()
+		next := make([]string, 0, len(base)+1)
+		pathWritten := false
+		for _, item := range base {
+			if strings.HasPrefix(item, "PATH=") {
+				next = append(next, "PATH="+commandPath)
+				pathWritten = true
+				continue
+			}
+			next = append(next, item)
+		}
+		if !pathWritten {
+			next = append(next, "PATH="+commandPath)
+		}
+		commandEnv = next
+	})
+	return append([]string(nil), commandEnv...)
+}
+
+func resolvedPATH() string {
+	var segments []string
+	segments = append(segments, pathSegments(os.Getenv("PATH"))...)
+	segments = append(segments, pathSegments(loginShellPATH())...)
+	switch runtime.GOOS {
+	case "darwin":
+		segments = append(segments, "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+	case "linux":
+		segments = append(segments, "/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+	case "windows":
+		segments = append(segments, pathSegments(os.Getenv("Path"))...)
+	}
+	return strings.Join(uniqueStrings(segments), string(os.PathListSeparator))
+}
+
+func loginShellPATH() string {
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	if shell == "" {
+		switch runtime.GOOS {
+		case "darwin", "linux":
+			shell = "/bin/zsh"
+		default:
+			return ""
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, shell, "-lc", "printf %s \"$PATH\"")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func pathSegments(pathValue string) []string {
+	if strings.TrimSpace(pathValue) == "" {
+		return nil
+	}
+	return strings.Split(pathValue, string(os.PathListSeparator))
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode()&0111 != 0
+}
+
+func lookPathWithResolvedEnv(name string) (string, error) {
+	if strings.ContainsRune(name, os.PathSeparator) {
+		if isExecutableFile(name) {
+			return name, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	for _, dir := range pathSegments(resolvedPATH()) {
+		candidate := filepath.Join(dir, name)
+		if isExecutableFile(candidate) {
+			return candidate, nil
+		}
+		if runtime.GOOS == "windows" {
+			for _, ext := range []string{".exe", ".cmd", ".bat"} {
+				if isExecutableFile(candidate + ext) {
+					return candidate + ext, nil
+				}
+			}
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
+func commandWithEnv(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.Env = resolvedCommandEnv()
+	return cmd
+}
+
+func commandContextWithEnv(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = resolvedCommandEnv()
+	return cmd
+}

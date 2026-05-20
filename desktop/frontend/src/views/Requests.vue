@@ -287,6 +287,7 @@ onUnmounted(() => {
               <th>模型</th>
               <th>状态</th>
               <th>耗时</th>
+              <th>Size</th>
             </tr>
           </thead>
           <tbody>
@@ -305,6 +306,7 @@ onUnmounted(() => {
               <td>{{ request.model || '-' }}</td>
               <td><span class="status-chip" :class="statusClass(request.statusCode)">{{ request.statusCode }}</span></td>
               <td>{{ request.duration }}</td>
+              <td>{{ request.size || '-' }}</td>
             </tr>
           </tbody>
         </table>

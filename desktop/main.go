@@ -22,10 +22,11 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:             "Lingma Proxy",
-		Width:             1100,
-		Height:            750,
+		Width:             1160,
+		Height:            760,
 		MinWidth:          900,
 		MinHeight:         600,
+		StartHidden:       true,
 		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
