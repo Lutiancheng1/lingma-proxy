@@ -1,9 +1,7 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
-import { GetLogDetail } from '../../wailsjs/go/main/App.js'
+import { computed, ref } from 'vue'
 import { ClipboardSetText } from '../../wailsjs/runtime'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
-import { safeInvoke } from '../utils/wailsSafe'
 
 const props = defineProps({
   logs: {
@@ -16,23 +14,17 @@ const emit = defineEmits(['clear', 'notice'])
 
 const filter = ref('all')
 const search = ref('')
-const selectedKey = ref(null)
-const selectedDetail = ref(null)
-const detailLoading = ref(false)
 const clearConfirmOpen = ref(false)
 
 const filteredLogs = computed(() => {
   const q = search.value.trim().toLowerCase()
   return props.logs.filter((log) => {
+    if ((log.source || '').toLowerCase() === 'boot') return false
     const matchesLevel = filter.value === 'all' || log.level === filter.value
-    const matchesSearch = !q || `${log.time} ${log.level} ${log.message}`.toLowerCase().includes(q)
+    const matchesSearch = !q || `${log.time} ${log.source || 'app'} ${log.level} ${log.message}`.toLowerCase().includes(q)
     return matchesLevel && matchesSearch
   })
 })
-
-function logKey(log) {
-  return log?.createdAt || `${log?.time || ''}-${log?.message || ''}`
-}
 
 function levelClass(level) {
   return {
@@ -50,8 +42,14 @@ function levelLabel(level) {
   }[level] || level
 }
 
+function sourceLabel(source) {
+  return {
+    app: '应用',
+  }[source || 'app'] || (source || '应用')
+}
+
 function serializeLogs() {
-  return filteredLogs.value.map((log) => `[${log.time}] ${levelLabel(log.level)} ${log.message}`).join('\n')
+  return filteredLogs.value.map((log) => `[${log.time}] [${sourceLabel(log.source)}] ${levelLabel(log.level)} ${log.message}`).join('\n')
 }
 
 async function copyLogs() {
@@ -69,52 +67,6 @@ async function copyLogs() {
   }
 }
 
-async function copyDetail() {
-  const value = selectedDetail.value?.message || ''
-  try {
-    await ClipboardSetText(value)
-    emit('notice', '已复制完整日志')
-  } catch (e) {
-    try {
-      await navigator.clipboard?.writeText(value)
-      emit('notice', '已复制完整日志')
-    } catch (fallbackError) {
-      console.debug('Copy log detail failed:', fallbackError)
-      emit('notice', '完整日志复制失败')
-    }
-  }
-}
-
-async function loadDetail(createdAt) {
-  const key = (createdAt || '').trim()
-  if (!key) {
-    selectedDetail.value = null
-    return
-  }
-  detailLoading.value = true
-  try {
-    selectedDetail.value = await safeInvoke(
-      () => GetLogDetail(key),
-      () => props.logs.find((log) => logKey(log) === key) || null,
-      'GetLogDetail unavailable in browser preview'
-    )
-  } finally {
-    detailLoading.value = false
-  }
-}
-
-async function selectLog(log) {
-  const key = logKey(log)
-  if (!key) return
-  if (selectedKey.value === key) {
-    selectedKey.value = null
-    selectedDetail.value = null
-    return
-  }
-  selectedKey.value = key
-  await loadDetail(log.createdAt || '')
-}
-
 function confirmClearLogs() {
   if (props.logs.length === 0) return
   clearConfirmOpen.value = true
@@ -128,14 +80,6 @@ function proceedClearLogs() {
   clearConfirmOpen.value = false
   emit('clear')
 }
-
-watch(() => props.logs, (nextLogs) => {
-  if (!selectedKey.value || !Array.isArray(nextLogs)) return
-  if (!nextLogs.some((log) => logKey(log) === selectedKey.value)) {
-    selectedKey.value = null
-    selectedDetail.value = null
-  }
-}, { deep: true })
 </script>
 
 <template>
@@ -159,37 +103,22 @@ watch(() => props.logs, (nextLogs) => {
           <button :class="{ active: filter === 'warn' }" type="button" @click="filter = 'warn'">警告</button>
           <button :class="{ active: filter === 'error' }" type="button" @click="filter = 'error'">错误</button>
         </div>
-        <input v-model="search" class="search-input" type="search" placeholder="搜索日志内容" />
+        <input v-model="search" class="search-input" type="search" placeholder="搜索来源、级别或日志内容" />
       </div>
 
       <div v-if="filteredLogs.length > 0" class="log-list hidden-scrollbar">
-        <button
+        <div
           v-for="(log, index) in filteredLogs"
           :key="log.createdAt || index"
-          class="log-row log-row-button"
-          :class="{ selected: selectedKey === logKey(log) }"
-          type="button"
-          @click="selectLog(log)"
+          class="log-row"
         >
           <span class="muted">{{ log.time }}</span>
+          <span class="log-source-chip">{{ sourceLabel(log.source) }}</span>
           <strong :class="levelClass(log.level)">{{ levelLabel(log.level) }}</strong>
           <span>{{ log.message }}</span>
-        </button>
-      </div>
-      <div v-else class="empty-state">暂无日志。</div>
-
-      <div v-if="selectedKey" class="detail-panel hidden-scrollbar">
-        <div v-if="detailLoading" class="empty-state">加载完整日志中...</div>
-        <div v-else class="detail-section">
-          <div class="detail-toolbar">
-            <h3>完整日志</h3>
-            <div class="detail-actions">
-              <button type="button" class="ghost-button" @click="copyDetail">复制</button>
-            </div>
-          </div>
-          <pre>{{ selectedDetail?.message || '空日志内容' }}</pre>
         </div>
       </div>
+      <div v-else class="empty-state">暂无日志。</div>
     </section>
 
     <ConfirmDialog

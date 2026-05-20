@@ -86,6 +86,7 @@ type RequestRecord struct {
 type AppLog struct {
 	CreatedAt string `json:"createdAt,omitempty"`
 	Time      string `json:"time"`
+	Source    string `json:"source,omitempty"`
 	Level     string `json:"level"`
 	Message   string `json:"message"`
 }
@@ -314,9 +315,18 @@ func (a *App) forceQuit() {
 }
 
 func (a *App) emitLog(level string, message string) {
+	a.emitLogWithSource("app", level, message)
+}
+
+func (a *App) emitLogWithSource(source string, level string, message string) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "app"
+	}
 	entry := AppLog{
 		CreatedAt: time.Now().Format(time.RFC3339),
 		Time:      time.Now().Format("15:04:05"),
+		Source:    source,
 		Level:     level,
 		Message:   message,
 	}

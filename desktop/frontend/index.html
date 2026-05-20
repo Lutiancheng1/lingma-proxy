@@ -5,9 +5,77 @@
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
     <link rel="icon" type="image/png" href="/favicon.png"/>
     <title>Lingma Proxy</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+        background: linear-gradient(180deg, #f7fbff 0%, #eef4ff 100%);
+      }
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background: linear-gradient(180deg, #f7fbff 0%, #eef4ff 100%);
+      }
+      body {
+        overflow: hidden;
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #1f2a44;
+        background: linear-gradient(180deg, #f7fbff 0%, #eef4ff 100%);
+      }
+      .boot-card {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 18px 22px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
+        backdrop-filter: blur(14px);
+      }
+      .boot-spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid rgba(37, 99, 235, 0.16);
+        border-top-color: #2563eb;
+        border-radius: 999px;
+        animation: boot-spin 0.9s linear infinite;
+      }
+      .boot-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .boot-title {
+        font-size: 15px;
+        font-weight: 700;
+      }
+      .boot-subtitle {
+        color: #64748b;
+        font-size: 13px;
+      }
+      @keyframes boot-spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
 </head>
 <body>
 <div id="app"></div>
+<div id="boot-splash" aria-hidden="true">
+    <div class="boot-card">
+        <div class="boot-spinner"></div>
+        <div class="boot-copy">
+            <div class="boot-title">Lingma Proxy 正在启动</div>
+            <div class="boot-subtitle">正在加载界面与本地缓存...</div>
+        </div>
+    </div>
+</div>
 <script src="./src/main.ts" type="module"></script>
 </body>
 </html>

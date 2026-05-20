@@ -7,7 +7,7 @@ import Requests from './views/Requests.vue'
 import Settings from './views/Settings.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { ClipboardSetText } from '../wailsjs/runtime'
-import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetAppVersion, GetLogSummaries, GetRequestSummaries, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager } from '../wailsjs/go/main/App.js'
+import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetAppVersion, GetLogSummaries, GetRequestSummaries, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager, ShowWindow } from '../wailsjs/go/main/App.js'
 import lingmaIcon from './assets/images/lingma-icon.png'
 import { safeEventsOff, safeEventsOn, safeInvoke } from './utils/wailsSafe'
 
@@ -58,9 +58,9 @@ const navigation = [
   { key: 'logs', label: '日志', icon: 'bi-terminal' },
 ]
 
-function addLog(level, message) {
+function addLog(level, message, source = 'app') {
   const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  logs.value.unshift({ time, level, message })
+  logs.value.unshift({ time, level, source, message })
   if (logs.value.length > 500) {
     logs.value = logs.value.slice(0, 500)
   }
@@ -280,6 +280,8 @@ function handleAppShortcut(event) {
 }
 
 onMounted(() => {
+  document.getElementById('boot-splash')?.remove()
+  safeInvoke(() => ShowWindow(), undefined, 'ShowWindow unavailable in browser preview')
   window.addEventListener('keydown', handleAppShortcut, true)
   systemThemeQuery = window.matchMedia?.('(prefers-color-scheme: dark)')
   systemThemeQuery?.addEventListener?.('change', applyTheme)
@@ -301,7 +303,7 @@ onMounted(() => {
       logs.value.unshift(data)
       if (logs.value.length > 500) logs.value = logs.value.slice(0, 500)
     } else {
-      addLog(data.level || 'info', data.message || '')
+      addLog(data.level || 'info', data.message || '', data.source || 'app')
     }
   })
   safeEventsOn('logs:updated', (data) => {

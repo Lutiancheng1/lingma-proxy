@@ -3,6 +3,7 @@ export namespace main {
 	export class AppLog {
 	    createdAt?: string;
 	    time: string;
+	    source?: string;
 	    level: string;
 	    message: string;
 	
@@ -14,6 +15,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.createdAt = source["createdAt"];
 	        this.time = source["time"];
+	        this.source = source["source"];
 	        this.level = source["level"];
 	        this.message = source["message"];
 	    }

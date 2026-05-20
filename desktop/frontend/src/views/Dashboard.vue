@@ -418,23 +418,23 @@ onUnmounted(() => {
             <thead>
               <tr>
                 <th class="col-time">Time</th>
-                <th>Method</th>
+                <th class="col-method">Method</th>
                 <th>Path</th>
                 <th>Model</th>
                 <th>Status</th>
                 <th>Duration</th>
-                <th>Size</th>
+                <th class="col-size">Size</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(request, index) in displayRequests" :key="index" class="clickable-row" @click="openRequestDetail(request)">
                 <td class="col-time">{{ formatDateTime(request) }}</td>
-                <td>{{ request.method }}</td>
+                <td class="col-method">{{ request.method }}</td>
                 <td>{{ request.path }}</td>
                 <td>{{ request.model || '-' }}</td>
                 <td><span class="status-chip" :class="statusClass(request.statusCode)">{{ request.statusCode }}</span></td>
                 <td>{{ request.duration }}</td>
-                <td>{{ request.size || '-' }}</td>
+                <td class="col-size">{{ request.size || '-' }}</td>
               </tr>
             </tbody>
           </table>
