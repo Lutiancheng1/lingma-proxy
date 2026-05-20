@@ -9,6 +9,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import { ClipboardSetText } from '../wailsjs/runtime'
 import { ChooseFeedbackExportPath, ClearLogs, ExportFeedbackBundle, ForceQuitApp, GetAppVersion, GetLogSummaries, GetRequestSummaries, GetStatus, HideWindow, MinimizeWindow, OpenPathInFileManager } from '../wailsjs/go/main/App.js'
 import lingmaIcon from './assets/images/lingma-icon.png'
+import qoderCNIcon from './assets/images/qodercn-mark.png'
 import { safeEventsOff, safeEventsOn, safeInvoke } from './utils/wailsSafe'
 
 const currentTab = ref('dashboard')
@@ -22,6 +23,9 @@ const themeMode = ref(localStorage.getItem('lingma-theme-mode') || 'system')
 const appliedTheme = ref('light')
 const forceQuitting = ref(false)
 const forceQuitConfirmOpen = ref(false)
+const brandFlipped = ref(false)
+const brandAnimating = ref(false)
+const brandFlipDirection = ref('')
 const feedbackOpen = ref(false)
 const feedbackStep = ref('form')
 const feedbackBusy = ref(false)
@@ -176,6 +180,18 @@ function confirmForceQuit() {
 
 function cancelForceQuit() {
   forceQuitConfirmOpen.value = false
+}
+
+function handleBrandClick() {
+  if (brandAnimating.value) return
+  brandFlipDirection.value = brandFlipped.value ? 'to-qoder' : 'to-lingma'
+  brandAnimating.value = true
+  brandFlipped.value = !brandFlipped.value
+  currentTab.value = 'dashboard'
+  window.setTimeout(() => {
+    brandAnimating.value = false
+    brandFlipDirection.value = ''
+  }, 560)
 }
 
 function openFeedbackDialog() {
@@ -340,12 +356,17 @@ onUnmounted(() => {
 <template>
   <div class="app-shell">
     <aside class="sidebar">
-      <button class="brand" type="button" @click="currentTab = 'dashboard'">
-        <span class="brand-mark">
-          <img :src="lingmaIcon" alt="" />
+      <button class="brand" type="button" @click="handleBrandClick">
+        <span class="brand-mark brand-mark-duo" :class="[{ flipped: brandFlipped, animating: brandAnimating }, brandFlipDirection]" title="Lingma / QoderCN">
+          <span class="brand-card brand-icon-lingma">
+            <img :src="lingmaIcon" alt="" />
+          </span>
+          <span class="brand-card brand-icon-qoder">
+            <img :src="qoderCNIcon" alt="" />
+          </span>
         </span>
         <span>
-          <strong>灵码代理</strong>
+          <strong>Lingma /<br />QoderCN</strong>
           <small>Proxy</small>
         </span>
       </button>

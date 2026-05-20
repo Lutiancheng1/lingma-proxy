@@ -2,8 +2,8 @@
 
 本文档描述 **Lingma Proxy** 的当前架构，覆盖两种后端模式：
 
-- `remote`：默认推荐模式，使用探测到的登录态直接调用 Lingma 远端 HTTP API
-- `ipc`：兼容模式，桥接本地 Lingma IDE 插件传输层
+- `remote`：默认推荐模式，使用探测到的登录态直接调用 Lingma / QoderCN 远端 HTTP API
+- `ipc`：兼容模式，桥接本地 Lingma / QoderCN 运行时传输层
 
 ---
 
@@ -17,8 +17,8 @@ flowchart LR
     D["internal/toolemulation<br/>工具提示词注入 + action block 解析"]
     E["internal/lingmaipc<br/>WebSocket / 命名管道"]
     F["internal/remote<br/>登录态探测 / 模型列表 / Chat / SSE"]
-    G["Lingma 插件本地进程"]
-    H["Lingma 远端 API"]
+    G["Lingma / QoderCN 本地运行时"]
+    H["Lingma / QoderCN 远端 API"]
     I["桌面端 GUI<br/>Wails / 日志 / Token 统计 / 持久化状态"]
 
     A --> B
@@ -39,10 +39,10 @@ flowchart LR
 
 `backend=remote`
 
-- 从配置、环境变量或本地 Lingma 日志中解析远端域名
+- 从配置、环境变量或本地 Lingma / QoderCN 日志中解析远端域名
 - 加载认证信息：
   - 显式指定的 `remote_auth_file`
-  - 或自动探测 Lingma 登录缓存
+  - 或自动探测 Lingma / QoderCN 登录缓存
 - 直接请求远端模型列表和聊天接口
 - 支持远端超时 / 429 / 5xx 的模型兜底切换
 - 不依赖本地插件会话环境参数
@@ -52,13 +52,25 @@ flowchart LR
 
 `backend=ipc`
 
-- 读取本地 Lingma 插件传输信息
+- 读取本地 Lingma / QoderCN 运行时传输信息
 - 通过以下方式连接：
   - macOS / Linux：WebSocket
   - Windows：Named Pipe
-- 复用 Lingma 插件自身的 session 语义
+- 复用 Lingma / QoderCN 运行时自身的 session 语义
 - 桌面端里“会话与环境”相关配置只在这里生效
 - 该模式基于 `coolxll/lingma-ipc-proxy` 的 IPC 协议发现思路
+
+已验证运行时行为：
+
+完整 IPC 生成能力要求本地运行时暴露代理所需的会话创建 RPC。实际使用时，至少保持 QoderCN 桌面 App，或受支持的通义灵码桌面 / 旧 Lingma 运行时处于开启状态；单独 VS Code 扩展只算部分发现/运行时能力。
+
+| 运行环境 | IPC 状态 |
+| --- | --- |
+| 只运行 QoderCN 桌面 App | macOS WebSocket 全接口矩阵通过。 |
+| QoderCN 桌面 App + `alibaba-cloud.tongyi-lingma` VS Code 扩展同时运行 | 全接口矩阵通过；自动探测优先 QoderCN。 |
+| 通义灵码 / 旧 Lingma 运行时 | 作为 fallback 支持。 |
+| 只运行 `alibaba-cloud.tongyi-lingma` VS Code 扩展 | 仅部分支持：模型发现可用，但该运行时不支持 `session/new` RPC，完整生成链路失败。 |
+| Windows QoderCN | 尚未在 Windows 真机或 VM 验证。 |
 
 ---
 
@@ -130,11 +142,11 @@ OpenAI / Anthropic 兼容层。
 
 ### 3.4 `internal/lingmaipc`
 
-本地 Lingma 插件 IPC 客户端。
+本地 Lingma / QoderCN IPC 客户端。
 
 职责：
 
-- 自动探测 WebSocket / pipe 端点
+- 自动探测 WebSocket / pipe 端点，优先使用 QoderCN 运行时文件，再回退 Lingma 运行时文件
 - 建立连接与重连
 - 发送 RPC：
   - `session/new`
@@ -145,7 +157,7 @@ OpenAI / Anthropic 兼容层。
 
 ### 3.5 `internal/remote`
 
-Lingma 远端 HTTP 客户端。
+Lingma / QoderCN 远端 HTTP 客户端。
 
 职责：
 

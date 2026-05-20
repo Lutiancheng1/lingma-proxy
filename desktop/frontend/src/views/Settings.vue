@@ -19,7 +19,7 @@ const selectOptions = {
   ],
   Transport: [
     { value: 'auto', label: '自动' },
-    { value: 'pipe', label: '命名管道' },
+    { value: 'pipe', label: 'Socket / Named Pipe' },
     { value: 'websocket', label: 'WebSocket' },
   ],
   Mode: [
@@ -113,7 +113,7 @@ async function save() {
     <div class="page-title">
       <div>
         <h1>设置</h1>
-        <p>配置监听地址、Lingma 传输方式、模型探测超时、会话复用和请求超时。</p>
+        <p>配置监听地址、Lingma / QoderCN 传输方式、模型探测超时、会话复用和请求超时。</p>
       </div>
       <button class="primary-button" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中...' : '保存并重启' }}
@@ -158,7 +158,7 @@ async function save() {
             <input v-model.number="config.Port" type="number" placeholder="8095" />
           </div>
           <div class="field">
-            <label>传输方式</label>
+            <label>Lingma / QoderCN 传输方式</label>
             <div class="custom-select" :class="{ open: openSelect === 'Transport' }">
               <button type="button" @click="toggleSelect('Transport')">
                 <span>{{ selectLabel('Transport') }}</span>
@@ -206,11 +206,11 @@ async function save() {
           </div>
           <div class="field span-2">
             <label>WebSocket 地址</label>
-            <input v-model="config.WebSocketURL" type="text" placeholder="留空自动探测 Lingma WebSocket" />
+            <input v-model="config.WebSocketURL" type="text" placeholder="留空自动探测 Lingma / QoderCN WebSocket" />
           </div>
           <div class="field span-2">
-            <label>命名管道</label>
-            <input v-model="config.Pipe" type="text" placeholder="留空自动探测 Windows Named Pipe" />
+            <label>Socket / Named Pipe</label>
+            <input v-model="config.Pipe" type="text" placeholder="留空自动探测 macOS Socket / Windows Named Pipe" />
           </div>
           <div class="field span-2">
             <label>远端 API 域名</label>
@@ -218,7 +218,7 @@ async function save() {
           </div>
           <div class="field span-2">
             <label>远端认证文件</label>
-            <input v-model="config.RemoteAuthFile" type="text" placeholder="可选 credentials.json；留空只读 ~/.lingma/cache/user" />
+            <input v-model="config.RemoteAuthFile" type="text" placeholder="可选 credentials.json；留空只读本机 Lingma / QoderCN 登录缓存" />
           </div>
           <div class="field span-2">
             <label>远端 Cosy 版本</label>
@@ -227,7 +227,7 @@ async function save() {
         </div>
         <div class="hint-box">
           <strong>自动探测失败时</strong>
-          <span>IPC 模式先确认 VS Code / Lingma 插件已启动并登录。远端 API 模式会优先读取认证文件；留空时只读 <code>~/.lingma/cache/user</code>，不会写入或上传登录态。</span>
+          <span>IPC 模式先确认 Lingma / QoderCN 已启动并登录。远端 API 模式会优先读取认证文件；留空时只读本机 Lingma / QoderCN 登录缓存，不会写入或上传登录态。</span>
         </div>
         <div v-if="detection" class="detect-card">
           <div class="detect-title">
@@ -279,7 +279,7 @@ async function save() {
         <div class="panel-header">
           <div>
             <h2>会话与环境</h2>
-            <p>仅在 IPC 插件模式下生效，影响 Lingma 会话上下文和工具执行环境。</p>
+            <p>仅在 IPC 插件模式下生效，影响 Lingma / QoderCN 会话上下文和工具执行环境。</p>
           </div>
           <span class="status-chip" :class="isIPCBackend ? 'ok' : 'warn'">{{ isIPCBackend ? '仅 IPC 生效' : '远端模式忽略' }}</span>
         </div>
@@ -355,7 +355,7 @@ async function save() {
           </div>
           <div class="field span-2">
             <label>工作目录</label>
-            <input v-model="config.Cwd" type="text" placeholder="Lingma 创建 session 时使用的 cwd" />
+            <input v-model="config.Cwd" type="text" placeholder="Lingma / QoderCN 创建 session 时使用的 cwd" />
           </div>
         </div>
         </fieldset>

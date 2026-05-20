@@ -711,11 +711,21 @@ func candidateConfigFiles() []string {
 		return nil
 	}
 	paths := []string{
+		filepath.Join(home, ".qodercn", "extension", "server", "config.json"),
+		filepath.Join(home, ".qodercn", "extension", "local", "config.json"),
+		filepath.Join(home, ".qodercn", "bin", "config.json"),
+		filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache", "cache", "app-config.json"),
+		filepath.Join(home, "Library", "Application Support", "Qoder", "SharedClientCache", "cache", "app-config.json"),
 		filepath.Join(home, ".lingma", "extension", "server", "config.json"),
 		filepath.Join(home, ".lingma", "extension", "local", "config.json"),
 		filepath.Join(home, ".lingma", "bin", "config.json"),
+		filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache", "cache", "app-config.json"),
 		filepath.Join(home, ".config", "lingma-proxy", "config.json"),
 		filepath.Join(home, ".config", "lingma-ipc-proxy", "config.json"),
+		filepath.Join(home, ".qodercn", "logs", "qodercn.log"),
+		filepath.Join(home, ".qodercn", "logs", "qodercn-extension.log"),
+		filepath.Join(home, ".qodercn", "vscode", "sharedClientCache", "logs", "qodercn.log"),
+		filepath.Join(home, ".qodercn", "vscode", "sharedClientCache", "logs", "qodercn-extension.log"),
 		filepath.Join(home, ".lingma", "logs", "lingma.log"),
 		filepath.Join(home, ".lingma", "logs", "lingma-extension.log"),
 		filepath.Join(home, ".lingma", "vscode", "sharedClientCache", "logs", "lingma.log"),
@@ -748,7 +758,7 @@ func findBaseURL(value any) string {
 		for key, item := range typed {
 			lower := strings.ToLower(key)
 			if strings.Contains(lower, "base") || strings.Contains(lower, "domain") || strings.Contains(lower, "url") {
-				if text, ok := item.(string); ok && strings.HasPrefix(strings.TrimSpace(text), "http") && strings.Contains(text, "lingma") {
+				if text, ok := item.(string); ok && strings.HasPrefix(strings.TrimSpace(text), "http") && (strings.Contains(strings.ToLower(text), "lingma") || strings.Contains(strings.ToLower(text), "qoder")) {
 					return strings.TrimSpace(text)
 				}
 			}
@@ -770,25 +780,41 @@ func lingmaLogRoots(home string) []string {
 	roots := []string{
 		filepath.Join(home, ".lingma", "logs"),
 		filepath.Join(home, ".lingma", "vscode", "sharedClientCache", "logs"),
+		filepath.Join(home, ".qodercn", "logs"),
+		filepath.Join(home, ".qodercn", "vscode", "sharedClientCache", "logs"),
 		filepath.Join(home, "Library", "Application Support", "Lingma", "logs"),
+		filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache", "logs"),
+		filepath.Join(home, "Library", "Application Support", "QoderCN", "logs"),
+		filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache", "logs"),
+		filepath.Join(home, "Library", "Application Support", "Qoder", "logs"),
+		filepath.Join(home, "Library", "Application Support", "Qoder", "SharedClientCache", "logs"),
 	}
 	for _, envName := range []string{"APPDATA", "LOCALAPPDATA", "ProgramData"} {
 		if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
 			roots = append(roots,
 				filepath.Join(value, "Lingma", "logs"),
+				filepath.Join(value, "Lingma", "SharedClientCache", "logs"),
+				filepath.Join(value, "QoderCN", "logs"),
+				filepath.Join(value, "QoderCN", "SharedClientCache", "logs"),
+				filepath.Join(value, "Qoder", "logs"),
+				filepath.Join(value, "Qoder", "SharedClientCache", "logs"),
 				filepath.Join(value, "Code", "User", "globalStorage", "alibaba-cloud.tongyi-lingma", "logs"),
 			)
 		}
 	}
 	if value := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); value != "" {
 		roots = append(roots, filepath.Join(value, "Lingma", "logs"))
+		roots = append(roots, filepath.Join(value, "QoderCN", "logs"))
 	}
 	if value := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); value != "" {
 		roots = append(roots, filepath.Join(value, "Lingma", "logs"))
+		roots = append(roots, filepath.Join(value, "QoderCN", "logs"))
 	}
 	roots = append(roots,
 		filepath.Join(home, ".config", "Lingma", "logs"),
+		filepath.Join(home, ".config", "QoderCN", "logs"),
 		filepath.Join(home, ".local", "state", "Lingma", "logs"),
+		filepath.Join(home, ".local", "state", "QoderCN", "logs"),
 	)
 	return uniqueStrings(roots)
 }

@@ -76,7 +76,7 @@ func importLingmaCacheCredential() (Credential, error) {
 	if len(attempts) == 0 {
 		return Credential{}, errors.New("no Lingma cache directory candidate was found")
 	}
-	return Credential{}, fmt.Errorf("load Lingma login cache: %s", strings.Join(attempts, "; "))
+	return Credential{}, fmt.Errorf("load Lingma/QoderCN login cache: %s", strings.Join(attempts, "; "))
 }
 
 func importLingmaCacheCredentialFromDir(lingmaDir string) (Credential, error) {
@@ -125,8 +125,15 @@ func candidateLingmaCacheDirs() []string {
 	var dirs []string
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		dirs = append(dirs,
+			filepath.Join(home, ".qodercn"),
+			filepath.Join(home, ".qodercn", "vscode", "sharedClientCache"),
+			filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache"),
+			filepath.Join(home, "Library", "Application Support", "Qoder", "SharedClientCache"),
+			filepath.Join(home, ".config", "QoderCN"),
+			filepath.Join(home, ".local", "share", "QoderCN"),
 			filepath.Join(home, ".lingma"),
 			filepath.Join(home, ".lingma", "vscode", "sharedClientCache"),
+			filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache"),
 			filepath.Join(home, ".config", "Lingma"),
 			filepath.Join(home, ".local", "share", "Lingma"),
 		)
@@ -134,12 +141,19 @@ func candidateLingmaCacheDirs() []string {
 	for _, envName := range []string{"APPDATA", "LOCALAPPDATA", "ProgramData"} {
 		if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
 			dirs = append(dirs,
+				filepath.Join(value, "QoderCN"),
+				filepath.Join(value, "qodercn"),
+				filepath.Join(value, "QoderCN", "SharedClientCache"),
+				filepath.Join(value, "Qoder"),
+				filepath.Join(value, "Qoder", "SharedClientCache"),
 				filepath.Join(value, "Lingma"),
 				filepath.Join(value, "lingma"),
+				filepath.Join(value, "Lingma", "SharedClientCache"),
 			)
 		}
 	}
 	if value := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); value != "" {
+		dirs = append(dirs, filepath.Join(value, "QoderCN"))
 		dirs = append(dirs, filepath.Join(value, "Lingma"))
 	}
 	return uniquePathStrings(dirs)
@@ -162,7 +176,7 @@ func loadMachineID(lingmaDir string) (string, error) {
 		}
 	}
 
-	return "", errors.New("remote credential requires cache/id or Lingma log machine id; checked cache/id, Lingma app logs, and VS Code Lingma plugin logs")
+	return "", errors.New("remote credential requires cache/id or Lingma/QoderCN log machine id; checked cache/id, app logs, and IDE shared client logs")
 }
 
 func candidateMachineIDLogFiles(lingmaDir string) []string {

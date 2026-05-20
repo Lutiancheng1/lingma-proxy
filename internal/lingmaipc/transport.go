@@ -57,7 +57,7 @@ func ParseTransport(value string) (Transport, error) {
 	case "ws", string(TransportWebSocket):
 		return TransportWebSocket, nil
 	default:
-		return "", fmt.Errorf("invalid Lingma transport %q; expected auto, pipe, or websocket", value)
+		return "", fmt.Errorf("invalid Lingma/QoderCN transport %q; expected auto, pipe, or websocket", value)
 	}
 }
 
@@ -81,14 +81,18 @@ func ResolveDialOptions(transport Transport, explicitPipe string, explicitWebSoc
 			if wsErr == nil {
 				return DialOptions{Transport: TransportWebSocket, WebSocketURL: wsURL}, nil
 			}
-			return DialOptions{}, fmt.Errorf("resolve Lingma transport automatically: pipe: %w; websocket: %v", pipeErr, wsErr)
+			return DialOptions{}, fmt.Errorf("resolve Lingma/QoderCN transport automatically: pipe: %w; websocket: %v", pipeErr, wsErr)
 		}
 
 		wsURL, wsErr := ResolveWebSocketURL(explicitWebSocketURL)
 		if wsErr == nil {
 			return DialOptions{Transport: TransportWebSocket, WebSocketURL: wsURL}, nil
 		}
-		return DialOptions{}, fmt.Errorf("resolve Lingma transport automatically on %s: websocket: %w", runtime.GOOS, wsErr)
+		pipePath, pipeErr := ResolvePipePath(explicitPipe)
+		if pipeErr == nil {
+			return DialOptions{Transport: TransportPipe, PipePath: pipePath}, nil
+		}
+		return DialOptions{}, fmt.Errorf("resolve Lingma/QoderCN transport automatically on %s: websocket: %w; socket: %v", runtime.GOOS, wsErr, pipeErr)
 	case TransportPipe:
 		pipePath, err := ResolvePipePath(explicitPipe)
 		if err != nil {
@@ -102,15 +106,11 @@ func ResolveDialOptions(transport Transport, explicitPipe string, explicitWebSoc
 		}
 		return DialOptions{Transport: TransportWebSocket, WebSocketURL: wsURL}, nil
 	default:
-		return DialOptions{}, fmt.Errorf("unsupported Lingma transport %q", transport)
+		return DialOptions{}, fmt.Errorf("unsupported Lingma/QoderCN transport %q", transport)
 	}
 }
 
 func ResolvePipePath(explicit string) (string, error) {
-	if runtime.GOOS != "windows" {
-		return "", errors.New("Lingma pipe transport currently requires Windows")
-	}
-
 	if pipe := strings.TrimSpace(explicit); pipe != "" {
 		return normalizePipePath(pipe), nil
 	}
@@ -122,22 +122,28 @@ func ResolvePipePath(explicit string) (string, error) {
 			return normalizePipePath(pipe), nil
 		}
 	}
+	if runtime.GOOS != "windows" {
+		if socket := newestExistingPath(defaultUnixSocketPaths()); socket != "" {
+			return socket, nil
+		}
+		return "", errors.New("no active Lingma/QoderCN IPC socket was found")
+	}
 
 	entries, err := os.ReadDir(PipeDir)
 	if err != nil {
-		return "", fmt.Errorf("enumerate Lingma named pipes: %w", err)
+		return "", fmt.Errorf("enumerate Lingma/QoderCN named pipes: %w", err)
 	}
 
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, PipePrefix) {
+		if hasAnyPrefix(name, PipePrefixes) {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
 	if len(names) == 0 {
-		return "", errors.New("no active Lingma named pipe was found")
+		return "", errors.New("no active Lingma/QoderCN named pipe was found")
 	}
 	return PipeDir + names[len(names)-1], nil
 }
@@ -156,7 +162,7 @@ func ResolveWebSocketURL(explicit string) (string, error) {
 		return "", fmt.Errorf("discover Lingma websocket URL: %w", err)
 	}
 	if info.WebSocketPort <= 0 {
-		return "", errors.New("Lingma shared client info does not include a websocketPort")
+		return "", errors.New("Lingma/QoderCN shared client info does not include a websocketPort")
 	}
 	return normalizeWebSocketURL(fmt.Sprintf("ws://127.0.0.1:%d/", info.WebSocketPort))
 }
@@ -166,7 +172,7 @@ func hasConfiguredWebSocketURL(explicit string) bool {
 }
 
 func normalizePipePath(pipe string) string {
-	if strings.HasPrefix(pipe, PipeDir) {
+	if PipeDir == "" || strings.HasPrefix(pipe, PipeDir) {
 		return pipe
 	}
 	return PipeDir + pipe
@@ -204,6 +210,8 @@ func defaultSharedClientInfoPaths() []string {
 	}
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		bases = append(bases,
+			filepath.Join(home, ".qodercn", "vscode"),
+			filepath.Join(home, ".qodercn"),
 			filepath.Join(home, ".lingma", "vscode"),
 			filepath.Join(home, ".lingma"),
 		)
@@ -218,6 +226,10 @@ func defaultSharedClientInfoPaths() []string {
 	paths := make([]string, 0, len(bases)*2)
 	for _, base := range uniquePathStrings(bases) {
 		cacheDirs := []string{
+			filepath.Join(base, "QoderCN", "SharedClientCache"),
+			filepath.Join(base, "QoderCN", "sharedClientCache"),
+			filepath.Join(base, "Qoder", "SharedClientCache"),
+			filepath.Join(base, "Qoder", "sharedClientCache"),
 			filepath.Join(base, "Lingma", "SharedClientCache"),
 			filepath.Join(base, "Lingma", "sharedClientCache"),
 			filepath.Join(base, "SharedClientCache"),
@@ -235,6 +247,56 @@ func defaultSharedClientInfoPaths() []string {
 		}
 	}
 	return paths
+}
+
+func defaultUnixSocketPaths() []string {
+	if explicit := strings.TrimSpace(os.Getenv("LINGMA_IPC_SOCKET")); explicit != "" {
+		return []string{explicit}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache", "qodercn.sock"),
+		filepath.Join(home, "Library", "Application Support", "Qoder", "SharedClientCache", "qodercn.sock"),
+		filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache", "lingma.sock"),
+		filepath.Join(home, ".qodercn", "vscode", "sharedClientCache", "qodercn.sock"),
+		filepath.Join(home, ".qodercn", "qodercn.sock"),
+		filepath.Join(home, ".lingma", "vscode", "sharedClientCache", "lingma.sock"),
+		filepath.Join(home, ".lingma", "lingma.sock"),
+	}
+}
+
+func newestExistingPath(paths []string) string {
+	type candidate struct {
+		path    string
+		modTime int64
+	}
+	var candidates []candidate
+	for _, path := range uniquePathStrings(paths) {
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		candidates = append(candidates, candidate{path: path, modTime: info.ModTime().UnixNano()})
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime > candidates[j].modTime
+	})
+	return candidates[0].path
+}
+
+func hasAnyPrefix(value string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func uniquePathStrings(values []string) []string {
@@ -284,10 +346,10 @@ func resolveSharedClientInfoFromPaths(paths []string) (sharedClientInfo, error) 
 	}
 
 	if !foundFile {
-		return sharedClientInfo{}, errors.New("no Lingma shared client cache info file was found")
+		return sharedClientInfo{}, errors.New("no Lingma/QoderCN shared client cache info file was found")
 	}
 	if len(parseErrors) == 0 {
-		return sharedClientInfo{}, errors.New("Lingma shared client cache info was empty")
+		return sharedClientInfo{}, errors.New("Lingma/QoderCN shared client cache info was empty")
 	}
 	return sharedClientInfo{}, errors.New(strings.Join(parseErrors, "; "))
 }
@@ -346,7 +408,7 @@ func connectTransport(ctx context.Context, opts DialOptions) (framedTransport, e
 	case TransportWebSocket:
 		return connectWebSocketTransport(ctx, opts.WebSocketURL)
 	default:
-		return nil, fmt.Errorf("unsupported Lingma transport %q", opts.Transport)
+		return nil, fmt.Errorf("unsupported Lingma/QoderCN transport %q", opts.Transport)
 	}
 }
 

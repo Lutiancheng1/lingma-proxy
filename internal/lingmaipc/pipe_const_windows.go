@@ -3,6 +3,7 @@
 package lingmaipc
 
 const (
-	PipeDir    = `\\.\pipe\`
-	PipePrefix = "lingma-"
+	PipeDir = `\\.\pipe\`
 )
+
+var PipePrefixes = []string{"lingma-", "qodercn-"}

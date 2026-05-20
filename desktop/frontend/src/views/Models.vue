@@ -64,7 +64,7 @@ function modelSpec(model) {
   if (text.includes('auto')) {
     return {
       context: '自动',
-      capability: 'Lingma 自动路由',
+      capability: 'Lingma / QoderCN 自动路由',
       source: '账号返回',
     }
   }
@@ -94,7 +94,7 @@ async function refresh() {
     models.value = await RefreshModels()
     emit('log', 'info', `模型列表刷新完成：${models.value.length} 个`)
   } catch (e) {
-    emit('log', 'error', '模型列表刷新失败：' + (e.message || String(e)) + '。自动探测失败时请到设置页手动填写 WebSocket：ws://127.0.0.1:36510/，或 Windows Named Pipe：\\\\.\\pipe\\lingma-xxxx。')
+    emit('log', 'error', '模型列表刷新失败：' + (e.message || String(e)) + '。自动探测失败时请到设置页手动填写 WebSocket、macOS Socket 或 Windows Named Pipe。')
   } finally {
     loading.value = false
   }
@@ -123,7 +123,7 @@ onMounted(loadCachedModels)
     <div class="page-title">
       <div>
         <h1>模型</h1>
-        <p>来自 Lingma 插件的可用模型列表，第三方客户端可以直接使用这些 ID。</p>
+        <p>来自 Lingma / QoderCN 的可用模型列表，第三方客户端可以直接使用这些 ID。</p>
       </div>
       <button class="primary-button" type="button" :disabled="loading" @click="refresh">
         {{ loading ? '刷新中...' : '刷新模型' }}

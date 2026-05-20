@@ -1998,12 +1998,12 @@ func defaultShellType() string {
 }
 
 func transportFallbackHint() string {
-	return "请确认 Lingma 插件已启动并登录；如果自动探测失败，请到设置页手动填写：远端 API 官方默认域名 https://lingma.alibabacloud.com，企业版请填写你的专属域名；macOS WebSocket 示例 ws://127.0.0.1:36510/，Windows Named Pipe 示例 \\\\.\\pipe\\lingma-xxxx，或 Windows WebSocket 示例 ws://127.0.0.1:36510/。"
+	return "请确认 Lingma / QoderCN 已启动并登录；如果自动探测失败，请到设置页手动填写：远端 API 官方默认域名 https://lingma.alibabacloud.com，企业版请填写你的专属域名；macOS WebSocket 示例 ws://127.0.0.1:36510/，macOS Socket 示例 ~/Library/Application Support/QoderCN/SharedClientCache/qodercn.sock，Windows Named Pipe 示例 \\\\.\\pipe\\lingma-xxxx 或 \\\\.\\pipe\\qodercn-xxxx。"
 }
 
 func warmupFallbackHint(backend service.BackendMode) string {
 	if backend == service.BackendRemote {
 		return "请检查设置页“当前解析结果”里的远端域名是否为官方或企业专属 API 域名；如果出现 OSS/静态资源域名或模型列表 404，请手动填写远端 API 官方默认域名 https://lingma.alibabacloud.com，企业版请填写你的专属域名，并确认登录态未过期。"
 	}
-	return "请确认 Lingma 插件已启动并登录；如果自动探测失败，请到设置页手动填写：macOS WebSocket 示例 ws://127.0.0.1:36510/，Windows Named Pipe 示例 \\\\.\\pipe\\lingma-xxxx，或 Windows WebSocket 示例 ws://127.0.0.1:36510/。"
+	return "请确认 Lingma / QoderCN 已启动并登录；如果自动探测失败，请到设置页手动填写：macOS WebSocket 示例 ws://127.0.0.1:36510/，macOS Socket 示例 ~/Library/Application Support/QoderCN/SharedClientCache/qodercn.sock，Windows Named Pipe 示例 \\\\.\\pipe\\lingma-xxxx 或 \\\\.\\pipe\\qodercn-xxxx。"
 }

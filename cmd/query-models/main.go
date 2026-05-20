@@ -20,7 +20,7 @@ func main() {
 		log.Fatalf("Failed to resolve dial options: %v", err)
 	}
 
-	fmt.Printf("Connecting to Lingma IPC...\n")
+	fmt.Printf("Connecting to Lingma/QoderCN IPC...\n")
 	fmt.Printf("Transport: %s\n", opts.Transport)
 	fmt.Printf("PipePath: %s\n", opts.PipePath)
 	fmt.Printf("WebSocketURL: %s\n", opts.WebSocketURL)

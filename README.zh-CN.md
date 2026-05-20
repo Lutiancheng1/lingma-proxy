@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-**Lingma Proxy** 是一个通义灵码 API 适配层。它可以通过默认推荐的远端 API 模式直接调用 Lingma 远端接口，也可以把 Lingma 插件的本地私有 IPC / WebSocket 能力转换成标准 **OpenAI 兼容接口** 和 **Anthropic 兼容接口**，让 Claude Code、Hermes、CodeBuddy、Codex CLI、OpenCode、自研 Agent 等第三方客户端可以直接调用 Lingma 后端模型。
+**Lingma Proxy** 是一个通义灵码 / QoderCN API 适配层。它可以通过默认推荐的远端 API 模式直接调用远端接口，也可以把 Lingma / QoderCN 本地私有 IPC / WebSocket 能力转换成标准 **OpenAI 兼容接口** 和 **Anthropic 兼容接口**，让 Claude Code、Hermes、CodeBuddy、Codex CLI、OpenCode、自研 Agent 等第三方客户端可以直接调用后端模型。
 
 ## 模型可用性说明
 
@@ -20,8 +20,24 @@
 
 代理后端支持两种模式：
 
-- **远端 API 模式（默认，推荐）**：读取 Lingma 本地登录缓存或显式凭据，直接调用 Lingma 远端接口。它更接近普通托管 API，不依赖 IDE 插件窗口、IPC 会话和插件执行环境；目前更推荐给 Claude Code / Hermes 这类本地 Agent。
-- **IPC 插件模式**：连接本机 Lingma IDE 插件的 WebSocket / Named Pipe。它更接近 IDE 插件上下文，但会继承 IDE 会话生命周期、插件本地状态和环境限制，主要作为兼容性兜底。
+- **远端 API 模式（默认，推荐）**：读取 Lingma / QoderCN 本地登录缓存或显式凭据，直接调用远端接口。它更接近普通托管 API，不依赖 IDE 插件窗口、IPC 会话和插件执行环境；目前更推荐给 Claude Code / Hermes 这类本地 Agent。
+- **IPC 模式**：连接本机 Lingma / QoderCN 运行时的 WebSocket / Named Pipe。它更接近本地 IDE 运行时上下文，但会继承 IDE 会话生命周期、本地运行时状态和环境限制，主要作为兼容性兜底。
+
+## 运行环境兼容性
+
+当前 macOS 实测结论：
+
+如果想获得完整的 Chat / Responses / Anthropic Messages 体验，至少需要保持 QoderCN 桌面 App，或受支持的通义灵码桌面 / 旧 Lingma 运行时处于开启状态。单独只开 VS Code 扩展 `alibaba-cloud.tongyi-lingma` 不够完整，因为它没有暴露本代理完整生成链路需要的 `session/new` RPC。
+
+| 运行环境 | 远端 API | IPC WebSocket / Named Pipe | 状态 |
+| --- | --- | --- | --- |
+| 只运行 QoderCN 桌面 App | 已验证 | 已验证 macOS WebSocket | OpenAI / Anthropic 全接口矩阵通过。 |
+| QoderCN 桌面 App + `alibaba-cloud.tongyi-lingma` VS Code 扩展同时运行 | 已验证 | 已验证；自动探测优先 QoderCN | 全接口矩阵通过。 |
+| 通义灵码桌面 App / 旧 Lingma 运行时 | 作为 fallback 支持 | 作为 fallback 支持 | 保留给已有用户。 |
+| 只运行 `alibaba-cloud.tongyi-lingma` VS Code 扩展 | 远端登录缓存可能可用 | 仅部分支持 | 模型发现可用，但该扩展运行时不支持完整 Chat 所需的 `session/new` RPC，因此 Chat / Responses / Messages 无法完整跑通。 |
+| Windows QoderCN | 预期支持 | 尚未真机验证 | Named Pipe 兼容性还需要 Windows 真机或 VM 单独验证。 |
+
+自动探测顺序会优先使用 QoderCN 运行时文件，再回退 Lingma 运行时文件。本机共存测试中，QoderCN 暴露 `37109`，VS Code Lingma 扩展暴露 `36510`，代理正确选择了 QoderCN。
 
 ## 运行前提与深度思考边界
 
@@ -32,7 +48,7 @@
 ## 当前版本
 
 <!-- VERSION:CURRENT:BEGIN -->
-当前桌面端版本：`v1.5.4`。
+当前桌面端版本：`v1.6.0`。
 
 唯一来源是 [VERSION](./VERSION)。执行 `./scripts/sync-version.sh` 会把它同步到 [desktop/wails.json](./desktop/wails.json)、桌面 UI 和面向发布的文档块。
 <!-- VERSION:CURRENT:END -->
@@ -89,7 +105,7 @@ GitHub Actions 会在 Release 中产出：
 
 - **仪表盘**：代理状态、监听地址、启动 / 停止 / 重启、健康延迟、模型摘要、配置摘要、最近请求；点击最近请求可直接跳转到请求流详情。
 - **请求流**：查看 OpenAI / Anthropic 兼容接口的请求记录，支持搜索、筛选、清空、完整请求体 / 响应体查看和复制。
-- **模型**：探测 Lingma 插件暴露的可用模型，点击模型复制模型 ID。模型选择由调用方请求里的 `model` 字段决定，App 不再做无意义的全局切换。
+- **模型**：探测 Lingma / QoderCN 运行时暴露的可用模型，点击模型复制模型 ID。模型选择由调用方请求里的 `model` 字段决定，App 不再做无意义的全局切换。
 - **设置**：主机、端口、传输方式、超时、WebSocket 地址、Named Pipe、工作目录、当前文件、会话策略等。
 - **日志**：代理启动、模型同步、健康检查、配置保存、错误事件等。
 - **反馈导出**：支持导出脱敏后的反馈压缩包，包含应用日志、请求日志、配置摘要、运行环境与探测信息，便于提交 Issue 或离线反馈。

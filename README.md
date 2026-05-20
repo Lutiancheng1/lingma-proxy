@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-Lingma Proxy exposes Tongyi Lingma as standard **OpenAI-compatible** and **Anthropic-compatible** HTTP APIs. It can use either the recommended Remote API backend or the local IDE plugin IPC channel, and ships as both a CLI proxy service and a cross-platform desktop app for macOS and Windows.
+Lingma Proxy exposes Tongyi Lingma / QoderCN as standard **OpenAI-compatible** and **Anthropic-compatible** HTTP APIs. It can use either the recommended Remote API backend or the local IDE IPC channel, and ships as both a CLI proxy service and a cross-platform desktop app for macOS and Windows.
 
 The project is designed for tools such as Claude Code, Hermes, CodeBuddy, Codex CLI, OpenCode, custom agents, and any client that can talk to OpenAI or Anthropic style APIs.
 
@@ -17,8 +17,24 @@ Model availability is not the same for every Lingma user.
 
 The proxy now supports two backend modes:
 
-- **Remote API mode (default, recommended)**: imports the local Lingma login cache or an explicit credential file and calls Lingma remote APIs directly. This behaves closest to a normal hosted API, avoids IDE/plugin session and environment limits, and is currently the best mode for Claude Code / Hermes style agents.
-- **IPC plugin mode**: connects to the local Lingma IDE plugin over WebSocket / Named Pipe. This keeps behavior closest to the IDE plugin, but it can inherit IDE session lifetime, local plugin state, and environment constraints, so it is mainly a compatibility fallback.
+- **Remote API mode (default, recommended)**: imports the local Lingma / QoderCN login cache or an explicit credential file and calls the remote APIs directly. This behaves closest to a normal hosted API, avoids IDE/plugin session and environment limits, and is currently the best mode for Claude Code / Hermes style agents.
+- **IPC mode**: connects to the local Lingma / QoderCN runtime over WebSocket / Named Pipe. This keeps behavior closest to the local IDE runtime, but it can inherit IDE session lifetime, local runtime state, and environment constraints, so it is mainly a compatibility fallback.
+
+## Runtime Compatibility
+
+The current macOS validation status is:
+
+For the complete Chat / Responses / Anthropic Messages experience, keep either the QoderCN desktop app or a supported Tongyi Lingma desktop / legacy Lingma runtime running. The VS Code extension `alibaba-cloud.tongyi-lingma` alone is not enough for full IPC generation because it does not expose the `session/new` RPC used by this proxy.
+
+| Runtime | Remote API | IPC WebSocket / Pipe | Status |
+| --- | --- | --- | --- |
+| QoderCN desktop app only | verified | verified on macOS WebSocket | Full OpenAI / Anthropic endpoint matrix passed. |
+| QoderCN desktop app + `alibaba-cloud.tongyi-lingma` VS Code extension | verified | verified; auto-detection prefers QoderCN | Full endpoint matrix passed. |
+| Tongyi Lingma desktop app / legacy Lingma runtime | supported as fallback | supported as fallback | Kept for existing users. |
+| `alibaba-cloud.tongyi-lingma` VS Code extension only | remote cache may work | partial only | Model discovery works, but this extension runtime does not support the `session/new` RPC used for full Chat/Responses/Messages generation. |
+| Windows QoderCN | expected | not yet verified on a Windows machine | Named Pipe compatibility still needs Windows real-machine or VM validation. |
+
+Auto-detection prefers QoderCN runtime files first, then falls back to Lingma runtime files. In a local coexistence test, QoderCN exposed `37109`, the VS Code Lingma extension exposed `36510`, and the proxy selected QoderCN.
 
 ## Runtime Requirements and Reasoning Boundaries
 
@@ -29,7 +45,7 @@ The proxy now supports two backend modes:
 ## Current Version
 
 <!-- VERSION:CURRENT:BEGIN -->
-Current desktop app version: `v1.5.4`.
+Current desktop app version: `v1.6.0`.
 
 The canonical source is [VERSION](./VERSION). Run `./scripts/sync-version.sh` to propagate it into [desktop/wails.json](./desktop/wails.json), the desktop UI, and release-facing docs.
 <!-- VERSION:CURRENT:END -->
@@ -69,7 +85,7 @@ The desktop app wraps the proxy with a native-feeling control panel:
 - View full request and response bodies with internal scrolling and hidden scrollbars.
 - Export redacted feedback bundles for troubleshooting without bundling raw login caches or unlimited request payloads.
 - Copy endpoint URLs, model IDs, request logs, and response logs with visible feedback.
-- Detect Lingma IPC paths automatically on macOS and Windows, with manual fallback settings.
+- Detect Lingma / QoderCN IPC paths automatically on macOS and Windows, with manual fallback settings.
 - Follow system theme automatically, or switch light/dark mode manually.
 - Keep the proxy running when the window is closed; quit explicitly from the app/menu.
 

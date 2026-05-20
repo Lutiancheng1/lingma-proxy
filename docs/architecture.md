@@ -2,8 +2,8 @@
 
 This document describes the current architecture of **Lingma Proxy**, including both backend modes:
 
-- `remote`: the default and recommended mode, calling Lingma remote HTTP APIs directly with detected credentials
-- `ipc`: a compatibility mode that bridges to the local Lingma IDE plugin transport
+- `remote`: the default and recommended mode, calling Lingma / QoderCN remote HTTP APIs directly with detected credentials
+- `ipc`: a compatibility mode that bridges to the local Lingma / QoderCN runtime transport
 
 ---
 
@@ -17,8 +17,8 @@ flowchart LR
     D["internal/toolemulation<br/>tool prompt injection + action block parsing"]
     E["internal/lingmaipc<br/>WebSocket / Named Pipe"]
     F["internal/remote<br/>credential detection / model list / chat / SSE"]
-    G["Lingma plugin local process"]
-    H["Lingma remote API"]
+    G["Lingma / QoderCN local runtime"]
+    H["Lingma / QoderCN remote API"]
     I["Desktop app<br/>Wails GUI / logs / token stats / persisted state"]
 
     A --> B
@@ -39,10 +39,10 @@ flowchart LR
 
 `backend=remote`
 
-- Reads Lingma remote base URL from config, environment, or detected local Lingma logs
+- Reads Lingma / QoderCN remote base URL from config, environment, or detected local runtime logs
 - Loads credentials from:
   - explicit `remote_auth_file`
-  - or detected Lingma login cache
+  - or detected Lingma / QoderCN login cache
 - Calls remote model list and chat endpoints directly
 - Supports timeout / 429 / 5xx fallback across available remote models
 - Does not use local plugin session environment knobs
@@ -52,13 +52,25 @@ flowchart LR
 
 `backend=ipc`
 
-- Reads local plugin transport information
+- Reads local runtime transport information
 - Connects through:
   - WebSocket on macOS / Linux
   - Named Pipe on Windows
-- Reuses Lingma plugin session semantics
+- Reuses Lingma / QoderCN session semantics
 - Session/environment options in the desktop UI apply only here
 - This mode is based on the IPC protocol insight from `coolxll/lingma-ipc-proxy`
+
+Validated runtime behavior:
+
+Full IPC generation requires a runtime that exposes the session creation RPCs used by the proxy. In practice, keep the QoderCN desktop app or a supported Tongyi Lingma desktop / legacy Lingma runtime running. The VS Code extension alone is only a partial discovery/runtime surface.
+
+| Runtime | IPC status |
+| --- | --- |
+| QoderCN desktop app only | Full endpoint matrix passed on macOS WebSocket. |
+| QoderCN desktop app plus `alibaba-cloud.tongyi-lingma` VS Code extension | Full endpoint matrix passed; auto-detection prefers QoderCN. |
+| Tongyi Lingma / legacy Lingma runtime | Supported as fallback. |
+| `alibaba-cloud.tongyi-lingma` VS Code extension only | Partial only: model discovery works, but full generation fails because this runtime does not support the `session/new` RPC. |
+| Windows QoderCN | Not yet verified on a Windows machine or VM. |
 
 ---
 
@@ -130,11 +142,11 @@ Important behavior split:
 
 ### 3.4 `internal/lingmaipc`
 
-Local transport client for Lingma plugin IPC.
+Local transport client for Lingma / QoderCN IPC.
 
 Responsibilities:
 
-- detect WebSocket / pipe endpoint
+- detect WebSocket / pipe endpoint, preferring QoderCN runtime files before Lingma runtime files
 - dial and reconnect
 - send RPC messages such as:
   - `session/new`
@@ -145,7 +157,7 @@ Responsibilities:
 
 ### 3.5 `internal/remote`
 
-Remote HTTP client for Lingma cloud APIs.
+Remote HTTP client for Lingma / QoderCN cloud APIs.
 
 Responsibilities:
 

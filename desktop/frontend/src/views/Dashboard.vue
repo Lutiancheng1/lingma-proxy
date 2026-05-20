@@ -144,7 +144,7 @@ async function refreshModels() {
     emit('log', 'info', `模型探测完成：${models.value.length} 个`)
     await refresh()
   } catch (e) {
-    emit('log', 'error', '模型探测失败：' + (e.message || String(e)) + '。请确认 Lingma 插件已启动并登录；自动探测失败时可到设置页手动填写 WebSocket：ws://127.0.0.1:36510/，或 Windows Named Pipe：\\\\.\\pipe\\lingma-xxxx。')
+    emit('log', 'error', '模型探测失败：' + (e.message || String(e)) + '。请确认 Lingma / QoderCN 已启动并登录；自动探测失败时可到设置页手动填写 WebSocket、macOS Socket 或 Windows Named Pipe。')
   } finally {
     modelsLoading.value = false
   }

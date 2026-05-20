@@ -310,6 +310,43 @@ func TestCandidateLingmaCacheDirsIncludesVSCodeSharedClientCache(t *testing.T) {
 	t.Fatalf("missing vscode shared client cache %q in %#v", want, dirs)
 }
 
+func TestCandidateLingmaCacheDirsIncludesQoderCNSharedClientCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	dirs := candidateLingmaCacheDirs()
+	want := filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache")
+	for _, dir := range dirs {
+		if dir == want {
+			return
+		}
+	}
+	t.Fatalf("missing QoderCN shared client cache %q in %#v", want, dirs)
+}
+
+func TestCandidateLingmaCacheDirsPrefersQoderCNBeforeLingma(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	dirs := candidateLingmaCacheDirs()
+	qoder := filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache")
+	lingma := filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache")
+	qoderIndex, lingmaIndex := -1, -1
+	for i, dir := range dirs {
+		switch dir {
+		case qoder:
+			qoderIndex = i
+		case lingma:
+			lingmaIndex = i
+		}
+	}
+	if qoderIndex < 0 || lingmaIndex < 0 || qoderIndex > lingmaIndex {
+		t.Fatalf("QoderCN cache should be preferred before Lingma cache, qoder=%d lingma=%d dirs=%#v", qoderIndex, lingmaIndex, dirs)
+	}
+}
+
 func TestLoadMachineIDReadsVSCodeSharedClientCacheID(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "cache"), 0755); err != nil {

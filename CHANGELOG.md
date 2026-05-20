@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased (target: v1.5.4)
+## Unreleased (target: v1.6.0)
+
+## v1.6.0 - 2026-05-20
+
+- Added QoderCN runtime compatibility for Remote API credential discovery and IPC transport discovery, including QoderCN shared-client cache paths, macOS socket/WebSocket discovery, and QoderCN-first runtime selection when both QoderCN and Lingma runtimes are installed.
+- Added dual Lingma / QoderCN desktop branding, QoderCN icon support, and updated user-facing Settings, Models, diagnostics, and runtime-copy text to describe the shared Lingma / QoderCN support boundary.
+- Wired the HTTP `/version` endpoint into the repository-level `VERSION` source so API diagnostics now return the real release version instead of a service-name placeholder.
+- Documented the runtime compatibility matrix: QoderCN desktop app is fully verified on macOS; QoderCN plus `alibaba-cloud.tongyi-lingma` still prefers QoderCN; VS Code extension-only mode is partial because it does not expose the full `session/new` IPC generation path.
+- Verified the full OpenAI / Anthropic endpoint matrix in QoderCN-only and QoderCN-plus-VS-Code-extension coexistence modes, including Chat Completions, Responses, Anthropic Messages, debug requests, access logs, and compatibility aliases.
+- Kept repository, module, binary, and config-path naming stable for this release; QoderCN support is introduced as a compatibility expansion rather than a breaking product rename.
+- 新增 QoderCN 运行时兼容：远端 API 登录态发现和 IPC 传输探测都支持 QoderCN SharedClientCache、macOS socket/WebSocket，并在 QoderCN 与 Lingma 同时安装时优先选择 QoderCN。
+- 桌面端品牌位改为 Lingma / QoderCN 双图标共存，新增 QoderCN 图标支持，并统一设置页、模型页、诊断和运行时文案，明确 Lingma / QoderCN 共享支持边界。
+- HTTP `/version` 接入根级 `VERSION` 单一来源，诊断接口现在返回真实发布版本，不再返回服务名占位值。
+- 文档补充运行环境兼容矩阵：macOS QoderCN 桌面端已完整验证；QoderCN 与 `alibaba-cloud.tongyi-lingma` 共存时优先 QoderCN；单独 VS Code 扩展模式为部分支持，因为缺少完整的 `session/new` IPC 生成路径。
+- 完整验证 QoderCN-only 与 QoderCN + VS Code 扩展共存两种场景下的 OpenAI / Anthropic 接口矩阵，覆盖 Chat Completions、Responses、Anthropic Messages、请求调试、访问日志与兼容别名。
+- 本版本保持仓库、Go module、二进制名和配置路径不变；QoderCN 作为兼容能力扩展进入 `1.6.0`，不做破坏性改名。
 
 ## v1.5.4 - 2026-05-19
 

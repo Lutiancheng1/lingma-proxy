@@ -21,6 +21,7 @@ import (
 
 	"lingma-ipc-proxy/internal/service"
 	"lingma-ipc-proxy/internal/toolemulation"
+	"lingma-ipc-proxy/internal/version"
 )
 
 type Server struct {
@@ -512,7 +513,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": "lingma-proxy",
+		"version": version.Version,
 		"service": "lingma-proxy",
 	})
 }
