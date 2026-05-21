@@ -50,8 +50,31 @@ func resolvedPATH() string {
 		segments = append(segments, "/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
 	case "windows":
 		segments = append(segments, pathSegments(os.Getenv("Path"))...)
+		segments = append(segments, windowsNodePATHSegments()...)
+		if appData := strings.TrimSpace(os.Getenv("APPDATA")); appData != "" {
+			segments = append(segments, filepath.Join(appData, "npm"))
+		}
 	}
 	return strings.Join(uniqueStrings(segments), string(os.PathListSeparator))
+}
+
+func windowsNodePATHSegments() []string {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	segments := make([]string, 0, 4)
+	for _, envName := range []string{"ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"} {
+		root := strings.TrimSpace(os.Getenv(envName))
+		if root == "" {
+			continue
+		}
+		if envName == "LOCALAPPDATA" {
+			segments = append(segments, filepath.Join(root, "Programs", "nodejs"))
+			continue
+		}
+		segments = append(segments, filepath.Join(root, "nodejs"))
+	}
+	return segments
 }
 
 func loginShellPATH() string {
@@ -120,9 +143,6 @@ func lookPathWithResolvedEnv(name string) (string, error) {
 	}
 	for _, dir := range pathSegments(resolvedPATH()) {
 		candidate := filepath.Join(dir, name)
-		if isExecutableFile(candidate) {
-			return candidate, nil
-		}
 		if runtime.GOOS == "windows" {
 			for _, ext := range []string{".exe", ".cmd", ".bat"} {
 				if isExecutableFile(candidate + ext) {
@@ -130,18 +150,32 @@ func lookPathWithResolvedEnv(name string) (string, error) {
 				}
 			}
 		}
+		if isExecutableFile(candidate) {
+			return candidate, nil
+		}
 	}
 	return "", exec.ErrNotFound
 }
 
 func commandWithEnv(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
+	executable := resolveCommandName(name)
+	cmd := exec.Command(executable, args...)
 	cmd.Env = resolvedCommandEnv()
+	applyCommandPlatformOptions(cmd)
 	return cmd
 }
 
 func commandContextWithEnv(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
+	executable := resolveCommandName(name)
+	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Env = resolvedCommandEnv()
+	applyCommandPlatformOptions(cmd)
 	return cmd
+}
+
+func resolveCommandName(name string) string {
+	if resolved, err := lookPathWithResolvedEnv(name); err == nil {
+		return resolved
+	}
+	return name
 }

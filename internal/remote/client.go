@@ -183,8 +183,13 @@ func ResolveBaseURLCandidates() []BaseURLHint {
 			hints = append(hints, BaseURLHint{URL: strings.TrimRight(value, "/"), Source: path})
 		}
 	}
-	hints = append(hints, BaseURLHint{URL: DefaultBaseURL, Source: "default"})
-	return sortBaseURLHints(uniqueBaseURLHints(hints))
+	hints = sortBaseURLHints(uniqueBaseURLHints(hints))
+	for _, hint := range hints {
+		if hint.URL == DefaultBaseURL {
+			return hints
+		}
+	}
+	return append(hints, BaseURLHint{URL: DefaultBaseURL, Source: "default"})
 }
 
 func (c *Client) Warmup(ctx context.Context) error {
@@ -840,6 +845,9 @@ func candidateConfigFiles() []string {
 	for _, root := range lingmaLogRoots(home) {
 		paths = append(paths, recentLingmaAppLogs(root)...)
 	}
+	for _, root := range windowsAppDataRoots() {
+		paths = append(paths, windowsSharedClientConfigFiles(root)...)
+	}
 	for _, root := range jetBrainsRoots() {
 		paths = append(paths, jetBrainsOptionFiles(root)...)
 	}
@@ -879,13 +887,37 @@ func baseURLHintScore(raw string) int {
 	switch {
 	case strings.HasSuffix(host, ".rdc.aliyuncs.com"):
 		return 100
+	case isKnownEnterpriseRemoteHost(host):
+		return 90
 	case host == "lingma.alibabacloud.com":
 		return 50
 	case host == "lingma-api.tongyi.aliyun.com":
 		return 10
 	default:
-		return 1
+		return 80
 	}
+}
+
+func windowsAppDataRoots() []string {
+	roots := make([]string, 0, 3)
+	for _, envName := range []string{"APPDATA", "LOCALAPPDATA", "ProgramData"} {
+		if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
+			roots = append(roots, value)
+		}
+	}
+	return uniqueStrings(roots)
+}
+
+func windowsSharedClientConfigFiles(root string) []string {
+	paths := make([]string, 0)
+	for _, appName := range []string{"QoderCN", "Qoder", "Lingma"} {
+		paths = append(paths,
+			filepath.Join(root, appName, "SharedClientCache", "cache", "app-config.json"),
+			filepath.Join(root, appName, "shared_client", "cache", "app-config.json"),
+			filepath.Join(root, appName, "cache", "app-config.json"),
+		)
+	}
+	return paths
 }
 
 func readBaseURLHint(path string) string {
@@ -932,25 +964,32 @@ func lingmaLogRoots(home string) []string {
 		filepath.Join(home, ".lingma", "logs"),
 		filepath.Join(home, ".lingma", "vscode", "sharedClientCache", "logs"),
 		filepath.Join(home, ".qoder-cn", "shared_client", "logs"),
+		filepath.Join(home, ".qoder-cn", "shared_client", "cli", "logs"),
 		filepath.Join(home, ".qoder-cn", "logs"),
 		filepath.Join(home, ".qodercn", "logs"),
 		filepath.Join(home, ".qodercn", "vscode", "sharedClientCache", "logs"),
 		filepath.Join(home, "Library", "Application Support", "Lingma", "logs"),
 		filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache", "logs"),
+		filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache", "cli", "logs"),
 		filepath.Join(home, "Library", "Application Support", "QoderCN", "logs"),
 		filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache", "logs"),
+		filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache", "cli", "logs"),
 		filepath.Join(home, "Library", "Application Support", "Qoder", "logs"),
 		filepath.Join(home, "Library", "Application Support", "Qoder", "SharedClientCache", "logs"),
+		filepath.Join(home, "Library", "Application Support", "Qoder", "SharedClientCache", "cli", "logs"),
 	}
 	for _, envName := range []string{"APPDATA", "LOCALAPPDATA", "ProgramData"} {
 		if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
 			roots = append(roots,
 				filepath.Join(value, "Lingma", "logs"),
 				filepath.Join(value, "Lingma", "SharedClientCache", "logs"),
+				filepath.Join(value, "Lingma", "SharedClientCache", "cli", "logs"),
 				filepath.Join(value, "QoderCN", "logs"),
 				filepath.Join(value, "QoderCN", "SharedClientCache", "logs"),
+				filepath.Join(value, "QoderCN", "SharedClientCache", "cli", "logs"),
 				filepath.Join(value, "Qoder", "logs"),
 				filepath.Join(value, "Qoder", "SharedClientCache", "logs"),
+				filepath.Join(value, "Qoder", "SharedClientCache", "cli", "logs"),
 				filepath.Join(value, "Code", "User", "globalStorage", "alibaba-cloud.tongyi-lingma", "logs"),
 			)
 		}
@@ -1093,6 +1132,13 @@ func appendCandidateLogPath(paths *[]string, path, name string) {
 	if lowerName == "renderer.log" ||
 		lowerName == "sharedprocess.log" ||
 		lowerName == "main.log" ||
+		lowerName == "network.log" ||
+		lowerName == "network-shared.log" ||
+		lowerName == "agent.log" ||
+		lowerName == "qoder.log" ||
+		lowerName == "qodercn.log" ||
+		lowerName == "lingma.log" ||
+		lowerName == "lingma-extension.log" ||
 		lowerName == "idea.log" ||
 		lowerName == "webstorm.log" ||
 		lowerName == "pycharm.log" ||
@@ -1131,16 +1177,25 @@ func uniqueStrings(values []string) []string {
 func extractBaseURLFromText(text string) string {
 	matches := remoteBaseURLPattern.FindAllString(text, -1)
 	for i := len(matches) - 1; i >= 0; i-- {
-		if value := normalizeRemoteBaseURLHint(matches[i]); value != "" {
+		if value := normalizeRemoteAPIRequestURL(matches[i]); value != "" {
 			return value
 		}
 	}
 	for _, marker := range []string{
 		"endpoint config:",
+		"Endpoint:",
+		"configGeneralDedicatedUrl",
+		"dedicatedUrl",
+		"Lingma endpoint configured",
+		"Lingma endpoint from --api-endpoint flag",
 		"Using service url:",
-		"Download asset from:",
 	} {
 		if value := extractBaseURLAfterMarker(text, marker); value != "" {
+			return value
+		}
+	}
+	for i := len(matches) - 1; i >= 0; i-- {
+		if value := normalizeRemoteBaseURLHint(matches[i]); value != "" {
 			return value
 		}
 	}
@@ -1182,28 +1237,77 @@ func normalizeRemoteBaseURLHint(raw string) string {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return ""
 	}
-	host := strings.ToLower(parsed.Host)
-	if !isRemoteAPIHost(host) {
+	if !isRemoteAPIURL(parsed) {
 		return ""
 	}
 	return parsed.Scheme + "://" + parsed.Host
 }
 
-func isRemoteAPIHost(host string) bool {
+func normalizeRemoteAPIRequestURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "ttps://") {
+		raw = "h" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ""
+	}
+	if !isRemoteAPIRequestPath(parsed.EscapedPath()) {
+		return ""
+	}
+	if !isRemoteAPIURL(parsed) {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+func isRemoteAPIRequestPath(path string) bool {
+	path = strings.ToLower(path)
+	if path == "/algo" || strings.HasPrefix(path, "/algo/") {
+		return true
+	}
+	return strings.Contains(path, "/api/v2/model/list") ||
+		strings.Contains(path, "/agent_chat_generation") ||
+		strings.Contains(path, "/remoteagent/") ||
+		strings.Contains(path, "/lingma/login") ||
+		strings.Contains(path, "/extension/config/pull")
+}
+
+func isRemoteAPIURL(parsed *url.URL) bool {
+	host := strings.ToLower(parsed.Host)
 	if host == "" {
 		return false
 	}
-	if strings.Contains(host, ".oss-") || strings.Contains(host, "oss-rg-") || strings.Contains(host, ".oss.") {
+	if isStaticAssetHost(host) {
 		return false
 	}
-	switch host {
-	case "lingma.alibabacloud.com", "lingma-api.tongyi.aliyun.com":
-		return true
+	path := strings.ToLower(parsed.EscapedPath())
+	if strings.Contains(path, "/download") ||
+		strings.Contains(path, "/extension/") ||
+		strings.HasSuffix(path, ".zip") ||
+		strings.HasSuffix(path, ".vsix") ||
+		strings.HasSuffix(path, ".dmg") ||
+		strings.HasSuffix(path, ".exe") {
+		return false
 	}
-	if strings.HasSuffix(host, ".rdc.aliyuncs.com") {
-		return true
-	}
-	return false
+	return true
+}
+
+func isStaticAssetHost(host string) bool {
+	return strings.Contains(host, ".oss-") ||
+		strings.Contains(host, "oss-rg-") ||
+		strings.Contains(host, ".oss.") ||
+		strings.Contains(host, "marketplace.visualstudio.com") ||
+		strings.Contains(host, "downloads.marketplace.jetbrains.com")
+}
+
+func isKnownEnterpriseRemoteHost(host string) bool {
+	return strings.HasSuffix(host, ".rdc.aliyuncs.com") ||
+		(strings.Contains(host, "lingma") && host != "lingma.alibabacloud.com" && host != "lingma-api.tongyi.aliyun.com") ||
+		strings.Contains(host, "qoder")
 }
 
 func estimateTokens(text string) int {

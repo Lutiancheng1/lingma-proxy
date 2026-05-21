@@ -3,6 +3,8 @@ package feishu
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -75,10 +77,28 @@ func installCLI(ctx context.Context) error {
 	if major := parseNodeMajor(node.Version); major > 0 && major < minimumNodeMajor {
 		return fmt.Errorf("install lark-cli failed: Node.js version %s is below required >=%d", node.Version, minimumNodeMajor)
 	}
+	if err := ensureNPMGlobalDir(); err != nil {
+		return err
+	}
 	cmd := commandContextWithEnv(ctx, "npx", "@larksuite/cli@latest", "install")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("install lark-cli failed: command=%q node=%s npm=%s npx=%s error=%w output=%s", "npx @larksuite/cli@latest install", describeBinary(node), describeBinary(npm), describeBinary(npx), err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func ensureNPMGlobalDir() error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	appData := strings.TrimSpace(os.Getenv("APPDATA"))
+	if appData == "" {
+		return nil
+	}
+	npmDir := filepath.Join(appData, "npm")
+	if err := os.MkdirAll(npmDir, 0755); err != nil {
+		return fmt.Errorf("install lark-cli failed: create npm global bin dir %s: %w", npmDir, err)
 	}
 	return nil
 }

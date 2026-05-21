@@ -106,9 +106,15 @@ func (m *Manager) Probe(ctx context.Context) Status {
 func (m *Manager) refreshStatus(ctx context.Context) {
 	node, npm, npx := detectNodeAndNPM()
 	cli := detectBinary("lark-cli", "--version")
-	skills, _ := discoverSkills(ctx)
 	configStatus := readCLIConfigStatus()
-	authStatus := readAuthStatus(ctx)
+	authStatus := AuthStatus{Message: "未授权"}
+	skills := []SkillStatus{}
+	if cli.Found {
+		skills, _ = discoverSkills(ctx)
+		authStatus = readAuthStatus(ctx)
+	} else {
+		authStatus.Message = "lark-cli 未安装，暂不检测授权状态"
+	}
 
 	m.mu.Lock()
 	m.status.Platform = goruntime.GOOS
@@ -199,6 +205,9 @@ func userFacingInstallError(err error) string {
 }
 
 func (m *Manager) StartSetupNew(ctx context.Context) error {
+	if err := requireCLIReady(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	if m.status.SetupRunning {
 		m.mu.Unlock()
@@ -248,7 +257,24 @@ func (m *Manager) StartSetupNew(ctx context.Context) error {
 }
 
 func (m *Manager) StartLogin(ctx context.Context) error {
+	if err := requireCLIReady(); err != nil {
+		return err
+	}
 	return m.startLoginWithArgs(ctx, []string{"lark-cli", "auth", "login", "--recommend"})
+}
+
+func requireCLIReady() error {
+	node, npm, npx := detectNodeAndNPM()
+	if !node.Found || !npm.Found || !npx.Found {
+		return fmt.Errorf("Node.js/npm/npx 未就绪，请先安装 Node.js 后重试")
+	}
+	if major := parseNodeMajor(node.Version); major > 0 && major < minimumNodeMajor {
+		return fmt.Errorf("Node.js 版本 %s 低于飞书 CLI 要求的 >=%d", node.Version, minimumNodeMajor)
+	}
+	if cli := detectBinary("lark-cli", "--version"); !cli.Found {
+		return fmt.Errorf("lark-cli 未安装，请先点击“安装 CLI 与 Skills”")
+	}
+	return nil
 }
 
 func (m *Manager) startScopeLogin(ctx context.Context, scopes ...string) (string, error) {

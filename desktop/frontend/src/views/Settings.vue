@@ -78,6 +78,11 @@ const bridgeStartButtonLabel = computed(() => {
   if (bridgeConfig.value.enabled) return '启动 Bridge'
   return '启用并启动 Bridge'
 })
+const bridgeInstallStepDone = computed(() => {
+  const status = bridgeStatus.value
+  return Boolean(status?.node?.found && status?.npm?.found && status?.npx?.found && status?.cli?.found && status?.skillsReady)
+})
+const bridgeSetupStepDone = computed(() => Boolean(bridgeStatus.value?.config?.configured))
 const bridgeStepItems = computed(() => {
   const status = bridgeStatus.value
   if (!bridgeStatusLoaded.value) {
@@ -390,7 +395,11 @@ async function handleBridgePrimaryAction() {
 function isBridgeStepClickable(step) {
   if (!step || step.done) return false
   if (bridgeBusy.value || bridgeRefreshing.value) return false
-  return bridgeStatusLoaded.value
+  if (!bridgeStatusLoaded.value) return false
+  if (step.key === 'install') return true
+  if (step.key === 'setup') return bridgeInstallStepDone.value
+  if (step.key === 'auth') return bridgeInstallStepDone.value && bridgeSetupStepDone.value
+  return false
 }
 
 function bridgeStepCTA(step) {
