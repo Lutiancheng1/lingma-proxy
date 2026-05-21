@@ -281,12 +281,12 @@ onUnmounted(() => {
         <table class="data-table">
           <thead>
             <tr>
-              <th>时间</th>
-              <th>方法</th>
-              <th>路径</th>
-              <th>模型</th>
-              <th>状态</th>
-              <th>耗时</th>
+              <th>Time</th>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Model</th>
+              <th>Status</th>
+              <th>Duration</th>
               <th>Size</th>
             </tr>
           </thead>

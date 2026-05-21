@@ -56,9 +56,13 @@ function sourceLabel(source) {
 
 function shortID(value) {
   const text = String(value || '').trim()
-  if (!text) return '-'
+  if (!text) return ''
   if (text.length <= 14) return text
   return `${text.slice(0, 6)}...${text.slice(-4)}`
+}
+
+function hasLogMeta(log) {
+  return Boolean(String(log?.sessionId || '').trim() || String(log?.chatId || '').trim())
 }
 
 function serializeLogs() {
@@ -66,7 +70,12 @@ function serializeLogs() {
     .map((log) => {
       const session = shortID(log.sessionId)
       const chat = shortID(log.chatId)
-      return `[${log.time}] [${sourceLabel(log.source)}] ${levelLabel(log.level)} [session=${session}] [chat=${chat}] ${log.message}`
+      const meta = [
+        session ? `session=${session}` : '',
+        chat ? `chat=${chat}` : '',
+      ].filter(Boolean)
+      const metaText = meta.length > 0 ? ` [${meta.join('] [')}]` : ''
+      return `[${log.time}] [${sourceLabel(log.source)}] ${levelLabel(log.level)}${metaText} ${log.message}`
     })
     .join('\n')
 }
@@ -130,6 +139,14 @@ function proceedClearLogs() {
       </div>
 
       <div v-if="filteredLogs.length > 0" class="log-list hidden-scrollbar">
+        <div class="log-row log-header">
+          <span>Time</span>
+          <span>Source</span>
+          <span>Level</span>
+          <span class="log-meta-cell">Session ID</span>
+          <span class="log-meta-cell">Chat ID</span>
+          <span>Message</span>
+        </div>
         <div
           v-for="(log, index) in filteredLogs"
           :key="log.createdAt || index"
@@ -138,8 +155,8 @@ function proceedClearLogs() {
           <span class="muted">{{ log.time }}</span>
           <span class="log-source-chip">{{ sourceLabel(log.source) }}</span>
           <strong :class="levelClass(log.level)">{{ levelLabel(log.level) }}</strong>
-          <span class="log-meta-cell">{{ shortID(log.sessionId) }}</span>
-          <span class="log-meta-cell">{{ shortID(log.chatId) }}</span>
+          <span class="log-meta-cell">{{ shortID(log.sessionId) || '' }}</span>
+          <span class="log-meta-cell">{{ shortID(log.chatId) || '' }}</span>
           <span>{{ log.message }}</span>
         </div>
       </div>
