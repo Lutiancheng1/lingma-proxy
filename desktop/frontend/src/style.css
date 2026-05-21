@@ -2403,6 +2403,23 @@ button:disabled {
   white-space: nowrap;
 }
 
+.log-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--muted);
+  background: rgba(250, 252, 255, 0.94);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--line);
+}
+
+:root[data-theme='dark'] .log-header {
+  color: var(--text);
+  background: rgba(15, 23, 42, 0.96);
+}
+
 .level-info {
   color: #2563eb;
 }

@@ -1,6 +1,28 @@
 # Changelog
 
-## Unreleased (target: v1.6.2)
+## Unreleased (target: v1.6.4)
+
+## v1.6.4 - 2026-05-21
+
+- Fixed Remote API endpoint auto-detection for enterprise QoderCN/Lingma environments by reading real runtime request logs under shared-client CLI log directories and prioritizing actual chat/model API URLs over default or marketplace hosts.
+- Added startup model-list retry and post-warmup refresh in the desktop app so Windows first launch no longer gets stuck with an empty model cache after an early `/v1/models` race.
+- Kept explicit `Remote API domain` settings authoritative: manually configured enterprise domains are not overwritten by automatic runtime candidates.
+- Included the mainline polish that refreshes README screenshots, keeps the Requests table headers consistent with the Dashboard (`Time / Method / Path / Model / Status / Duration / Size`), and adds a generic Logs table header (`Time / Source / Level / Message`).
+- 修复企业版 QoderCN / Lingma 的远端 API 域名自动探测：现在会读取 shared-client CLI 日志里的真实请求，并优先使用真实 chat/model API 域名，不再被默认域名或 marketplace/download URL 覆盖。
+- 桌面端启动时模型列表自动探测增加短重试，并在 warmup 成功后补刷新一次，降低 Windows 首次打开后模型列表为空、需要手动探测的概率。
+- 显式填写的“远端 API 域名”仍保持最高优先级，自动探测不会覆盖用户手动配置的企业域名。
+- 合入主线 UI 文档整理：刷新 README 桌面截图，请求流表头统一为与仪表盘一致的英文列名，并补齐日志页通用表头。
+
+## v1.6.3 - 2026-05-21
+
+- Not released as standalone assets; changes were folded into `v1.6.4`.
+- Hardened Remote API candidate discovery for QoderCN/Lingma enterprise domains and added verified fallback probing for missing `kmodel` / `mmodel` list entries instead of blindly adding unavailable models.
+- Added JetBrains Windows runtime/config/log candidates and automatic fallback to the next discovered Remote API domain when the first auto-detected candidate cannot list models.
+- Changed Remote fallback behavior so configured fallback models can still be tried during generation even when the upstream model list omits their aliases.
+- 未单独发布安装包；相关修复合并进入 `v1.6.4`。
+- 加强 QoderCN / Lingma 企业域名候选探测，并且对上游模型列表缺失的 `kmodel` / `mmodel` 做真实可用性探测后再展示，不再盲目补模型。
+- 补齐 Windows JetBrains 系 IDE 的运行时、配置和日志候选路径；自动探测到的首个域名无法列模型时，会继续尝试后续候选域名。
+- Remote fallback 生成链路不再依赖模型列表是否返回对应 alias，配置了兜底模型时仍会在真实生成失败后按顺序尝试。
 
 ## v1.6.2 - 2026-05-21
 

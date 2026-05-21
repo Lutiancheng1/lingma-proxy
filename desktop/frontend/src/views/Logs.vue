@@ -107,6 +107,12 @@ function proceedClearLogs() {
       </div>
 
       <div v-if="filteredLogs.length > 0" class="log-list hidden-scrollbar">
+        <div class="log-row log-header">
+          <span>Time</span>
+          <span>Source</span>
+          <span>Level</span>
+          <span>Message</span>
+        </div>
         <div
           v-for="(log, index) in filteredLogs"
           :key="log.createdAt || index"
