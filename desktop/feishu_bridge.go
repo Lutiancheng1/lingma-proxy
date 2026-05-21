@@ -291,23 +291,6 @@ func (a *App) StartFeishuCLISetupNew() error {
 	return a.bridge.StartSetupNew(context.Background())
 }
 
-func (a *App) BindFeishuCLIWithAppSecret(appID string, appSecret string) error {
-	if a.bridge == nil {
-		return fmt.Errorf("feishu bridge manager not initialized")
-	}
-	appID = strings.TrimSpace(appID)
-	if err := a.bridge.BindWithAppSecret(context.Background(), appID, appSecret); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	a.bridgeCfg.AppID = appID
-	a.bridgeCfg.SetupMode = feishu.SetupModeManual
-	bridgeCfg := a.bridgeCfg
-	proxyCfg := a.cfg
-	a.mu.Unlock()
-	return a.saveDesktopConfig(proxyCfg, bridgeCfg)
-}
-
 func (a *App) StartFeishuCLILogin() error {
 	if a.bridge == nil {
 		return fmt.Errorf("feishu bridge manager not initialized")

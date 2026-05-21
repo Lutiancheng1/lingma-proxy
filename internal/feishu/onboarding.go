@@ -4,12 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -18,11 +16,7 @@ var urlPattern = regexp.MustCompile(`https?://[^\s]+`)
 
 type cliConfigFile struct {
 	Apps []struct {
-		AppID     string `json:"appId"`
-		AppSecret struct {
-			Source string `json:"source"`
-			ID     string `json:"id"`
-		} `json:"appSecret"`
+		AppID string `json:"appId"`
 		Brand string `json:"brand"`
 		Lang  string `json:"lang"`
 	} `json:"apps"`
@@ -99,26 +93,6 @@ func commandShell(goos string) (string, []string) {
 		return "cmd", []string{"/C"}
 	default:
 		return "", nil
-	}
-}
-
-func storeSecret(serviceName, appID, secret string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		cmd := commandWithEnv("security", "add-generic-password", "-U", "-a", appID, "-s", serviceName, "-w", secret)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("store secret in keychain failed: %w: %s", err, strings.TrimSpace(string(output)))
-		}
-		return nil
-	case "windows":
-		target := serviceName + ":" + appID
-		cmd := commandWithEnv("cmdkey", "/generic:"+target, "/user:"+appID, "/pass:"+secret)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("store secret in credential manager failed: %w: %s", err, strings.TrimSpace(string(output)))
-		}
-		return nil
-	default:
-		return nil
 	}
 }
 

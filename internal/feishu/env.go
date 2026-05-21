@@ -58,8 +58,10 @@ func loginShellPATH() string {
 	shell := strings.TrimSpace(os.Getenv("SHELL"))
 	if shell == "" {
 		switch runtime.GOOS {
-		case "darwin", "linux":
+		case "darwin":
 			shell = "/bin/zsh"
+		case "linux":
+			shell = "/bin/bash"
 		default:
 			return ""
 		}

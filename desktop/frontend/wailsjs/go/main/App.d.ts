@@ -4,8 +4,6 @@ import {main} from '../models';
 import {service} from '../models';
 import {feishu} from '../models';
 
-export function BindFeishuCLIWithAppSecret(arg1:string,arg2:string):Promise<void>;
-
 export function ChooseFeedbackExportPath():Promise<string>;
 
 export function ClearLogs():Promise<void>;

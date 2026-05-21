@@ -1,0 +1,110 @@
+package feishu
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestHandleEventCallsLLMAndRepliesToMessage(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	oldDiscover := discoverSkillsForPrompt
+	oldCallLLM := callLLMForConversation
+	t.Cleanup(func() {
+		discoverSkillsForPrompt = oldDiscover
+		callLLMForConversation = oldCallLLM
+	})
+	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
+		return []SkillStatus{{Name: "lark-im", Found: true}}, nil
+	}
+	callLLMForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool) (*llmResponse, error) {
+		if proxyURL != "http://127.0.0.1:8095/v1/chat/completions" {
+			t.Fatalf("unexpected proxy URL: %s", proxyURL)
+		}
+		if model != "kmodel" {
+			t.Fatalf("unexpected model: %s", model)
+		}
+		if forceToolUse {
+			t.Fatalf("plain greeting should not force tool use")
+		}
+		var resp llmResponse
+		resp.Choices = append(resp.Choices, struct {
+			Message struct {
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls"`
+			} `json:"message"`
+		}{})
+		resp.Choices[0].Message.Content = "收到，我可以正常回复。"
+		return &resp, nil
+	}
+
+	manager := NewManager(ManagerOptions{
+		ProxyURL: func() string { return "http://127.0.0.1:8095/v1/chat/completions" },
+	})
+	manager.SetConfig(Config{Model: "kmodel", MaxToolRounds: 5})
+	manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_test_chat",
+		ChatType:    "p2p",
+		Content:     "你好",
+		CreateTime:  "1",
+		EventID:     "evt_test_1",
+		MessageID:   "om_test_message",
+		SenderID:    "ou_test_user",
+		MessageType: "text",
+	})
+
+	got := strings.TrimSpace(string(mustReadFileEventually(t, replyLog)))
+	if !strings.Contains(got, "--message-id om_test_message") {
+		t.Fatalf("reply command did not include message id, got: %s", got)
+	}
+	if !strings.Contains(got, "--markdown 收到，我可以正常回复。") {
+		t.Fatalf("reply command did not include LLM reply, got: %s", got)
+	}
+	state := manager.getConversationState("oc_test_chat")
+	if len(state.History) == 0 {
+		t.Fatalf("conversation history was not stored")
+	}
+}
+
+func installFakeLarkCLI(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	replyLog := filepath.Join(dir, "reply.log")
+	script := filepath.Join(dir, "lark-cli")
+	content := `#!/bin/sh
+if [ "$1" = "im" ] && [ "$2" = "+messages-reply" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  exit 0
+fi
+printf 'unexpected lark-cli command: %s\n' "$*" >&2
+exit 1
+`
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FEISHU_REPLY_LOG", replyLog)
+	commandEnvOnce = sync.Once{}
+	commandEnv = nil
+	commandPath = ""
+	return replyLog
+}
+
+func mustReadFileEventually(t *testing.T, path string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("file %s was not written: %v", path, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

@@ -18,6 +18,11 @@ const (
 	persistedConversationRecentLimit = 8
 )
 
+var (
+	discoverSkillsForPrompt = discoverSkills
+	callLLMForConversation  = callLLM
+)
+
 type ManagerOptions struct {
 	ProxyURL func() string
 	Logf     func(level, message string, meta LogMeta)
@@ -223,33 +228,6 @@ func (m *Manager) StartSetupNew(ctx context.Context) error {
 		m.mu.Unlock()
 		m.emit(status)
 	}()
-	return nil
-}
-
-func (m *Manager) BindWithAppSecret(ctx context.Context, appID string, appSecret string) error {
-	appID = strings.TrimSpace(appID)
-	appSecret = strings.TrimSpace(appSecret)
-	if appID == "" || appSecret == "" {
-		return fmt.Errorf("app id 和 app secret 不能为空")
-	}
-	if err := storeSecret("lingma-proxy-feishu-app-secret", appID, appSecret); err != nil {
-		return err
-	}
-	cmd := commandContextWithEnv(ctx, "lark-cli", "config", "init", "--app-id", appID, "--app-secret-stdin", "--brand", "feishu")
-	cmd.Stdin = strings.NewReader(appSecret)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("绑定飞书应用失败: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	m.refreshStatus(ctx)
-	m.mu.Lock()
-	m.cfg.AppID = appID
-	m.cfg.SetupMode = SetupModeManual
-	m.status.LastOutput = strings.TrimSpace(string(output))
-	status := m.status
-	m.mu.Unlock()
-	m.emit(status)
-	m.logf("info", "飞书 CLI 已绑定现有应用")
 	return nil
 }
 
@@ -550,7 +528,7 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 	if model == "" {
 		model = DefaultModel
 	}
-	skills, _ := discoverSkills(context.Background())
+	skills, _ := discoverSkillsForPrompt(context.Background())
 	conversationKey := conversationKeyForEvent(event)
 	normalizedContent := normalizeConversationText(event.Content)
 	commandReply, handled := m.handleConversationCommand(ctx, conversationKey, proxyURL, model, normalizedContent, logMeta)
@@ -585,7 +563,7 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 	replyText := ""
 conversation:
 	for i := 0; i < rounds; i++ {
-		resp, err := callLLM(ctx, proxyURL, model, messages, forceToolUse)
+		resp, err := callLLMForConversation(ctx, proxyURL, model, messages, forceToolUse)
 		if err != nil {
 			replyText = "抱歉，LLM 服务暂时不可用，请稍后再试。"
 			m.logf("warn", "Feishu bridge 调用代理失败："+err.Error(), logMeta)

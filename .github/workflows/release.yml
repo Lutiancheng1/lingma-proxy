@@ -325,7 +325,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum * > "lingma-proxy_${RELEASE_TAG}_sha256.txt"
+          sha256sum ./* > "lingma-proxy_${RELEASE_TAG}_sha256.txt"
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2

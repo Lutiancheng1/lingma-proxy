@@ -1,0 +1,160 @@
+name: Feishu Bridge Artifacts
+
+on:
+  push:
+    branches:
+      - feat/feishu-bridge-go
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test Feishu Branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+
+      - name: Verify synced version files
+        run: ./scripts/check-version-sync.sh
+
+      - name: Build desktop frontend
+        run: |
+          npm ci --prefix desktop/frontend
+          npm run build --prefix desktop/frontend
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Build CLI smoke
+        run: go build -o lingma-ipc-proxy ./cmd/lingma-ipc-proxy
+
+  build-desktop-macos:
+    name: Build Feishu Desktop macOS
+    runs-on: macos-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix desktop/frontend
+
+      - name: Set artifact label
+        run: echo "BUILD_LABEL=feishu-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Build app
+        run: |
+          cd desktop
+          wails build -platform darwin/arm64 -clean
+
+      - name: Package app
+        run: |
+          APP_PATH="$(find desktop/build/bin -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          test "$(basename "$APP_PATH")" = "Lingma Proxy.app"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "lingma-proxy-feishu-desktop_${BUILD_LABEL}_darwin_arm64.zip"
+          DMG_ROOT="$(mktemp -d)"
+          cp -R "$APP_PATH" "$DMG_ROOT/"
+          ln -s /Applications "$DMG_ROOT/Applications"
+          hdiutil create \
+            -volname "Lingma Proxy Feishu" \
+            -srcfolder "$DMG_ROOT" \
+            -ov \
+            -format UDZO \
+            "lingma-proxy-feishu-desktop_${BUILD_LABEL}_darwin_arm64.dmg"
+          rm -rf "$DMG_ROOT"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: feishu-desktop-macos
+          retention-days: 14
+          path: |
+            lingma-proxy-feishu-desktop_${{ env.BUILD_LABEL }}_darwin_arm64.zip
+            lingma-proxy-feishu-desktop_${{ env.BUILD_LABEL }}_darwin_arm64.dmg
+
+  build-desktop-windows:
+    name: Build Feishu Desktop Windows
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+
+      - name: Install Wails
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix desktop/frontend
+
+      - name: Set artifact label
+        shell: pwsh
+        run: |
+          $short = $env:GITHUB_SHA.Substring(0, 7)
+          "BUILD_LABEL=feishu-$short" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build app
+        shell: pwsh
+        run: |
+          Push-Location desktop
+          wails build -platform windows/amd64 -clean
+          Pop-Location
+
+      - name: Package app
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem .\desktop\build\bin -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "Desktop exe was not produced" }
+          if ($exe.Name -ne "LingmaProxy.exe") { throw "Unexpected desktop exe name: $($exe.Name)" }
+          $asset = "lingma-proxy-feishu-desktop_${env:BUILD_LABEL}_windows_amd64.zip"
+          Compress-Archive -Path $exe.FullName -DestinationPath $asset -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: feishu-desktop-windows
+          retention-days: 14
+          path: lingma-proxy-feishu-desktop_${{ env.BUILD_LABEL }}_windows_amd64.zip

@@ -29,7 +29,6 @@ const bridgeConfig = ref({
   brand: 'feishu',
   model: 'kmodel',
   maxToolRounds: 5,
-  setupMode: 'new',
 })
 const bridgeStatus = ref(null)
 const bridgeStatusLoaded = ref(false)

@@ -52,8 +52,6 @@ export namespace feishu {
 	    brand: string;
 	    model: string;
 	    maxToolRounds: number;
-	    setupMode: string;
-	    appId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -66,8 +64,6 @@ export namespace feishu {
 	        this.brand = source["brand"];
 	        this.model = source["model"];
 	        this.maxToolRounds = source["maxToolRounds"];
-	        this.setupMode = source["setupMode"];
-	        this.appId = source["appId"];
 	    }
 	}
 	export class ConfigStatus {
