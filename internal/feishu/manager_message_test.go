@@ -57,7 +57,16 @@ func TestHandleEventCallsLLMAndRepliesToMessage(t *testing.T) {
 		MessageType: "text",
 	})
 
-	got := strings.TrimSpace(string(mustReadFileEventually(t, replyLog)))
+	got := strings.TrimSpace(string(mustReadFileContainingEventually(t, replyLog, "--markdown 收到，我可以正常回复。")))
+	if !strings.Contains(got, "im reactions create") {
+		t.Fatalf("typing reaction create was not called, got: %s", got)
+	}
+	if !strings.Contains(got, "im reactions delete") {
+		t.Fatalf("typing reaction cleanup was not called, got: %s", got)
+	}
+	if !strings.Contains(got, "\"emoji_type\":\"Typing\"") {
+		t.Fatalf("typing reaction did not use Typing emoji, got: %s", got)
+	}
 	if !strings.Contains(got, "--message-id om_test_message") {
 		t.Fatalf("reply command did not include message id, got: %s", got)
 	}
@@ -76,6 +85,15 @@ func installFakeLarkCLI(t *testing.T) string {
 	replyLog := filepath.Join(dir, "reply.log")
 	script := filepath.Join(dir, "lark-cli")
 	content := `#!/bin/sh
+if [ "$1" = "im" ] && [ "$2" = "reactions" ] && [ "$3" = "create" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  printf '{"reaction_id":"re_typing"}\n'
+  exit 0
+fi
+if [ "$1" = "im" ] && [ "$2" = "reactions" ] && [ "$3" = "delete" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  exit 0
+fi
 if [ "$1" = "im" ] && [ "$2" = "+messages-reply" ]; then
   printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
   exit 0
@@ -104,6 +122,28 @@ func mustReadFileEventually(t *testing.T, path string) []byte {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("file %s was not written: %v", path, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func mustReadFileContainingEventually(t *testing.T, path string, needle string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []byte
+	var lastErr error
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			last = data
+			if strings.Contains(string(data), needle) {
+				return data
+			}
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("file %s did not contain %q, last=%q err=%v", path, needle, string(last), lastErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

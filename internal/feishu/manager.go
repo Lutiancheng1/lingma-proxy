@@ -523,6 +523,8 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 		m.logf("warn", "Feishu bridge 收到消息，但当前代理地址为空", logMeta)
 		return
 	}
+	typing := m.addTypingReaction(event.MessageID, logMeta)
+	defer m.removeTypingReaction(typing, logMeta)
 	cfg := m.Config()
 	model := cfg.Model
 	if model == "" {
@@ -985,6 +987,93 @@ func valueOrFallback(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+type typingReactionState struct {
+	MessageID  string
+	ReactionID string
+}
+
+func (m *Manager) addTypingReaction(messageID string, meta LogMeta) typingReactionState {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return typingReactionState{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	params, _ := json.Marshal(map[string]string{"message_id": messageID})
+	data, _ := json.Marshal(map[string]any{
+		"reaction_type": map[string]string{"emoji_type": "Typing"},
+	})
+	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "reactions", "create", "--as", "bot", "--format", "json", "--params", string(params), "--data", string(data))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		m.logf("warn", "Feishu bridge 添加输入状态失败："+formatCommandFailure(err, output), meta)
+		return typingReactionState{}
+	}
+	reactionID := firstJSONStringField(output, "reaction_id")
+	if reactionID == "" {
+		m.logf("warn", "Feishu bridge 添加输入状态成功但未返回 reaction_id", meta)
+		return typingReactionState{MessageID: messageID}
+	}
+	m.logf("info", "Feishu bridge 输入状态已显示", meta)
+	return typingReactionState{MessageID: messageID, ReactionID: reactionID}
+}
+
+func (m *Manager) removeTypingReaction(state typingReactionState, meta LogMeta) {
+	if strings.TrimSpace(state.MessageID) == "" || strings.TrimSpace(state.ReactionID) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	params, _ := json.Marshal(map[string]string{
+		"message_id":  state.MessageID,
+		"reaction_id": state.ReactionID,
+	})
+	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "reactions", "delete", "--as", "bot", "--format", "json", "--params", string(params))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		m.logf("warn", "Feishu bridge 清理输入状态失败："+formatCommandFailure(err, output), meta)
+		return
+	}
+	m.logf("info", "Feishu bridge 输入状态已清理", meta)
+}
+
+func formatCommandFailure(err error, output []byte) string {
+	text := strings.TrimSpace(string(output))
+	if text == "" {
+		return err.Error()
+	}
+	return fmt.Sprintf("%v: %s", err, text)
+}
+
+func firstJSONStringField(data []byte, field string) string {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return ""
+	}
+	return findJSONStringField(value, field)
+}
+
+func findJSONStringField(value any, field string) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		if direct, ok := typed[field].(string); ok && strings.TrimSpace(direct) != "" {
+			return strings.TrimSpace(direct)
+		}
+		for _, item := range typed {
+			if found := findJSONStringField(item, field); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if found := findJSONStringField(item, field); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
 }
 
 func (m *Manager) replyToMessage(ctx context.Context, messageID string, reply string) error {
