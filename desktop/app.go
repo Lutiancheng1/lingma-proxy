@@ -631,7 +631,11 @@ func (a *App) StartProxy() error {
 
 	// Warm up backend and fetch models in background so the HTTP endpoint
 	// becomes available immediately after the desktop app launches/restarts.
-	go a.fetchModels(addr, effectiveWarmupTimeout(cfg))
+	go func() {
+		if _, err := a.fetchModelsWithRetry(addr, effectiveWarmupTimeout(cfg), 4, 750*time.Millisecond); err != nil {
+			a.emitLog("warn", fmt.Sprintf("模型自动探测失败：%v", err))
+		}
+	}()
 	go func() {
 		warmupCtx, cancel := context.WithTimeout(context.Background(), effectiveWarmupTimeout(cfg))
 		defer cancel()
@@ -642,6 +646,9 @@ func (a *App) StartProxy() error {
 		}
 		runtime.LogInfof(a.ctx, "%s warmup completed", backendLabel(cfg.Backend))
 		a.emitLog("info", fmt.Sprintf("%s warmup completed", backendLabel(cfg.Backend)))
+		if _, err := a.fetchModelsWithRetry(addr, effectiveWarmupTimeout(cfg), 2, time.Second); err != nil {
+			runtime.LogWarningf(a.ctx, "post-warmup model refresh failed: %v", err)
+		}
 	}()
 	go func() {
 		a.mu.RLock()
@@ -951,6 +958,24 @@ func (a *App) RefreshModels() ([]ModelInfo, error) {
 	return models, nil
 }
 
+func (a *App) fetchModelsWithRetry(addr string, timeout time.Duration, attempts int, delay time.Duration) ([]ModelInfo, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		models, err := a.fetchModels(addr, timeout)
+		if err == nil {
+			return models, nil
+		}
+		lastErr = err
+		if attempt < attempts-1 && delay > 0 {
+			time.Sleep(delay * time.Duration(attempt+1))
+		}
+	}
+	return nil, lastErr
+}
+
 func (a *App) SelectModel(modelID string) (ProxyStatus, error) {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
@@ -1023,14 +1048,29 @@ func (a *App) fetchModels(addr string, timeout time.Duration) ([]ModelInfo, erro
 	}
 
 	a.mu.Lock()
+	changed := !sameModelList(a.models, models)
 	a.models = models
 	a.mu.Unlock()
 
-	runtime.EventsEmit(a.ctx, "models:updated", models)
-	if len(models) > 0 {
+	if changed {
+		runtime.EventsEmit(a.ctx, "models:updated", models)
+	}
+	if changed && len(models) > 0 {
 		a.emitLog("info", fmt.Sprintf("Loaded %d models", len(models)))
 	}
 	return models, nil
+}
+
+func sameModelList(left, right []ModelInfo) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].ID != right[i].ID || left[i].Name != right[i].Name {
+			return false
+		}
+	}
+	return true
 }
 
 func extractRequestModel(reqBody string) string {

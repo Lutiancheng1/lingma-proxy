@@ -83,9 +83,8 @@ func installCLI(ctx context.Context, onLine func(string)) error {
 	if err := runInstallStep(ctx, []string{"npm", "install", "-g", "@larksuite/cli"}, onLine); err != nil {
 		return fmt.Errorf("install lark-cli failed: command=%q node=%s npm=%s npx=%s error=%w", "npm install -g @larksuite/cli", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
 	}
-	emitInstallLine(onLine, "安装飞书 CLI Skills: npx skills add larksuite/cli -y -g")
-	if err := runInstallStep(ctx, []string{"npx", "skills", "add", "larksuite/cli", "-y", "-g"}, onLine); err != nil {
-		return fmt.Errorf("install lark-cli skills failed: command=%q node=%s npm=%s npx=%s error=%w", "npx skills add larksuite/cli -y -g", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
+	if err := installSkills(ctx, onLine); err != nil {
+		return fmt.Errorf("install lark-cli skills failed: node=%s npm=%s npx=%s error=%w", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
 	}
 	emitInstallLine(onLine, "验证 lark-cli 安装结果...")
 	cli := detectBinary("lark-cli", "--version")
@@ -94,6 +93,32 @@ func installCLI(ctx context.Context, onLine func(string)) error {
 	}
 	emitInstallLine(onLine, "飞书 CLI 安装完成："+describeBinary(cli))
 	return nil
+}
+
+func installSkills(ctx context.Context, onLine func(string)) error {
+	commands := skillsInstallCommands()
+	var lastErr error
+	for i, argv := range commands {
+		emitInstallLine(onLine, "安装飞书 CLI Skills: "+strings.Join(argv, " "))
+		if err := runInstallStep(ctx, argv, onLine); err != nil {
+			lastErr = err
+			if i < len(commands)-1 {
+				emitInstallLine(onLine, fmt.Sprintf("Skills 安装命令失败，尝试兼容版本重试：%v", err))
+				continue
+			}
+			break
+		}
+		return nil
+	}
+	return fmt.Errorf("all skills install commands failed: %w", lastErr)
+}
+
+func skillsInstallCommands() [][]string {
+	return [][]string{
+		{"npx", "-y", "skills", "add", "larksuite/cli", "-y", "-g"},
+		{"npx", "-y", "skills@1.5.6", "add", "larksuite/cli", "-y", "-g"},
+		{"npx", "-y", "skills@1.5.5", "add", "larksuite/cli", "-y", "-g"},
+	}
 }
 
 func runInstallStep(ctx context.Context, argv []string, onLine func(string)) error {

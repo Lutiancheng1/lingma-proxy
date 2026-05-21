@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased (target: v1.6.2)
+## Unreleased (target: v1.6.4)
+
+## v1.6.4 - 2026-05-21
+
+- Feishu Bridge branch only; no GitHub Release assets are published from this branch.
+- Synced the mainline `v1.6.4` Remote API endpoint fixes: real QoderCN/Lingma runtime chat/model URLs are preferred, explicit enterprise domains stay authoritative, and desktop startup model discovery now retries and refreshes again after warmup.
+- Hardened Windows Feishu CLI onboarding: command windows are hidden, Node/npm/npx/lark-cli resolution includes common Windows global npm locations, and child commands can select a compatible Node.js version without changing the user's default Node.
+- Improved Feishu CLI install progress: the Settings page now shows streaming install output and logs exact node/npm/npx/lark-cli paths for feedback packages.
+- Added compatibility fallback for `npx skills add larksuite/cli -y -g`: if the latest `skills` package fails with its current Windows/Node 22 ESM packaging error, the installer retries pinned `skills@1.5.6` and `skills@1.5.5`.
+- Kept Feishu Bridge feature work branch-scoped: typing reaction while processing, Feishu-specific log filtering/session columns, and artifact-only branch workflow remain outside mainline releases.
+- 仅 Feishu Bridge 分支使用；本分支不发布 GitHub Release assets。
+- 同步主线 `v1.6.4` 远端 API 域名探测修复：优先使用 QoderCN / Lingma 真实 chat/model 请求域名，显式企业域名不被自动探测覆盖，桌面启动模型探测增加重试并在 warmup 后补刷新。
+- 加固 Windows 飞书 CLI 接入：隐藏命令窗口，补齐 Windows 全局 npm 路径探测，子进程可选择兼容 Node.js 版本运行且不修改用户默认 Node。
+- 优化飞书 CLI 安装进度：设置页展示实时安装输出，反馈日志保留 node/npm/npx/lark-cli 解析路径。
+- 增加 `npx skills add larksuite/cli -y -g` 兼容兜底：如果 latest `skills` 包在 Windows/Node 22 下触发当前 ESM 打包错误，会自动重试 `skills@1.5.6` 和 `skills@1.5.5`。
+- Feishu Bridge 独立能力仍只保留在本分支：处理中的飞书消息 reaction、Feishu 专属日志筛选/会话列、分支 artifact-only workflow 均不进入主线 release。
 
 ## v1.6.2 - 2026-05-21
 
