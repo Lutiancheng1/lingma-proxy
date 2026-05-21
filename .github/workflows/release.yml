@@ -308,10 +308,18 @@ jobs:
       - build-desktop-windows
       - build-desktop-linux
     steps:
-      - name: Download artifacts
+      - name: Download CLI artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: cli-*
+          merge-multiple: true
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: desktop-*
           merge-multiple: true
 
       - name: Generate checksums
