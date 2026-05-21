@@ -143,16 +143,17 @@ type State struct {
 }
 
 type Service struct {
-	cfg             Config
-	mu              sync.Mutex
-	client          *lingmaipc.Client
-	pipePath        string
-	endpoint        string
-	transport       lingmaipc.Transport
-	stickySessionID string
-	stickyModelID   string
-	modelMap        map[string]string // official name -> internal id
-	remoteClient    *remote.Client
+	cfg              Config
+	mu               sync.Mutex
+	client           *lingmaipc.Client
+	pipePath         string
+	endpoint         string
+	transport        lingmaipc.Transport
+	stickySessionID  string
+	stickyModelID    string
+	modelMap         map[string]string // official name -> internal id
+	remoteClient     *remote.Client
+	remoteProbeCache map[string]remoteModelProbeEntry
 }
 
 type promptRunResult struct {
@@ -169,6 +170,11 @@ const (
 	StreamEventText     = "text"
 	StreamEventThinking = "thinking"
 )
+
+type remoteModelProbeEntry struct {
+	Available bool
+	ExpiresAt time.Time
+}
 
 func New(cfg Config) *Service {
 	if strings.TrimSpace(cfg.Cwd) == "" {
@@ -297,6 +303,7 @@ func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
 			}
 			out = append(out, Model{ID: id, Name: name})
 		}
+		out = append(out, s.verifiedRemoteFallbackModels(ctx, seen)...)
 		return out, nil
 	}
 
@@ -709,25 +716,7 @@ func (s *Service) remoteAttemptModels(ctx context.Context, primary string) []str
 		return models
 	}
 
-	availableCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	remoteModels, err := s.remoteClientLocked().ListModels(availableCtx)
-	cancel()
-	if err != nil {
-		return models
-	}
-
-	available := make(map[string]bool, len(remoteModels))
-	for _, model := range remoteModels {
-		key := normalizeModelForBackend(BackendRemote, model.Key)
-		if key != "" {
-			available[key] = true
-		}
-	}
-
-	fallbackModels := s.cfg.RemoteFallbackModels
-	if len(fallbackModels) == 0 {
-		fallbackModels = DefaultRemoteFallbackModels()
-	}
+	fallbackModels := s.remoteFallbackModels()
 	ordered := make([]string, 0, len(fallbackModels))
 	seen := map[string]bool{primary: true}
 	primaryIndex := -1
@@ -747,13 +736,92 @@ func (s *Service) remoteAttemptModels(ctx context.Context, primary string) []str
 		start = primaryIndex + 1
 	}
 	for _, model := range ordered[start:] {
-		if seen[model] || !available[model] {
+		if seen[model] {
 			continue
 		}
 		seen[model] = true
 		models = append(models, model)
 	}
 	return models
+}
+
+func (s *Service) remoteFallbackModels() []string {
+	fallbackModels := s.cfg.RemoteFallbackModels
+	if len(fallbackModels) == 0 {
+		fallbackModels = DefaultRemoteFallbackModels()
+	}
+	out := make([]string, 0, len(fallbackModels))
+	seen := map[string]bool{}
+	for _, candidate := range fallbackModels {
+		model := normalizeModelForBackend(BackendRemote, candidate)
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		out = append(out, model)
+	}
+	return out
+}
+
+func (s *Service) verifiedRemoteFallbackModels(ctx context.Context, seen map[string]bool) []Model {
+	out := make([]Model, 0, 2)
+	for _, model := range s.remoteFallbackModels() {
+		if seen[model] || !shouldProbeRemoteModelForList(model) {
+			continue
+		}
+		if !s.probeRemoteModel(ctx, model) {
+			continue
+		}
+		seen[model] = true
+		out = append(out, Model{ID: model, Name: remoteModelDisplayName(model)})
+	}
+	return out
+}
+
+func shouldProbeRemoteModelForList(model string) bool {
+	switch normalizeModelForBackend(BackendRemote, model) {
+	case "kmodel", "mmodel":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) probeRemoteModel(ctx context.Context, model string) bool {
+	model = normalizeModelForBackend(BackendRemote, model)
+	if model == "" {
+		return false
+	}
+	now := time.Now()
+	s.mu.Lock()
+	if entry, ok := s.remoteProbeCache[model]; ok && now.Before(entry.ExpiresAt) {
+		s.mu.Unlock()
+		return entry.Available
+	}
+	s.mu.Unlock()
+
+	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	temperature := 0.0
+	_, err := s.remoteClientLocked().Chat(probeCtx, remote.ChatRequest{
+		Model:       model,
+		Prompt:      "Reply with OK only.",
+		Messages:    []remote.Message{{Role: "user", Content: "Reply with OK only."}},
+		Temperature: &temperature,
+	}, nil)
+	available := err == nil
+	ttl := 5 * time.Minute
+	if available {
+		ttl = 30 * time.Minute
+	}
+
+	s.mu.Lock()
+	if s.remoteProbeCache == nil {
+		s.remoteProbeCache = make(map[string]remoteModelProbeEntry)
+	}
+	s.remoteProbeCache[model] = remoteModelProbeEntry{Available: available, ExpiresAt: now.Add(ttl)}
+	s.mu.Unlock()
+	return available
 }
 
 func isRemoteFallbackError(err error) bool {
@@ -1657,6 +1725,17 @@ func normalizeModelForBackend(backend BackendMode, model string) string {
 		return "dashscope_qmodel"
 	case "auto":
 		return "org_auto"
+	default:
+		return model
+	}
+}
+
+func remoteModelDisplayName(model string) string {
+	switch normalizeModelForBackend(BackendRemote, model) {
+	case "kmodel":
+		return "Kimi-K2.6"
+	case "mmodel":
+		return "MiniMax-M2.7"
 	default:
 		return model
 	}

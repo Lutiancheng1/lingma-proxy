@@ -39,8 +39,9 @@ type Config struct {
 }
 
 type Client struct {
-	cfg    Config
-	client *http.Client
+	cfg         Config
+	client      *http.Client
+	autoBaseURL bool
 }
 
 type BaseURLHint struct {
@@ -96,6 +97,7 @@ type StreamEvent struct {
 }
 
 func New(cfg Config) *Client {
+	autoBaseURL := strings.TrimSpace(cfg.BaseURL) == "" && strings.TrimSpace(os.Getenv("LINGMA_REMOTE_BASE_URL")) == ""
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = ResolveBaseURL("")
 	}
@@ -107,7 +109,7 @@ func New(cfg Config) *Client {
 	if transport, err := transportForProxy(cfg.ProxyURL); err == nil && transport != nil {
 		client.Transport = transport
 	}
-	return &Client{cfg: cfg, client: client}
+	return &Client{cfg: cfg, client: client, autoBaseURL: autoBaseURL}
 }
 
 func ValidateProxyURL(value string) error {
@@ -167,12 +169,22 @@ func ResolveBaseURLWithSource(explicit string) BaseURLHint {
 	if value := strings.TrimSpace(os.Getenv("LINGMA_REMOTE_BASE_URL")); value != "" {
 		return BaseURLHint{URL: strings.TrimRight(value, "/"), Source: "LINGMA_REMOTE_BASE_URL"}
 	}
-	for _, path := range candidateConfigFiles() {
-		if value := readBaseURLHint(path); value != "" {
-			return BaseURLHint{URL: strings.TrimRight(value, "/"), Source: path}
-		}
+	candidates := ResolveBaseURLCandidates()
+	if len(candidates) > 0 {
+		return candidates[0]
 	}
 	return BaseURLHint{URL: DefaultBaseURL, Source: "default"}
+}
+
+func ResolveBaseURLCandidates() []BaseURLHint {
+	hints := make([]BaseURLHint, 0)
+	for _, path := range candidateConfigFiles() {
+		if value := readBaseURLHint(path); value != "" {
+			hints = append(hints, BaseURLHint{URL: strings.TrimRight(value, "/"), Source: path})
+		}
+	}
+	hints = append(hints, BaseURLHint{URL: DefaultBaseURL, Source: "default"})
+	return sortBaseURLHints(uniqueBaseURLHints(hints))
 }
 
 func (c *Client) Warmup(ctx context.Context) error {
@@ -185,6 +197,14 @@ func (c *Client) Warmup(ctx context.Context) error {
 }
 
 func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
+	models, err := c.listModels(ctx)
+	if err == nil || !c.autoBaseURL || ctx.Err() != nil {
+		return models, err
+	}
+	return c.listModelsWithAutoBaseURLFallback(ctx, err)
+}
+
+func (c *Client) listModels(ctx context.Context) ([]Model, error) {
 	cred, err := LoadCredential(c.cfg.AuthFile)
 	if err != nil {
 		return nil, err
@@ -217,6 +237,35 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 		return nil, err
 	}
 	return append(payload.Chat, payload.Inline...), nil
+}
+
+func (c *Client) listModelsWithAutoBaseURLFallback(ctx context.Context, firstErr error) ([]Model, error) {
+	candidates := ResolveBaseURLCandidates()
+	tried := 1
+	var lastErr error
+	current := strings.TrimRight(c.cfg.BaseURL, "/")
+	for _, candidate := range candidates {
+		baseURL := strings.TrimRight(strings.TrimSpace(candidate.URL), "/")
+		if baseURL == "" || baseURL == current {
+			continue
+		}
+		tried++
+		previous := c.cfg.BaseURL
+		c.cfg.BaseURL = baseURL
+		models, err := c.listModels(ctx)
+		if err == nil {
+			return models, nil
+		}
+		lastErr = err
+		c.cfg.BaseURL = previous
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("%w。自动探测已尝试 %d 个候选域名，均不可用；最后错误：%v", firstErr, tried, lastErr)
+	}
+	return nil, firstErr
 }
 
 func (c *Client) modelListStatusError(statusCode int, body string) error {
@@ -791,7 +840,52 @@ func candidateConfigFiles() []string {
 	for _, root := range lingmaLogRoots(home) {
 		paths = append(paths, recentLingmaAppLogs(root)...)
 	}
+	for _, root := range jetBrainsRoots() {
+		paths = append(paths, jetBrainsOptionFiles(root)...)
+	}
 	return paths
+}
+
+func uniqueBaseURLHints(hints []BaseURLHint) []BaseURLHint {
+	seen := make(map[string]struct{}, len(hints))
+	out := make([]BaseURLHint, 0, len(hints))
+	for _, hint := range hints {
+		url := strings.TrimRight(strings.TrimSpace(hint.URL), "/")
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		out = append(out, BaseURLHint{URL: url, Source: hint.Source})
+	}
+	return out
+}
+
+func sortBaseURLHints(hints []BaseURLHint) []BaseURLHint {
+	sort.SliceStable(hints, func(i, j int) bool {
+		return baseURLHintScore(hints[i].URL) > baseURLHintScore(hints[j].URL)
+	})
+	return hints
+}
+
+func baseURLHintScore(raw string) int {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return 0
+	}
+	host := strings.ToLower(parsed.Host)
+	switch {
+	case strings.HasSuffix(host, ".rdc.aliyuncs.com"):
+		return 100
+	case host == "lingma.alibabacloud.com":
+		return 50
+	case host == "lingma-api.tongyi.aliyun.com":
+		return 10
+	default:
+		return 1
+	}
 }
 
 func readBaseURLHint(path string) string {
@@ -861,6 +955,9 @@ func lingmaLogRoots(home string) []string {
 			)
 		}
 	}
+	for _, root := range jetBrainsRoots() {
+		roots = append(roots, jetBrainsLogRoots(root)...)
+	}
 	if value := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); value != "" {
 		roots = append(roots, filepath.Join(value, "Lingma", "logs"))
 		roots = append(roots, filepath.Join(value, "QoderCN", "logs"))
@@ -878,6 +975,81 @@ func lingmaLogRoots(home string) []string {
 	return uniqueStrings(roots)
 }
 
+func jetBrainsRoots() []string {
+	roots := make([]string, 0, 2)
+	for _, envName := range []string{"APPDATA", "LOCALAPPDATA"} {
+		if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
+			roots = append(roots, filepath.Join(value, "JetBrains"))
+		}
+	}
+	return uniqueStrings(roots)
+}
+
+func jetBrainsProductDirs(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	dirs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(entry.Name())
+		if strings.Contains(name, "idea") ||
+			strings.Contains(name, "webstorm") ||
+			strings.Contains(name, "pycharm") ||
+			strings.Contains(name, "goland") ||
+			strings.Contains(name, "clion") ||
+			strings.Contains(name, "datagrip") ||
+			strings.Contains(name, "phpstorm") ||
+			strings.Contains(name, "rider") ||
+			strings.Contains(name, "rubymine") {
+			dirs = append(dirs, filepath.Join(root, entry.Name()))
+		}
+	}
+	sort.Strings(dirs)
+	return dirs
+}
+
+func jetBrainsLogRoots(root string) []string {
+	dirs := jetBrainsProductDirs(root)
+	roots := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		roots = append(roots, filepath.Join(dir, "log"))
+	}
+	return roots
+}
+
+func jetBrainsOptionFiles(root string) []string {
+	dirs := jetBrainsProductDirs(root)
+	paths := make([]string, 0)
+	for _, dir := range dirs {
+		optionsDir := filepath.Join(dir, "options")
+		entries, err := os.ReadDir(optionsDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := strings.ToLower(entry.Name())
+			if !(strings.Contains(name, "lingma") ||
+				strings.Contains(name, "qoder") ||
+				strings.Contains(name, "tongyi") ||
+				strings.Contains(name, "alibaba")) {
+				continue
+			}
+			if strings.HasSuffix(name, ".xml") || strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".properties") {
+				paths = append(paths, filepath.Join(optionsDir, entry.Name()))
+			}
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 func recentLingmaAppLogs(root string) []string {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -888,8 +1060,10 @@ func recentLingmaAppLogs(root string) []string {
 		modTime int64
 	}
 	dirs := make([]logDir, 0, len(entries))
+	paths := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			appendCandidateLogPath(&paths, filepath.Join(root, entry.Name()), entry.Name())
 			continue
 		}
 		info, err := entry.Info()
@@ -902,25 +1076,39 @@ func recentLingmaAppLogs(root string) []string {
 	if len(dirs) > 5 {
 		dirs = dirs[:5]
 	}
-	paths := make([]string, 0, len(dirs)*4)
 	for _, dir := range dirs {
 		_ = filepath.WalkDir(dir.path, func(path string, entry os.DirEntry, err error) error {
 			if err != nil || entry.IsDir() {
 				return nil
 			}
-			name := entry.Name()
-			lowerName := strings.ToLower(name)
-			if lowerName == "renderer.log" ||
-				lowerName == "sharedprocess.log" ||
-				lowerName == "main.log" ||
-				strings.HasSuffix(name, "Lingma.log") ||
-				strings.Contains(lowerName, "lingma") && strings.HasSuffix(lowerName, ".log") {
-				paths = append(paths, path)
-			}
+			appendCandidateLogPath(&paths, path, entry.Name())
 			return nil
 		})
 	}
 	return paths
+}
+
+func appendCandidateLogPath(paths *[]string, path, name string) {
+	lowerName := strings.ToLower(name)
+	if lowerName == "renderer.log" ||
+		lowerName == "sharedprocess.log" ||
+		lowerName == "main.log" ||
+		lowerName == "idea.log" ||
+		lowerName == "webstorm.log" ||
+		lowerName == "pycharm.log" ||
+		lowerName == "goland.log" ||
+		lowerName == "clion.log" ||
+		lowerName == "datagrip.log" ||
+		lowerName == "phpstorm.log" ||
+		lowerName == "rider.log" ||
+		lowerName == "rubymine.log" ||
+		strings.HasSuffix(name, "Lingma.log") ||
+		strings.Contains(lowerName, "lingma") && strings.HasSuffix(lowerName, ".log") ||
+		strings.Contains(lowerName, "qoder") && strings.HasSuffix(lowerName, ".log") ||
+		strings.Contains(lowerName, "tongyi") && strings.HasSuffix(lowerName, ".log") ||
+		strings.Contains(lowerName, "alibaba") && strings.HasSuffix(lowerName, ".log") {
+		*paths = append(*paths, path)
+	}
 }
 
 func uniqueStrings(values []string) []string {
