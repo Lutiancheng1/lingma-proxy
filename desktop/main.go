@@ -26,7 +26,7 @@ func main() {
 		Height:            740,
 		MinWidth:          900,
 		MinHeight:         600,
-		HideWindowOnClose: true,
+		HideWindowOnClose: goruntime.GOOS != "linux",
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

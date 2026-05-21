@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased (target: v1.6.1)
+## Unreleased (target: v1.6.2)
+
+## v1.6.2 - 2026-05-21
+
+- Added official Linux CLI release assets for `linux_amd64` and `linux_arm64`, plus Linux Desktop `.deb` / `.rpm` release assets for both `linux_amd64` and `linux_arm64` built from the Wails desktop app with nFPM.
+- Added a multi-stage Docker image and tag workflow for GHCR (`ghcr.io/lutiancheng1/lingma-proxy:<tag>` and `latest`) without bundling desktop runtime, Node, browser, or local login caches.
+- Added explicit Remote API proxy configuration via `--remote-proxy-url`, `LINGMA_REMOTE_PROXY_URL`, JSON `remote_proxy_url`, and the desktop Settings page. Empty proxy config preserves Go's default `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` behavior.
+- Added Linux-safe desktop defaults: the Linux desktop package exits on window close instead of hiding without a tray restore path, and Linux session shell defaults to `bash`.
+- Documented Docker bind-mount and explicit credential-file startup examples, including the container support boundary that IPC is not guaranteed inside Docker.
+- 新增 Linux CLI 官方 release 资产：`linux_amd64` 与 `linux_arm64`，并新增基于 Wails 桌面端和 nFPM 打包的 `linux_amd64` / `linux_arm64` Desktop `.deb` / `.rpm` release 资产。
+- 新增多阶段 Docker 镜像与 GHCR 发布链路，镜像标签为 `ghcr.io/lutiancheng1/lingma-proxy:<tag>` 和 `latest`，不内置桌面端、Node、浏览器或本机登录缓存。
+- 新增显式远端代理配置：`--remote-proxy-url`、`LINGMA_REMOTE_PROXY_URL`、JSON `remote_proxy_url` 和桌面设置页均可配置；留空时保留 Go 默认的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 行为。
+- 新增 Linux 桌面安全默认行为：Linux 桌面端关闭窗口时直接退出，避免无托盘恢复入口；Linux 会话默认 shell 改为 `bash`。
+- 文档补充 Docker bind mount 登录态、显式凭据文件和代理示例，并明确 Docker 场景不承诺 IPC 开箱即用。
 
 ## v1.6.1 - 2026-05-21
 

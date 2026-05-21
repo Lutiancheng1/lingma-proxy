@@ -25,6 +25,37 @@ func TestNewKeepsPositiveTimeout(t *testing.T) {
 	}
 }
 
+func TestValidateProxyURL(t *testing.T) {
+	valid := []string{"", "http://127.0.0.1:7890", "https://proxy.example.com", "socks5://127.0.0.1:1080"}
+	for _, value := range valid {
+		if err := ValidateProxyURL(value); err != nil {
+			t.Fatalf("ValidateProxyURL(%q) = %v, want nil", value, err)
+		}
+	}
+	invalid := []string{"127.0.0.1:7890", "ftp://proxy.example.com", "http://"}
+	for _, value := range invalid {
+		if err := ValidateProxyURL(value); err == nil {
+			t.Fatalf("ValidateProxyURL(%q) = nil, want error", value)
+		}
+	}
+}
+
+func TestProxySourcePrefersExplicitConfig(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://env-proxy:7890")
+	got, source := ProxySource("http://explicit-proxy:7890")
+	if got != "http://explicit-proxy:7890" || source != "explicit config" {
+		t.Fatalf("ProxySource explicit = (%q, %q)", got, source)
+	}
+}
+
+func TestProxySourceReadsEnvironment(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://env-proxy:7890")
+	got, source := ProxySource("")
+	if got != "http://env-proxy:7890" || source != "HTTPS_PROXY" {
+		t.Fatalf("ProxySource env = (%q, %q)", got, source)
+	}
+}
+
 func TestExtractBaseURLFromEndpointLog(t *testing.T) {
 	got := extractBaseURLFromText(`2026-04-10 INFO Update endpoint success. endpoint config: https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com`)
 	want := "https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com"

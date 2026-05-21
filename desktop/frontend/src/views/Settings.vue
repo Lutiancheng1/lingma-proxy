@@ -11,6 +11,14 @@ const openSelect = ref('')
 const fallbackModelsText = ref('')
 const isIPCBackend = computed(() => (config.value.Backend || 'ipc') === 'ipc')
 const formattedTokenExpireAt = computed(() => formatDateTime(detection.value?.remoteTokenExpireAt))
+const remoteProxyStatus = computed(() => {
+  if (!detection.value) return ''
+  if (detection.value.remoteProxyError) return detection.value.remoteProxyError
+  if (detection.value.remoteProxyUrl) {
+    return `${detection.value.remoteProxyUrl}（${detection.value.remoteProxySource || '显式配置'}）`
+  }
+  return '未显式配置；如存在 HTTP_PROXY / HTTPS_PROXY，Go 默认传输仍会尊重系统环境变量'
+})
 
 const selectOptions = {
   Backend: [
@@ -217,6 +225,11 @@ async function save() {
             <input v-model="config.RemoteBaseURL" type="text" placeholder="留空自动探测，默认 https://lingma.alibabacloud.com" />
           </div>
           <div class="field span-2">
+            <label>远端代理地址</label>
+            <input v-model="config.RemoteProxyURL" type="text" placeholder="可选，例如 http://127.0.0.1:7890" />
+            <small>仅影响远端 API 上游 HTTP 请求，不影响本地 IPC WebSocket / Named Pipe。</small>
+          </div>
+          <div class="field span-2">
             <label>远端认证文件</label>
             <input v-model="config.RemoteAuthFile" type="text" placeholder="可选 credentials.json；留空只读本机 Lingma / QoderCN 登录缓存" />
           </div>
@@ -254,6 +267,10 @@ async function save() {
                 {{ detection.remoteBaseUrl }}
                 <span v-if="detection.remoteBaseUrlSource" class="muted-inline">来自 {{ detection.remoteBaseUrlSource }}</span>
               </dd>
+            </div>
+            <div>
+              <dt>远端代理</dt>
+              <dd :class="{ 'warn-text': detection.remoteProxyError }">{{ remoteProxyStatus }}</dd>
             </div>
             <div>
               <dt>登录态来源</dt>

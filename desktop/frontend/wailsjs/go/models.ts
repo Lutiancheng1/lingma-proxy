@@ -30,6 +30,9 @@ export namespace main {
 	    ipcError?: string;
 	    remoteBaseUrl: string;
 	    remoteBaseUrlSource?: string;
+	    remoteProxyUrl?: string;
+	    remoteProxySource?: string;
+	    remoteProxyError?: string;
 	    remoteCredentialSuccess: boolean;
 	    remoteCredentialSource?: string;
 	    remoteUserId?: string;
@@ -53,6 +56,9 @@ export namespace main {
 	        this.ipcError = source["ipcError"];
 	        this.remoteBaseUrl = source["remoteBaseUrl"];
 	        this.remoteBaseUrlSource = source["remoteBaseUrlSource"];
+	        this.remoteProxyUrl = source["remoteProxyUrl"];
+	        this.remoteProxySource = source["remoteProxySource"];
+	        this.remoteProxyError = source["remoteProxyError"];
 	        this.remoteCredentialSuccess = source["remoteCredentialSuccess"];
 	        this.remoteCredentialSource = source["remoteCredentialSource"];
 	        this.remoteUserId = source["remoteUserId"];
@@ -234,6 +240,7 @@ export namespace service {
 	    WebSocketURL: string;
 	    RemoteBaseURL: string;
 	    RemoteAuthFile: string;
+	    RemoteProxyURL: string;
 	    RemoteVersion: string;
 	    Cwd: string;
 	    CurrentFilePath: string;
@@ -260,6 +267,7 @@ export namespace service {
 	        this.WebSocketURL = source["WebSocketURL"];
 	        this.RemoteBaseURL = source["RemoteBaseURL"];
 	        this.RemoteAuthFile = source["RemoteAuthFile"];
+	        this.RemoteProxyURL = source["RemoteProxyURL"];
 	        this.RemoteVersion = source["RemoteVersion"];
 	        this.Cwd = source["Cwd"];
 	        this.CurrentFilePath = source["CurrentFilePath"];

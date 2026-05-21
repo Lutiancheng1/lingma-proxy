@@ -49,7 +49,7 @@
 ## 当前版本
 
 <!-- VERSION:CURRENT:BEGIN -->
-当前桌面端版本：`v1.6.1`。
+当前桌面端版本：`v1.6.2`。
 
 唯一来源是 [VERSION](./VERSION)。执行 `./scripts/sync-version.sh` 会把它同步到 [desktop/wails.json](./desktop/wails.json)、桌面 UI 和面向发布的文档块。
 <!-- VERSION:CURRENT:END -->
@@ -65,6 +65,12 @@ GitHub Actions 会在 Release 中产出：
 | `lingma-proxy-desktop_<tag>_darwin_arm64.dmg` | Apple Silicon Mac | 拖拽安装桌面 App |
 | `lingma-proxy-desktop_<tag>_darwin_arm64.zip` | Apple Silicon Mac | `.app` 压缩包 |
 | `lingma-proxy-desktop_<tag>_windows_amd64.zip` | Windows | 桌面 App |
+| `lingma-proxy_<tag>_linux_amd64.tar.gz` | Linux x64 | 命令行代理 |
+| `lingma-proxy_<tag>_linux_arm64.tar.gz` | Linux arm64 | 命令行代理 |
+| `lingma-proxy-desktop_<tag>_linux_amd64.deb` | Linux x64 | Debian / Ubuntu 桌面 App |
+| `lingma-proxy-desktop_<tag>_linux_amd64.rpm` | Linux x64 | Fedora / RHEL 桌面 App |
+| `lingma-proxy-desktop_<tag>_linux_arm64.deb` | Linux arm64 | Debian / Ubuntu 桌面 App |
+| `lingma-proxy-desktop_<tag>_linux_arm64.rpm` | Linux arm64 | Fedora / RHEL 桌面 App |
 | `lingma-proxy_<tag>_sha256.txt` | 全平台 | 校验文件 |
 
 ### 应该下载哪个包？
@@ -74,8 +80,13 @@ GitHub Actions 会在 Release 中产出：
 | Apple Silicon Mac（M1/M2/M3/M4） | `lingma-proxy-desktop_<tag>_darwin_arm64.dmg` | 打开 DMG 后把 `Lingma Proxy.app` 拖到 `Applications`。 |
 | Apple Silicon Mac，想要压缩包 | `lingma-proxy-desktop_<tag>_darwin_arm64.zip` | 和 DMG 是同一个 App，只是 zip 形式。 |
 | Windows x64 / x86_64 / AMD64 | `lingma-proxy-desktop_<tag>_windows_amd64.zip` | 普通 64 位 Windows 电脑都选这个，包括 Intel 和 AMD CPU。 |
+| Ubuntu / Debian x64 桌面 | `lingma-proxy-desktop_<tag>_linux_amd64.deb` | 桌面界面包；Linux 上推荐使用远端 API 模式。 |
+| Fedora / RHEL x64 桌面 | `lingma-proxy-desktop_<tag>_linux_amd64.rpm` | 桌面界面包；Linux 上推荐使用远端 API 模式。 |
+| Ubuntu / Debian arm64 桌面 | `lingma-proxy-desktop_<tag>_linux_arm64.deb` | Apple Silicon 上的 Parallels Ubuntu Desktop 选这个。 |
+| Fedora / RHEL arm64 桌面 | `lingma-proxy-desktop_<tag>_linux_arm64.rpm` | Linux arm64 桌面包；推荐使用远端 API 模式。 |
 | 只想在 macOS 终端跑 CLI | `lingma-proxy_<tag>_darwin_arm64.tar.gz` | 只有命令行代理，没有桌面界面。 |
 | 只想在 Windows 终端跑 CLI | `lingma-proxy_<tag>_windows_amd64.zip` | 只有命令行代理，没有桌面界面。 |
+| 只想在 Linux 终端跑 CLI | `lingma-proxy_<tag>_linux_amd64.tar.gz` 或 `linux_arm64.tar.gz` | 只有命令行代理；Linux 上推荐使用远端 API 模式。 |
 
 目前没有单独的 `windows_arm64` 包。常见 x64 Windows 机器请选择 `windows_amd64`。
 
@@ -96,7 +107,7 @@ GitHub Actions 会在 Release 中产出：
 | Windows Named Pipe / WebSocket 探测 | 支持 |
 | 日间 / 夜间 / 跟随系统主题 | 桌面端支持 |
 | macOS 窗口生命周期 | 关闭隐藏、Dock 重新打开、Cmd+W、Cmd+M、Cmd+Q |
-| GitHub Release 打包 | macOS + Windows，CLI + Desktop |
+| GitHub Release 打包 | macOS + Windows 桌面端；macOS + Windows + Linux CLI；Docker 镜像发布到 GHCR |
 
 ## 桌面 App
 
@@ -386,6 +397,16 @@ lingma-proxy \
   --remote-auth-file ~/.config/lingma-proxy/credentials.json
 ```
 
+如果企业网络必须走 HTTP(S) 代理，可以显式配置：
+
+```bash
+lingma-proxy \
+  --backend remote \
+  --remote-proxy-url http://127.0.0.1:7890
+```
+
+同一配置也支持 JSON 字段 `remote_proxy_url` 和环境变量 `LINGMA_REMOTE_PROXY_URL`。留空时保持 Go 默认传输行为，进程环境里的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 仍会生效。
+
 `credentials.json` 格式：
 
 ```json
@@ -406,7 +427,8 @@ lingma-proxy \
 - 远端 API 模式是日常 Agent 使用的默认推荐模式。它绕过 IDE / 插件 IPC 运行时，因此更少受到插件会话、IDE 当前项目和本地扩展环境限制影响。
 - 远端模式不会写入或迁移你的登录态，只会读取本机 Lingma 缓存或你指定的凭据文件。
 - 如果 Lingma 插件配置过专属域名，远端模式会优先使用 `--remote-base-url`、`LINGMA_REMOTE_BASE_URL` 或配置文件；这些为空时，会扫描 macOS、Windows、Linux 上 Lingma 本地日志里的 `endpoint config:`、Marketplace service URL 等线索。
-- 桌面端设置页会展示当前解析到的远端域名和来源，但不会展示 token / key 明文。
+- `--remote-proxy-url`、`LINGMA_REMOTE_PROXY_URL` 或 `remote_proxy_url` 只影响远端 API 上游 HTTP 请求，不影响本地 IPC WebSocket / Named Pipe。
+- 桌面端设置页会展示当前解析到的远端域名、代理来源和登录态来源，但不会展示 token / key 明文。
 - 远端模式的 `/v1/models` 返回的是远端接口模型 key，不一定等同于 IPC 插件模式里看到的 `MiniMax-M2.7`、`Kimi-K2.6` 等展示名。
 - 即使成功导入了远端登录态，模型集合也可能和本仓库示例不同。尤其是 `Kimi-K2.6`、`MiniMax-M2.7`、部分 `Qwen3` 变体、`Auto / org_auto`，都可能随着账号和租户不同而变化。
 - 远端模式下的图片请求会自动走 IPC 图片链路，因为直连远端聊天接口不会直接消费本地 `file://` 和 data URL 图片。若请求同时带工具，代理会先通过 IPC 提取图片上下文，再把不含图片但包含上下文的请求交给 Remote API 原生工具调用。
@@ -422,6 +444,101 @@ lingma-proxy --backend ipc --transport auto --port 8095
 ```
 
 适合已经打开 QoderCN、IntelliJ IDEA 通义灵码插件、VS Code 通义灵码插件或其它受支持 Lingma 运行时，并希望使用插件当前会话环境、优先使用插件探测模型列表的场景。相比远端 API 模式，IPC 插件模式更依赖 IDE / 插件进程，也更容易受到插件会话、当前项目和本地环境的影响。
+
+### Docker
+
+官方镜像发布到 GitHub Container Registry：
+
+```bash
+docker run --rm -p 8095:8095 ghcr.io/lutiancheng1/lingma-proxy:<tag>
+```
+
+镜像只包含 CLI 代理，不包含桌面端、Wails、Node、浏览器，也不会内置任何本机登录缓存。容器不会自动读取宿主机上的 Lingma / QoderCN 登录态。容器场景推荐使用远端 API 模式。
+
+推荐生产用法：用户先在宿主机通过 Lingma / QoderCN 完成登录，然后把宿主机登录缓存以只读方式 bind mount 给容器：
+
+```bash
+docker run --rm -p 8095:8095 \
+  -v "$HOME/.lingma:/home/lingma/.lingma:ro" \
+  -v "$HOME/.qoder-cn:/home/lingma/.qoder-cn:ro" \
+  ghcr.io/lutiancheng1/lingma-proxy:<tag> \
+  --backend remote --host 0.0.0.0 --port 8095
+```
+
+这样不会把凭据打进镜像，也能让容器复用宿主机当前登录态。如果宿主机只存在其中一个目录，只挂载存在的目录即可。
+
+备用方式：指定显式凭据文件：
+
+```bash
+docker run --rm -p 8095:8095 \
+  -v "$PWD/credentials.json:/credentials.json:ro" \
+  ghcr.io/lutiancheng1/lingma-proxy:<tag> \
+  --backend remote --remote-auth-file /credentials.json
+```
+
+企业代理示例。Docker 容器里的 `127.0.0.1` 指向容器自身；如果代理软件运行在宿主机上，需要使用 `host.docker.internal`：
+
+```bash
+docker run --rm -p 8095:8095 \
+  -e LINGMA_REMOTE_PROXY_URL=http://host.docker.internal:7890 \
+  ghcr.io/lutiancheng1/lingma-proxy:<tag>
+```
+
+IPC 模式不是默认容器目标。它通常需要额外暴露宿主机 IDE socket、Named Pipe 或 WebSocket 地址，本次 Docker 兼容不承诺 IPC 容器化开箱即用。
+
+### Linux 桌面端
+
+Linux 桌面包目前覆盖 x64 和 arm64 的 Debian / Ubuntu 与 Fedora / RHEL 系统：
+
+```bash
+sudo apt install ./lingma-proxy-desktop_<tag>_linux_amd64.deb
+# ARM64 Linux 使用：
+sudo apt install ./lingma-proxy-desktop_<tag>_linux_arm64.deb
+```
+
+```bash
+sudo rpm -i ./lingma-proxy-desktop_<tag>_linux_amd64.rpm
+# ARM64 Linux 使用：
+sudo rpm -i ./lingma-proxy-desktop_<tag>_linux_arm64.rpm
+```
+
+安装后可从系统启动器打开，也可以直接运行：
+
+```bash
+lingma-proxy-desktop
+```
+
+Linux 桌面端复用同一套代理核心，只是提供 GUI 控制面板。Linux 上推荐使用远端 API 模式；仍然需要本机 Lingma / QoderCN 登录缓存可读，或显式指定 credentials 文件。安装包不会内置、复制或上传用户登录态。
+
+### Linux CLI
+
+下载匹配 CPU 架构的 Linux 资产后，解压并启动：
+
+```bash
+tar -xzf lingma-proxy_<tag>_linux_amd64.tar.gz
+chmod +x lingma-proxy
+./lingma-proxy --backend remote --host 127.0.0.1 --port 8095
+```
+
+真实 Linux 主机使用远端 API 模式时，需要满足以下任一登录态来源：
+
+- 用户已经通过支持的 Lingma / QoderCN 运行时登录，并且运行 `lingma-proxy` 的 Linux 用户能读取本机登录缓存。
+- 或者用户显式提供 credentials 文件：
+
+```bash
+./lingma-proxy \
+  --backend remote \
+  --remote-auth-file ~/.config/lingma-proxy/credentials.json
+```
+
+企业网络需要代理时：
+
+```bash
+LINGMA_REMOTE_PROXY_URL=http://127.0.0.1:7897 \
+  ./lingma-proxy --backend remote --host 127.0.0.1 --port 8095
+```
+
+Linux CLI 适合终端、服务器、SSH 和无头环境。Linux Desktop 适合本机有图形界面的场景。容器 / 服务器部署优先使用 Docker 镜像。
 
 ## 快速开始
 
@@ -737,6 +854,7 @@ codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --js
   "transport": "auto",
   "remote_base_url": "",
   "remote_auth_file": "",
+  "remote_proxy_url": "",
   "remote_version": "",
   "mode": "agent",
   "shell_type": "zsh",
@@ -863,6 +981,15 @@ Windows：
 npm ci --prefix desktop/frontend
 cd desktop
 wails build -platform windows/amd64 -clean
+```
+
+Ubuntu 上构建 Linux 桌面端：
+
+```bash
+sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+npm ci --prefix desktop/frontend
+cd desktop
+wails build -platform linux/amd64 -tags webkit2_41 -clean
 ```
 
 桌面端最终 App 名称统一为：

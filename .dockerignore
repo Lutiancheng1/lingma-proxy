@@ -1,0 +1,11 @@
+.git
+.github
+dist
+desktop/build
+desktop/frontend/dist
+desktop/frontend/node_modules
+lingma-ipc-proxy
+*.dmg
+*.tar.gz
+*.zip
+*.log

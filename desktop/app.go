@@ -149,6 +149,9 @@ type DetectionInfo struct {
 	IPCError                string `json:"ipcError,omitempty"`
 	RemoteBaseURL           string `json:"remoteBaseUrl"`
 	RemoteBaseURLSource     string `json:"remoteBaseUrlSource,omitempty"`
+	RemoteProxyURL          string `json:"remoteProxyUrl,omitempty"`
+	RemoteProxySource       string `json:"remoteProxySource,omitempty"`
+	RemoteProxyError        string `json:"remoteProxyError,omitempty"`
 	RemoteCredentialSuccess bool   `json:"remoteCredentialSuccess"`
 	RemoteCredentialSource  string `json:"remoteCredentialSource,omitempty"`
 	RemoteUserID            string `json:"remoteUserId,omitempty"`
@@ -228,6 +231,11 @@ func (a *App) onSecondInstanceLaunch(secondInstanceData options.SecondInstanceDa
 // beforeClose hides the window by default so the proxy can keep running.
 // QuitApp sets quitting=true before allowing the process to exit.
 func (a *App) beforeClose(ctx context.Context) bool {
+	if goruntime.GOOS == "linux" {
+		go a.forceQuit()
+		return true
+	}
+
 	a.mu.Lock()
 	if a.quitting {
 		a.mu.Unlock()
@@ -380,12 +388,18 @@ func (a *App) GetDetectionInfo() DetectionInfo {
 		addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	}
 	baseURL := remote.ResolveBaseURLWithSource(cfg.RemoteBaseURL)
+	proxyURL, proxySource := remote.ProxySource(cfg.RemoteProxyURL)
 	info := DetectionInfo{
 		ListenURL:           "http://" + addr,
 		Backend:             string(cfg.Backend),
 		BackendLabel:        backendLabel(cfg.Backend),
 		RemoteBaseURL:       baseURL.URL,
 		RemoteBaseURLSource: baseURL.Source,
+		RemoteProxyURL:      proxyURL,
+		RemoteProxySource:   proxySource,
+	}
+	if err := remote.ValidateProxyURL(proxyURL); err != nil {
+		info.RemoteProxyError = err.Error()
 	}
 
 	if opts, err := lingmaipc.ResolveDialOptions(cfg.Transport, cfg.Pipe, cfg.WebSocketURL); err == nil {
@@ -420,6 +434,9 @@ func (a *App) GetDetectionInfo() DetectionInfo {
 // UpdateConfig updates the configuration, saves to file, and restarts the proxy if running.
 // Frontend sends Timeout in seconds; we convert to time.Duration.
 func (a *App) UpdateConfig(cfg service.Config) error {
+	if err := remote.ValidateProxyURL(cfg.RemoteProxyURL); err != nil {
+		return err
+	}
 	// Convert seconds -> Duration if frontend sent a small value
 	if cfg.Timeout > 0 && cfg.Timeout < time.Second {
 		cfg.Timeout = cfg.Timeout * time.Second
@@ -472,6 +489,7 @@ func (a *App) saveConfig(cfg service.Config) error {
 		"websocket_url":           cfg.WebSocketURL,
 		"remote_base_url":         cfg.RemoteBaseURL,
 		"remote_auth_file":        cfg.RemoteAuthFile,
+		"remote_proxy_url":        cfg.RemoteProxyURL,
 		"remote_version":          cfg.RemoteVersion,
 		"cwd":                     cfg.Cwd,
 		"current_file_path":       cfg.CurrentFilePath,
@@ -505,6 +523,9 @@ func (a *App) StartProxy() error {
 	addr := fmt.Sprintf("%s:%d", a.cfg.Host, a.cfg.Port)
 	cfg := a.cfg
 	a.mu.Unlock()
+	if err := remote.ValidateProxyURL(cfg.RemoteProxyURL); err != nil {
+		return err
+	}
 
 	svc := service.New(cfg)
 	server := httpapi.NewServer(addr, svc)
@@ -1558,6 +1579,7 @@ func buildConfigSummary(cfg service.Config, stats TokenStats, status ProxyStatus
 		"backend":               string(cfg.Backend),
 		"transport":             string(cfg.Transport),
 		"remoteBaseURL":         strings.TrimSpace(cfg.RemoteBaseURL),
+		"remoteProxyURL":        strings.TrimSpace(cfg.RemoteProxyURL),
 		"remoteVersion":         strings.TrimSpace(cfg.RemoteVersion),
 		"cwd":                   cfg.Cwd,
 		"currentFilePath":       cfg.CurrentFilePath,
@@ -1840,6 +1862,7 @@ func defaultConfig() service.Config {
 					WebSocketURL          string   `json:"websocket_url"`
 					RemoteBaseURL         string   `json:"remote_base_url"`
 					RemoteAuthFile        string   `json:"remote_auth_file"`
+					RemoteProxyURL        string   `json:"remote_proxy_url"`
 					RemoteVersion         string   `json:"remote_version"`
 					Cwd                   string   `json:"cwd"`
 					CurrentFilePath       string   `json:"current_file_path"`
@@ -1878,6 +1901,9 @@ func defaultConfig() service.Config {
 					}
 					if fileCfg.RemoteAuthFile != "" {
 						cfg.RemoteAuthFile = fileCfg.RemoteAuthFile
+					}
+					if fileCfg.RemoteProxyURL != "" {
+						cfg.RemoteProxyURL = fileCfg.RemoteProxyURL
 					}
 					if fileCfg.RemoteVersion != "" {
 						cfg.RemoteVersion = fileCfg.RemoteVersion
@@ -1994,7 +2020,10 @@ func defaultShellType() string {
 	if goruntime.GOOS == "windows" {
 		return "powershell"
 	}
-	return "zsh"
+	if goruntime.GOOS == "darwin" {
+		return "zsh"
+	}
+	return "bash"
 }
 
 func transportFallbackHint() string {

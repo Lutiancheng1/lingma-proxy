@@ -33,6 +33,7 @@ var remoteBaseURLPattern = regexp.MustCompile(`https?://[^\s"'<>),\]}]+`)
 type Config struct {
 	BaseURL     string
 	AuthFile    string
+	ProxyURL    string
 	CosyVersion string
 	Timeout     time.Duration
 }
@@ -102,7 +103,57 @@ func New(cfg Config) *Client {
 		cfg.CosyVersion = "2.11.2"
 	}
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
-	return &Client{cfg: cfg, client: &http.Client{Timeout: cfg.Timeout}}
+	client := &http.Client{Timeout: cfg.Timeout}
+	if transport, err := transportForProxy(cfg.ProxyURL); err == nil && transport != nil {
+		client.Transport = transport
+	}
+	return &Client{cfg: cfg, client: client}
+}
+
+func ValidateProxyURL(value string) error {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("invalid remote proxy URL %q; expected http://, https://, or socks5:// URL", value)
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https", "socks5":
+		return nil
+	default:
+		return fmt.Errorf("invalid remote proxy URL scheme %q; expected http, https, or socks5", parsed.Scheme)
+	}
+}
+
+func ProxySource(explicit string) (string, string) {
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit), "explicit config"
+	}
+	for _, key := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value, key
+		}
+	}
+	return "", ""
+}
+
+func transportForProxy(proxyURL string) (*http.Transport, error) {
+	raw := strings.TrimSpace(proxyURL)
+	if raw == "" {
+		return nil, nil
+	}
+	if err := ValidateProxyURL(raw); err != nil {
+		return nil, err
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyURL(parsed)
+	return transport, nil
 }
 
 func ResolveBaseURL(explicit string) string {

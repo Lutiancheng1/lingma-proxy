@@ -45,6 +45,7 @@ type Config struct {
 	WebSocketURL          string
 	RemoteBaseURL         string
 	RemoteAuthFile        string
+	RemoteProxyURL        string
 	RemoteVersion         string
 	Cwd                   string
 	CurrentFilePath       string
@@ -904,6 +905,7 @@ func (s *Service) remoteClientLocked() *remote.Client {
 		s.remoteClient = remote.New(remote.Config{
 			BaseURL:     s.cfg.RemoteBaseURL,
 			AuthFile:    s.cfg.RemoteAuthFile,
+			ProxyURL:    s.cfg.RemoteProxyURL,
 			CosyVersion: s.cfg.RemoteVersion,
 			Timeout:     s.cfg.Timeout,
 		})

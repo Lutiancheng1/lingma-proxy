@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Lingma Proxy
+Comment=Desktop GUI for Lingma / QoderCN API proxy
+Exec=lingma-proxy-desktop
+Icon=lingma-proxy
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true
