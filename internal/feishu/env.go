@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,7 @@ func resolvedPATH() string {
 	var segments []string
 	segments = append(segments, pathSegments(os.Getenv("PATH"))...)
 	segments = append(segments, pathSegments(loginShellPATH())...)
+	segments = append(segments, nodeVersionManagerPATHSegments()...)
 	switch runtime.GOOS {
 	case "darwin":
 		segments = append(segments, "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
@@ -55,7 +57,11 @@ func resolvedPATH() string {
 			segments = append(segments, filepath.Join(appData, "npm"))
 		}
 	}
-	return strings.Join(uniqueStrings(segments), string(os.PathListSeparator))
+	segments = uniqueStrings(segments)
+	if selected := selectSupportedNodeBinDir(segments); selected != "" {
+		segments = placeSelectedNodeDir(segments, selected)
+	}
+	return strings.Join(segments, string(os.PathListSeparator))
 }
 
 func windowsNodePATHSegments() []string {
@@ -75,6 +81,101 @@ func windowsNodePATHSegments() []string {
 		segments = append(segments, filepath.Join(root, "nodejs"))
 	}
 	return segments
+}
+
+func nodeVersionManagerPATHSegments() []string {
+	home, _ := os.UserHomeDir()
+	if strings.TrimSpace(home) == "" {
+		return nil
+	}
+	var roots []string
+	switch runtime.GOOS {
+	case "darwin", "linux":
+		roots = append(roots,
+			filepath.Join(home, ".nvm", "versions", "node"),
+			filepath.Join(home, ".fnm", "node-versions"),
+			filepath.Join(home, ".volta", "tools", "image", "node"),
+		)
+	case "windows":
+		for _, root := range []string{
+			filepath.Join(home, "AppData", "Roaming", "nvm"),
+			filepath.Join(home, "AppData", "Local", "fnm_multishells"),
+			filepath.Join(home, "AppData", "Local", "fnm", "node-versions"),
+			filepath.Join(home, "AppData", "Local", "Volta", "tools", "image", "node"),
+		} {
+			roots = append(roots, root)
+		}
+	}
+	return nodeVersionDirs(roots)
+}
+
+func nodeVersionDirs(roots []string) []string {
+	var dirs []string
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			dir := filepath.Join(root, entry.Name())
+			if runtime.GOOS != "windows" {
+				dir = filepath.Join(dir, "bin")
+			}
+			if isExecutableFile(filepath.Join(dir, "node")) || isExecutableFile(filepath.Join(dir, "node.exe")) {
+				dirs = append(dirs, dir)
+			}
+		}
+	}
+	sort.Strings(dirs)
+	return dirs
+}
+
+func selectSupportedNodeBinDir(segments []string) string {
+	type candidate struct {
+		dir          string
+		major, minor int
+	}
+	var candidates []candidate
+	for _, dir := range segments {
+		nodePath := filepath.Join(dir, "node")
+		if runtime.GOOS == "windows" {
+			nodePath = filepath.Join(dir, "node.exe")
+		}
+		if !isExecutableFile(nodePath) {
+			continue
+		}
+		version := nodeVersionAtPath(nodePath)
+		major, minor := parseNodeVersion(version)
+		if !nodeVersionSupported(major, minor) {
+			continue
+		}
+		candidates = append(candidates, candidate{dir: dir, major: major, minor: minor})
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].major != candidates[j].major {
+			return candidates[i].major > candidates[j].major
+		}
+		return candidates[i].minor > candidates[j].minor
+	})
+	return candidates[0].dir
+}
+
+func nodeVersionAtPath(path string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "--version")
+	applyCommandPlatformOptions(cmd)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func loginShellPATH() string {
@@ -121,6 +222,40 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func placeSelectedNodeDir(segments []string, selected string) []string {
+	segments = removeString(segments, selected)
+	insertAt := 0
+	for i, dir := range segments {
+		if dirHasNodeBinary(dir) {
+			insertAt = i
+			break
+		}
+		insertAt = i + 1
+	}
+	out := make([]string, 0, len(segments)+1)
+	out = append(out, segments[:insertAt]...)
+	out = append(out, selected)
+	out = append(out, segments[insertAt:]...)
+	return out
+}
+
+func removeString(values []string, target string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != target {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func dirHasNodeBinary(dir string) bool {
+	if runtime.GOOS == "windows" {
+		return isExecutableFile(filepath.Join(dir, "node.exe"))
+	}
+	return isExecutableFile(filepath.Join(dir, "node"))
 }
 
 func isExecutableFile(path string) bool {

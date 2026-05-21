@@ -98,7 +98,9 @@ const bridgeStepItems = computed(() => {
       title: '安装 CLI 与 Skills',
       done: Boolean(status?.node?.found && status?.npm?.found && status?.npx?.found && status?.cli?.found && status?.skillsReady),
       active: Boolean(status?.installRunning),
-      detail: status?.skillsReady ? 'Node / npm / npx / lark-cli / skills 已就绪' : '先安装飞书 CLI，并确认必需 skills 完整',
+      detail: status?.installRunning
+        ? (status?.lastOutput || '正在安装飞书 CLI...')
+        : (status?.skillsReady ? 'Node / npm / npx / lark-cli / skills 已就绪' : '先安装飞书 CLI，并确认必需 skills 完整'),
     },
     {
       key: 'setup',

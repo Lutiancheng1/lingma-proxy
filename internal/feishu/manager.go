@@ -165,11 +165,19 @@ func (m *Manager) InstallCLI(ctx context.Context) error {
 	m.mu.Lock()
 	m.status.InstallRunning = true
 	m.status.LastError = ""
+	m.status.LastOutput = "准备安装飞书 CLI..."
 	status := m.status
 	m.mu.Unlock()
 	m.emit(status)
 
-	err := installCLI(ctx)
+	err := installCLI(ctx, func(line string) {
+		m.mu.Lock()
+		m.status.LastOutput = line
+		status := m.status
+		m.mu.Unlock()
+		m.emit(status)
+		m.logf("info", "飞书 CLI 安装进度："+line)
+	})
 	m.refreshStatus(ctx)
 
 	m.mu.Lock()
@@ -198,7 +206,7 @@ func userFacingInstallError(err error) string {
 	case strings.Contains(text, "prerequisite missing"):
 		return "飞书 CLI 安装失败：缺少 Node.js/npm/npx，请先安装 Node.js 后重试。"
 	case strings.Contains(text, "below required"):
-		return fmt.Sprintf("飞书 CLI 安装失败：Node.js 版本低于 %d，请升级后重试。", minimumNodeMajor)
+		return fmt.Sprintf("飞书 CLI 安装失败：当前安装链路要求 Node.js >=%s，请升级 Node.js 后重试。", minimumNodeVersionText())
 	default:
 		return "飞书 CLI 安装失败：请查看日志或反馈包中的详细 npm/npx 输出。"
 	}
@@ -268,8 +276,8 @@ func requireCLIReady() error {
 	if !node.Found || !npm.Found || !npx.Found {
 		return fmt.Errorf("Node.js/npm/npx 未就绪，请先安装 Node.js 后重试")
 	}
-	if major := parseNodeMajor(node.Version); major > 0 && major < minimumNodeMajor {
-		return fmt.Errorf("Node.js 版本 %s 低于飞书 CLI 要求的 >=%d", node.Version, minimumNodeMajor)
+	if major, minor := parseNodeVersion(node.Version); !nodeVersionSupported(major, minor) {
+		return fmt.Errorf("Node.js 版本 %s 低于飞书 CLI 当前安装链路要求的 >=%s", node.Version, minimumNodeVersionText())
 	}
 	if cli := detectBinary("lark-cli", "--version"); !cli.Found {
 		return fmt.Errorf("lark-cli 未安装，请先点击“安装 CLI 与 Skills”")

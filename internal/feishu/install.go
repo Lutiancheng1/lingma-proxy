@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	minimumNodeMajor     = 16
-	recommendedNodeMajor = 18
+	minimumNodeMajor = 20
+	minimumNodeMinor = 12
 )
 
 func detectBinary(name string, versionArgs ...string) BinaryStatus {
@@ -35,12 +35,10 @@ func detectNodeAndNPM() (BinaryStatus, BinaryStatus, BinaryStatus) {
 	npm := detectBinary("npm", "--version")
 	npx := detectBinary("npx", "--version")
 	if node.Found {
-		major := parseNodeMajor(node.Version)
+		major, minor := parseNodeVersion(node.Version)
 		switch {
-		case major > 0 && major < minimumNodeMajor:
-			node.Hint = fmt.Sprintf("飞书 CLI 当前要求 Node.js >=%d，请升级 Node.js；推荐 %d+。", minimumNodeMajor, recommendedNodeMajor)
-		case major >= minimumNodeMajor && major < recommendedNodeMajor:
-			node.Hint = fmt.Sprintf("Node.js %d 满足飞书 CLI 最低要求，但建议升级到 %d+ 以减少 npm/npx 兼容问题。", major, recommendedNodeMajor)
+		case !nodeVersionSupported(major, minor):
+			node.Hint = fmt.Sprintf("飞书 CLI 当前安装链路要求 Node.js >=%s，请升级 Node.js 后重试。", minimumNodeVersionText())
 		}
 	}
 	if !node.Found || !npm.Found || !npx.Found {
@@ -61,31 +59,76 @@ func detectNodeAndNPM() (BinaryStatus, BinaryStatus, BinaryStatus) {
 func nodeInstallHint(goos string) string {
 	switch goos {
 	case "darwin":
-		return fmt.Sprintf("请先安装 Node.js %d+（推荐 %d+），例如通过 https://nodejs.org 或 Homebrew。", minimumNodeMajor, recommendedNodeMajor)
+		return fmt.Sprintf("请先安装 Node.js %s+，例如通过 https://nodejs.org 或 Homebrew。", minimumNodeVersionText())
 	case "windows":
-		return fmt.Sprintf("请先安装 Node.js %d+（推荐 %d+），例如通过 https://nodejs.org 或 winget。", minimumNodeMajor, recommendedNodeMajor)
+		return fmt.Sprintf("请先安装 Node.js %s+，例如通过 https://nodejs.org 或 winget。", minimumNodeVersionText())
 	default:
-		return fmt.Sprintf("请先安装 Node.js %d+（推荐 %d+）。", minimumNodeMajor, recommendedNodeMajor)
+		return fmt.Sprintf("请先安装 Node.js %s+。", minimumNodeVersionText())
 	}
 }
 
-func installCLI(ctx context.Context) error {
+func installCLI(ctx context.Context, onLine func(string)) error {
+	emitInstallLine(onLine, "检查 Node.js/npm/npx 环境...")
 	node, npm, npx := detectNodeAndNPM()
 	if !node.Found || !npm.Found || !npx.Found {
 		return fmt.Errorf("install lark-cli failed: Node.js/npm/npx prerequisite missing: node=%s npm=%s npx=%s", describeBinary(node), describeBinary(npm), describeBinary(npx))
 	}
-	if major := parseNodeMajor(node.Version); major > 0 && major < minimumNodeMajor {
-		return fmt.Errorf("install lark-cli failed: Node.js version %s is below required >=%d", node.Version, minimumNodeMajor)
+	if major, minor := parseNodeVersion(node.Version); !nodeVersionSupported(major, minor) {
+		return fmt.Errorf("install lark-cli failed: Node.js version %s is below required >=%s", node.Version, minimumNodeVersionText())
 	}
 	if err := ensureNPMGlobalDir(); err != nil {
 		return err
 	}
-	cmd := commandContextWithEnv(ctx, "npx", "@larksuite/cli@latest", "install")
-	output, err := cmd.CombinedOutput()
+	emitInstallLine(onLine, "安装飞书 CLI: npm install -g @larksuite/cli")
+	if err := runInstallStep(ctx, []string{"npm", "install", "-g", "@larksuite/cli"}, onLine); err != nil {
+		return fmt.Errorf("install lark-cli failed: command=%q node=%s npm=%s npx=%s error=%w", "npm install -g @larksuite/cli", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
+	}
+	emitInstallLine(onLine, "安装飞书 CLI Skills: npx skills add larksuite/cli -y -g")
+	if err := runInstallStep(ctx, []string{"npx", "skills", "add", "larksuite/cli", "-y", "-g"}, onLine); err != nil {
+		return fmt.Errorf("install lark-cli skills failed: command=%q node=%s npm=%s npx=%s error=%w", "npx skills add larksuite/cli -y -g", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
+	}
+	emitInstallLine(onLine, "验证 lark-cli 安装结果...")
+	cli := detectBinary("lark-cli", "--version")
+	if !cli.Found {
+		return fmt.Errorf("install lark-cli failed: install command completed but lark-cli is still missing in resolved PATH")
+	}
+	emitInstallLine(onLine, "飞书 CLI 安装完成："+describeBinary(cli))
+	return nil
+}
+
+func runInstallStep(ctx context.Context, argv []string, onLine func(string)) error {
+	if len(argv) == 0 {
+		return nil
+	}
+	cmd := commandContextWithEnv(ctx, argv[0], argv[1:]...)
+	var lines []string
+	err := runStreamingCommand(ctx, cmd, func(line string) {
+		line = formatOutputLine(line)
+		if line == "" {
+			return
+		}
+		lines = append(lines, line)
+		emitInstallLine(onLine, line)
+	}, nil)
 	if err != nil {
-		return fmt.Errorf("install lark-cli failed: command=%q node=%s npm=%s npx=%s error=%w output=%s", "npx @larksuite/cli@latest install", describeBinary(node), describeBinary(npm), describeBinary(npx), err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("%w output=%s", err, truncateInstallOutput(strings.Join(lines, "\n")))
 	}
 	return nil
+}
+
+func emitInstallLine(onLine func(string), line string) {
+	line = strings.TrimSpace(line)
+	if line != "" && onLine != nil {
+		onLine(line)
+	}
+}
+
+func truncateInstallOutput(text string) string {
+	text = strings.TrimSpace(text)
+	if len(text) <= 4000 {
+		return text
+	}
+	return text[:4000] + "...(truncated)"
 }
 
 func ensureNPMGlobalDir() error {
@@ -104,12 +147,33 @@ func ensureNPMGlobalDir() error {
 }
 
 func parseNodeMajor(version string) int {
+	major, _ := parseNodeVersion(version)
+	return major
+}
+
+func parseNodeVersion(version string) (int, int) {
 	trimmed := strings.TrimSpace(strings.TrimPrefix(version, "v"))
 	if trimmed == "" {
-		return 0
+		return 0, 0
 	}
-	major, _ := strconv.Atoi(strings.Split(trimmed, ".")[0])
-	return major
+	parts := strings.Split(trimmed, ".")
+	major, _ := strconv.Atoi(parts[0])
+	minor := 0
+	if len(parts) > 1 {
+		minor, _ = strconv.Atoi(parts[1])
+	}
+	return major, minor
+}
+
+func nodeVersionSupported(major, minor int) bool {
+	if major == 0 {
+		return true
+	}
+	return major > minimumNodeMajor || major == minimumNodeMajor && minor >= minimumNodeMinor
+}
+
+func minimumNodeVersionText() string {
+	return fmt.Sprintf("%d.%d", minimumNodeMajor, minimumNodeMinor)
 }
 
 func describeBinary(status BinaryStatus) string {
