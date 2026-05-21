@@ -711,6 +711,10 @@ func candidateConfigFiles() []string {
 		return nil
 	}
 	paths := []string{
+		filepath.Join(home, ".qoder-cn", "shared_client", "extension", "server", "config.json"),
+		filepath.Join(home, ".qoder-cn", "shared_client", "extension", "local", "config.json"),
+		filepath.Join(home, ".qoder-cn", "shared_client", "bin", "config.json"),
+		filepath.Join(home, ".qoder-cn", "shared_client", "cache", "app-config.json"),
 		filepath.Join(home, ".qodercn", "extension", "server", "config.json"),
 		filepath.Join(home, ".qodercn", "extension", "local", "config.json"),
 		filepath.Join(home, ".qodercn", "bin", "config.json"),
@@ -722,6 +726,8 @@ func candidateConfigFiles() []string {
 		filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache", "cache", "app-config.json"),
 		filepath.Join(home, ".config", "lingma-proxy", "config.json"),
 		filepath.Join(home, ".config", "lingma-ipc-proxy", "config.json"),
+		filepath.Join(home, ".qoder-cn", "shared_client", "logs", "qodercn.log"),
+		filepath.Join(home, ".qoder-cn", "shared_client", "logs", "qodercn-extension.log"),
 		filepath.Join(home, ".qodercn", "logs", "qodercn.log"),
 		filepath.Join(home, ".qodercn", "logs", "qodercn-extension.log"),
 		filepath.Join(home, ".qodercn", "vscode", "sharedClientCache", "logs", "qodercn.log"),
@@ -780,6 +786,8 @@ func lingmaLogRoots(home string) []string {
 	roots := []string{
 		filepath.Join(home, ".lingma", "logs"),
 		filepath.Join(home, ".lingma", "vscode", "sharedClientCache", "logs"),
+		filepath.Join(home, ".qoder-cn", "shared_client", "logs"),
+		filepath.Join(home, ".qoder-cn", "logs"),
 		filepath.Join(home, ".qodercn", "logs"),
 		filepath.Join(home, ".qodercn", "vscode", "sharedClientCache", "logs"),
 		filepath.Join(home, "Library", "Application Support", "Lingma", "logs"),

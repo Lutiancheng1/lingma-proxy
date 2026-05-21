@@ -68,6 +68,7 @@ Full IPC generation requires a runtime that exposes the session creation RPCs us
 | --- | --- |
 | QoderCN desktop app only | Full endpoint matrix passed on macOS WebSocket. |
 | QoderCN desktop app plus `alibaba-cloud.tongyi-lingma` VS Code extension | Full endpoint matrix passed; auto-detection prefers QoderCN. |
+| JetBrains Tongyi Lingma plugin in IntelliJ IDEA | Full endpoint matrix passed on macOS WebSocket using `~/.lingma`. |
 | Tongyi Lingma / legacy Lingma runtime | Supported as fallback. |
 | `alibaba-cloud.tongyi-lingma` VS Code extension only | Partial only: model discovery works, but full generation fails because this runtime does not support the `session/new` RPC. |
 | Windows QoderCN | Not yet verified on a Windows machine or VM. |

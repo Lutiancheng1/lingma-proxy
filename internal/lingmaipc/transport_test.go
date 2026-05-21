@@ -80,6 +80,22 @@ func TestDefaultSharedClientInfoPathsIncludeQoderCN(t *testing.T) {
 	t.Fatalf("missing QoderCN shared client info path containing %q in %#v", wantPart, paths)
 }
 
+func TestDefaultSharedClientInfoPathsIncludeDashedQoderCNSharedClient(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_SHARED_CLIENT_INFO", "")
+
+	paths := defaultSharedClientInfoPaths()
+	wantPart := filepath.Join(".qoder-cn", "shared_client", ".info.json")
+	for _, path := range paths {
+		if strings.Contains(path, wantPart) {
+			return
+		}
+	}
+	t.Fatalf("missing dashed QoderCN shared client info path containing %q in %#v", wantPart, paths)
+}
+
 func TestDefaultSharedClientInfoPathsPreferQoderCNBeforeLingma(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

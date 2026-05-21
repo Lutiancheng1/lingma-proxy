@@ -210,6 +210,9 @@ func defaultSharedClientInfoPaths() []string {
 	}
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		bases = append(bases,
+			filepath.Join(home, ".qoder-cn", "shared_client"),
+			filepath.Join(home, ".qoder-cn", "vscode"),
+			filepath.Join(home, ".qoder-cn"),
 			filepath.Join(home, ".qodercn", "vscode"),
 			filepath.Join(home, ".qodercn"),
 			filepath.Join(home, ".lingma", "vscode"),
@@ -226,6 +229,7 @@ func defaultSharedClientInfoPaths() []string {
 	paths := make([]string, 0, len(bases)*2)
 	for _, base := range uniquePathStrings(bases) {
 		cacheDirs := []string{
+			base,
 			filepath.Join(base, "QoderCN", "SharedClientCache"),
 			filepath.Join(base, "QoderCN", "sharedClientCache"),
 			filepath.Join(base, "Qoder", "SharedClientCache"),
@@ -261,6 +265,9 @@ func defaultUnixSocketPaths() []string {
 		filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache", "qodercn.sock"),
 		filepath.Join(home, "Library", "Application Support", "Qoder", "SharedClientCache", "qodercn.sock"),
 		filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache", "lingma.sock"),
+		filepath.Join(home, ".qoder-cn", "shared_client", "qodercn.sock"),
+		filepath.Join(home, ".qoder-cn", "vscode", "sharedClientCache", "qodercn.sock"),
+		filepath.Join(home, ".qoder-cn", "qodercn.sock"),
 		filepath.Join(home, ".qodercn", "vscode", "sharedClientCache", "qodercn.sock"),
 		filepath.Join(home, ".qodercn", "qodercn.sock"),
 		filepath.Join(home, ".lingma", "vscode", "sharedClientCache", "lingma.sock"),

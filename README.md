@@ -30,6 +30,7 @@ For the complete Chat / Responses / Anthropic Messages experience, keep either t
 | --- | --- | --- | --- |
 | QoderCN desktop app only | verified | verified on macOS WebSocket | Full OpenAI / Anthropic endpoint matrix passed. |
 | QoderCN desktop app + `alibaba-cloud.tongyi-lingma` VS Code extension | verified | verified; auto-detection prefers QoderCN | Full endpoint matrix passed. |
+| JetBrains Tongyi Lingma plugin in IntelliJ IDEA | verified | verified on macOS WebSocket | Uses `~/.lingma`; model list, Chat Completions, Responses, and Anthropic Messages passed. |
 | Tongyi Lingma desktop app / legacy Lingma runtime | supported as fallback | supported as fallback | Kept for existing users. |
 | `alibaba-cloud.tongyi-lingma` VS Code extension only | remote cache may work | partial only | Model discovery works, but this extension runtime does not support the `session/new` RPC used for full Chat/Responses/Messages generation. |
 | Windows QoderCN | expected | not yet verified on a Windows machine | Named Pipe compatibility still needs Windows real-machine or VM validation. |
@@ -45,7 +46,7 @@ Auto-detection prefers QoderCN runtime files first, then falls back to Lingma ru
 ## Current Version
 
 <!-- VERSION:CURRENT:BEGIN -->
-Current desktop app version: `v1.6.0`.
+Current desktop app version: `v1.6.1`.
 
 The canonical source is [VERSION](./VERSION). Run `./scripts/sync-version.sh` to propagate it into [desktop/wails.json](./desktop/wails.json), the desktop UI, and release-facing docs.
 <!-- VERSION:CURRENT:END -->
@@ -274,8 +275,8 @@ flowchart LR
 
 | Platform | Default transport | Detection |
 | --- | --- | --- |
-| macOS | WebSocket | reads Lingma `SharedClientCache` files under user application support paths and `~/.lingma` fallbacks |
-| Windows | Named Pipe / WebSocket | scans Lingma named pipes plus `%APPDATA%`, `%LOCALAPPDATA%`, `%ProgramData%`, and `%USERPROFILE%\.lingma` shared cache hints |
+| macOS | WebSocket | reads QoderCN / Lingma `SharedClientCache` files, JetBrains Lingma `~/.lingma/.info.json`, and `~/.lingma` fallbacks |
+| Windows | Named Pipe / WebSocket | scans Lingma / QoderCN named pipes plus `%APPDATA%`, `%LOCALAPPDATA%`, `%ProgramData%`, `%USERPROFILE%\.lingma`, and `%USERPROFILE%\.qoder-cn` shared cache hints |
 | Linux | WebSocket | reads `~/.lingma` / XDG hints when present; manual `--ws-url` is still recommended |
 
 If auto detection fails, set the path manually in the desktop Settings page or pass CLI flags:
@@ -300,9 +301,14 @@ By default it reads the local Lingma login cache in read-only mode:
 ```text
 ~/.lingma/cache/user
 ~/.lingma/cache/id
+~/.lingma/cli/.auth/id
 ~/.lingma/logs/lingma.log
+~/.qoder-cn/shared_client/cache/user
+~/.qoder-cn/shared_client/cache/id
+~/.qoder-cn/shared_client/cli/.auth/id
 %APPDATA%\Lingma\cache\user
 %LOCALAPPDATA%\Lingma\cache\user
+%USERPROFILE%\.qoder-cn\shared_client\cache\user
 XDG config/state Lingma cache paths when present
 ```
 
@@ -350,7 +356,7 @@ IPC mode talks to the local Lingma IDE plugin:
 lingma-proxy --backend ipc --transport auto --port 8095
 ```
 
-Use this when VS Code / the Lingma plugin is already running, when you want plugin session behavior, or when you want the exact model list exposed by the local plugin. Compared with Remote API mode, IPC mode is more coupled to the IDE/plugin process and can be affected by that process's session, current project, and local environment.
+Use this when QoderCN, IntelliJ IDEA with the Tongyi Lingma plugin, VS Code with the Lingma plugin, or another supported Lingma runtime is already running, when you want plugin session behavior, or when you want the exact model list exposed by the local plugin. Compared with Remote API mode, IPC mode is more coupled to the IDE/plugin process and can be affected by that process's session, current project, and local environment.
 
 ## Quick Start
 

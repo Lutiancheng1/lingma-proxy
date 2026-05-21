@@ -68,6 +68,7 @@ flowchart LR
 | --- | --- |
 | 只运行 QoderCN 桌面 App | macOS WebSocket 全接口矩阵通过。 |
 | QoderCN 桌面 App + `alibaba-cloud.tongyi-lingma` VS Code 扩展同时运行 | 全接口矩阵通过；自动探测优先 QoderCN。 |
+| IntelliJ IDEA 中的 JetBrains 通义灵码插件 | 基于 `~/.lingma` 的 macOS WebSocket 全接口矩阵通过。 |
 | 通义灵码 / 旧 Lingma 运行时 | 作为 fallback 支持。 |
 | 只运行 `alibaba-cloud.tongyi-lingma` VS Code 扩展 | 仅部分支持：模型发现可用，但该运行时不支持 `session/new` RPC，完整生成链路失败。 |
 | Windows QoderCN | 尚未在 Windows 真机或 VM 验证。 |

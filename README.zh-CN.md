@@ -33,6 +33,7 @@
 | --- | --- | --- | --- |
 | 只运行 QoderCN 桌面 App | 已验证 | 已验证 macOS WebSocket | OpenAI / Anthropic 全接口矩阵通过。 |
 | QoderCN 桌面 App + `alibaba-cloud.tongyi-lingma` VS Code 扩展同时运行 | 已验证 | 已验证；自动探测优先 QoderCN | 全接口矩阵通过。 |
+| IntelliJ IDEA 中的 JetBrains 通义灵码插件 | 已验证 | 已验证 macOS WebSocket | 使用 `~/.lingma`；模型列表、Chat Completions、Responses、Anthropic Messages 均通过。 |
 | 通义灵码桌面 App / 旧 Lingma 运行时 | 作为 fallback 支持 | 作为 fallback 支持 | 保留给已有用户。 |
 | 只运行 `alibaba-cloud.tongyi-lingma` VS Code 扩展 | 远端登录缓存可能可用 | 仅部分支持 | 模型发现可用，但该扩展运行时不支持完整 Chat 所需的 `session/new` RPC，因此 Chat / Responses / Messages 无法完整跑通。 |
 | Windows QoderCN | 预期支持 | 尚未真机验证 | Named Pipe 兼容性还需要 Windows 真机或 VM 单独验证。 |
@@ -48,7 +49,7 @@
 ## 当前版本
 
 <!-- VERSION:CURRENT:BEGIN -->
-当前桌面端版本：`v1.6.0`。
+当前桌面端版本：`v1.6.1`。
 
 唯一来源是 [VERSION](./VERSION)。执行 `./scripts/sync-version.sh` 会把它同步到 [desktop/wails.json](./desktop/wails.json)、桌面 UI 和面向发布的文档块。
 <!-- VERSION:CURRENT:END -->
@@ -333,8 +334,8 @@ flowchart LR
 
 | 平台 | 优先传输 | 探测方式 |
 | --- | --- | --- |
-| macOS | WebSocket | 扫描 Lingma `SharedClientCache`、`~/.lingma` 等用户目录 |
-| Windows | Named Pipe / WebSocket | 扫描 Lingma 命名管道，以及 `%APPDATA%`、`%LOCALAPPDATA%`、`%ProgramData%`、`%USERPROFILE%\.lingma` 下的共享缓存信息 |
+| macOS | WebSocket | 扫描 QoderCN / Lingma `SharedClientCache`、JetBrains Lingma `~/.lingma/.info.json`、`~/.lingma` 等用户目录 |
+| Windows | Named Pipe / WebSocket | 扫描 Lingma / QoderCN 命名管道，以及 `%APPDATA%`、`%LOCALAPPDATA%`、`%ProgramData%`、`%USERPROFILE%\.lingma`、`%USERPROFILE%\.qoder-cn` 下的共享缓存信息 |
 | Linux | WebSocket | 尝试读取 `~/.lingma` / XDG 目录，仍建议必要时手动指定 `--ws-url` |
 
 如果自动探测失败，桌面端会提供兜底说明。可以在设置里手动填写：
@@ -365,9 +366,14 @@ lingma-proxy --backend remote --port 8095
 ```text
 ~/.lingma/cache/user
 ~/.lingma/cache/id
+~/.lingma/cli/.auth/id
 ~/.lingma/logs/lingma.log
+~/.qoder-cn/shared_client/cache/user
+~/.qoder-cn/shared_client/cache/id
+~/.qoder-cn/shared_client/cli/.auth/id
 %APPDATA%\Lingma\cache\user
 %LOCALAPPDATA%\Lingma\cache\user
+%USERPROFILE%\.qoder-cn\shared_client\cache\user
 存在时也会尝试 XDG 配置 / 状态目录
 ```
 
@@ -415,7 +421,7 @@ IPC 模式通过本机 Lingma IDE 插件通信：
 lingma-proxy --backend ipc --transport auto --port 8095
 ```
 
-适合已经打开 VS Code / Lingma 插件、希望使用插件当前会话环境、并优先使用插件探测模型列表的场景。相比远端 API 模式，IPC 插件模式更依赖 IDE / 插件进程，也更容易受到插件会话、当前项目和本地环境的影响。
+适合已经打开 QoderCN、IntelliJ IDEA 通义灵码插件、VS Code 通义灵码插件或其它受支持 Lingma 运行时，并希望使用插件当前会话环境、优先使用插件探测模型列表的场景。相比远端 API 模式，IPC 插件模式更依赖 IDE / 插件进程，也更容易受到插件会话、当前项目和本地环境的影响。
 
 ## 快速开始
 

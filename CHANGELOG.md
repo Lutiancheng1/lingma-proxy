@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased (target: v1.6.0)
+## Unreleased (target: v1.6.1)
+
+## v1.6.1 - 2026-05-21
+
+- Fixed Windows QoderCN credential discovery for dashed `%USERPROFILE%\.qoder-cn` layouts, including `shared_client` cache/config/log/socket candidates.
+- Reduced noisy Remote API credential errors: the default error now summarizes missing or incompatible QoderCN/Lingma login caches, while `LINGMA_VERBOSE_CREDENTIAL_ERRORS=1` still exposes full candidate paths for diagnostics.
+- Added machine-id fallback discovery from `cli/.auth/id` and JetBrains Lingma `Generated uuid:` log lines, covering IntelliJ IDEA plugin installs that have `cache/user` but no `cache/id`.
+- Verified JetBrains Tongyi Lingma plugin compatibility on macOS: Remote API and IPC WebSocket both passed model list, Chat Completions, Responses, and Anthropic Messages.
+- Documented the JetBrains plugin support boundary and updated QoderCN/Lingma cache path notes in README and architecture docs.
+- 修复 Windows QoderCN 使用 `%USERPROFILE%\.qoder-cn` 目录时的登录态发现，补齐 `shared_client` 下的 cache/config/log/socket 候选路径。
+- 精简远端 API 登录态错误：默认只提示未找到或缓存格式不兼容；需要完整路径时可设置 `LINGMA_VERBOSE_CREDENTIAL_ERRORS=1` 重新诊断。
+- 增加 `cli/.auth/id` 与 JetBrains Lingma 日志 `Generated uuid:` 的 machine-id 兜底解析，覆盖 IntelliJ IDEA 插件只有 `cache/user`、没有 `cache/id` 的安装形态。
+- 已在 macOS 实测 JetBrains 通义灵码插件：Remote API 与 IPC WebSocket 的模型列表、Chat Completions、Responses、Anthropic Messages 均通过。
+- 文档补充 JetBrains 插件支持边界，并更新 QoderCN/Lingma 缓存路径说明。
 
 ## v1.6.0 - 2026-05-20
 
