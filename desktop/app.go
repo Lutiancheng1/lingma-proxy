@@ -765,7 +765,7 @@ func (a *App) ExportFeedbackBundle(options FeedbackExportOptions) (FeedbackExpor
 	sanitizedRequests := sanitizeRequests(filteredRequests)
 	manifest := buildFeedbackManifest(options, startAt, endAt, sanitizedLogs, sanitizedRequests)
 
-	entries := make([]feedbackZipEntry, 0, 7)
+	entries := make([]feedbackZipEntry, 0, 8)
 	entries = append(entries, feedbackZipEntry{name: "manifest.json", body: mustJSON(manifest)})
 	if options.IncludeAppLogs {
 		entries = append(entries, feedbackZipEntry{name: "app-logs.json", body: mustJSON(sanitizedLogs)})
@@ -781,6 +781,9 @@ func (a *App) ExportFeedbackBundle(options FeedbackExportOptions) (FeedbackExpor
 	}
 	if options.IncludeDetectionInfo {
 		entries = append(entries, feedbackZipEntry{name: "detection-info.json", body: mustJSON(a.GetDetectionInfo())})
+	}
+	if a.bridge != nil {
+		entries = append(entries, feedbackZipEntry{name: "feishu-bridge-status.json", body: mustJSON(sanitizeFeishuStatus(a.bridge.Status()))})
 	}
 	note := strings.TrimSpace(options.IssueDescription)
 	if note != "" {
@@ -1581,11 +1584,28 @@ func sanitizeLogs(logs []AppLog) []AppLog {
 		out = append(out, AppLog{
 			CreatedAt: entry.CreatedAt,
 			Time:      entry.Time,
+			Source:    entry.Source,
 			Level:     entry.Level,
+			SessionID: entry.SessionID,
+			ChatID:    entry.ChatID,
+			MessageID: entry.MessageID,
 			Message:   redactPlainText(entry.Message),
 		})
 	}
 	return out
+}
+
+func sanitizeFeishuStatus(status feishu.Status) feishu.Status {
+	status.SetupURL = redactPlainText(status.SetupURL)
+	status.LoginURL = redactPlainText(status.LoginURL)
+	status.LastOutput = redactPlainText(status.LastOutput)
+	status.LastError = redactPlainText(status.LastError)
+	for i := range status.Skills {
+		status.Skills[i].Message = redactPlainText(status.Skills[i].Message)
+	}
+	status.Config.Message = redactPlainText(status.Config.Message)
+	status.Auth.Message = redactPlainText(status.Auth.Message)
+	return status
 }
 
 func sanitizeRequests(requests []RequestRecord) []RequestRecord {

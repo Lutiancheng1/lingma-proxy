@@ -169,17 +169,33 @@ func (m *Manager) InstallCLI(ctx context.Context) error {
 	m.mu.Lock()
 	m.status.InstallRunning = false
 	if err != nil {
-		m.status.LastError = err.Error()
+		m.status.LastError = userFacingInstallError(err)
 	}
 	status = m.status
 	m.mu.Unlock()
 	m.emit(status)
 
 	if err != nil {
+		m.logf("error", "飞书 CLI 安装失败："+err.Error())
 		return err
 	}
 	m.logf("info", "飞书 CLI 安装完成")
 	return nil
+}
+
+func userFacingInstallError(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := err.Error()
+	switch {
+	case strings.Contains(text, "prerequisite missing"):
+		return "飞书 CLI 安装失败：缺少 Node.js/npm/npx，请先安装 Node.js 后重试。"
+	case strings.Contains(text, "below required"):
+		return fmt.Sprintf("飞书 CLI 安装失败：Node.js 版本低于 %d，请升级后重试。", minimumNodeMajor)
+	default:
+		return "飞书 CLI 安装失败：请查看日志或反馈包中的详细 npm/npx 输出。"
+	}
 }
 
 func (m *Manager) StartSetupNew(ctx context.Context) error {

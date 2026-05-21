@@ -52,6 +52,43 @@ func TestContextWithOptionalTimeoutPositiveSetsDeadline(t *testing.T) {
 	}
 }
 
+func TestRemoteFallbackModelsNormalizeAndDedupe(t *testing.T) {
+	svc := New(Config{
+		Backend:              BackendRemote,
+		RemoteFallbackModels: []string{"Kimi-K2.6", "kmodel", "MiniMax-M2.7"},
+	})
+	got := svc.remoteFallbackModels()
+	want := []string{"kmodel", "mmodel"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("fallback models = %v, want %v", got, want)
+	}
+}
+
+func TestShouldProbeRemoteModelForListOnlyKnownMissingAliases(t *testing.T) {
+	if !shouldProbeRemoteModelForList("Kimi-K2.6") {
+		t.Fatal("expected Kimi alias to be probed")
+	}
+	if !shouldProbeRemoteModelForList("MiniMax-M2.7") {
+		t.Fatal("expected MiniMax alias to be probed")
+	}
+	if shouldProbeRemoteModelForList("dashscope_qwen3_coder") {
+		t.Fatal("unexpected probe for normal list model")
+	}
+}
+
+func TestRemoteModelDisplayNameForVerifiedFallbackAliases(t *testing.T) {
+	cases := map[string]string{
+		"kmodel":                "Kimi-K2.6",
+		"mmodel":                "MiniMax-M2.7",
+		"some-enterprise-model": "some-enterprise-model",
+	}
+	for input, want := range cases {
+		if got := remoteModelDisplayName(input); got != want {
+			t.Fatalf("remoteModelDisplayName(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestDescribeIPCSetupErrorClarifiesClosedLingmaBackend(t *testing.T) {
 	err := describeIPCSetupError("session setup", context.DeadlineExceeded)
 	if err == nil {

@@ -80,6 +80,20 @@ func TestExtractBaseURLFromRawWindowsLogURL(t *testing.T) {
 	}
 }
 
+func TestSortBaseURLHintsPrefersEnterpriseEndpoint(t *testing.T) {
+	hints := sortBaseURLHints(uniqueBaseURLHints([]BaseURLHint{
+		{URL: "https://lingma-api.tongyi.aliyun.com", Source: "old.log"},
+		{URL: "https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com", Source: "idea.log"},
+		{URL: DefaultBaseURL, Source: "default"},
+	}))
+	if len(hints) != 3 {
+		t.Fatalf("len(hints) = %d, want 3", len(hints))
+	}
+	if got := hints[0].URL; got != "https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com" {
+		t.Fatalf("first hint = %q, want enterprise endpoint", got)
+	}
+}
+
 func TestExtractBaseURLIgnoresLingmaOSSAssetHost(t *testing.T) {
 	got := extractBaseURLFromText(`2026-05-06 endpoint config: https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com
 2026-05-06 Download asset from: https://lingma-ide.oss-rg-china-mainland.aliyuncs.com/lingma-extension/download?name=plugin.zip`)
