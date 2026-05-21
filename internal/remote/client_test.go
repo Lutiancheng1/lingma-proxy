@@ -80,6 +80,31 @@ func TestExtractBaseURLFromRawWindowsLogURL(t *testing.T) {
 	}
 }
 
+func TestExtractBaseURLFromChatGenerationURL(t *testing.T) {
+	got := extractBaseURLFromText(`POST https://lingma.asiainfo.com/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common`)
+	want := "https://lingma.asiainfo.com"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestExtractBaseURLFromQoderCLIEndpointLog(t *testing.T) {
+	got := extractBaseURLFromText(`Lingma endpoint configured {"api": "https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com/algo", "login": "https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com/algo/lingma/login"}`)
+	want := "https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestExtractBaseURLPrefersRealAPIOverMarketplace(t *testing.T) {
+	got := extractBaseURLFromText(`Using service url: https://marketplace.visualstudio.com/_apis/public/gallery
+Fail to send inference request Post "https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com/algo/api/v2/service/pro/sse/agent_chat_generation?Encode=1"`)
+	want := "https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestSortBaseURLHintsPrefersEnterpriseEndpoint(t *testing.T) {
 	hints := sortBaseURLHints(uniqueBaseURLHints([]BaseURLHint{
 		{URL: "https://lingma-api.tongyi.aliyun.com", Source: "old.log"},
@@ -120,6 +145,38 @@ func TestNormalizeBaseURLRejectsLingmaOSSAssetHost(t *testing.T) {
 func TestNormalizeBaseURLRejectsUnsupportedScheme(t *testing.T) {
 	if got := normalizeRemoteBaseURLHint(`ftp://ai-lingma-example-cn-beijing.rdc.aliyuncs.com`); got != "" {
 		t.Fatalf("got %q, want empty", got)
+	}
+}
+
+func TestNormalizeBaseURLAcceptsCustomEnterpriseHost(t *testing.T) {
+	got := normalizeRemoteBaseURLHint(`https://lingma.asiainfo.com/`)
+	want := "https://lingma.asiainfo.com"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeBaseURLAcceptsCustomHostFromTrustedCandidate(t *testing.T) {
+	got := normalizeRemoteBaseURLHint(`https://ai.example-corp.internal/algo/api/v2/model/list`)
+	want := "https://ai.example-corp.internal"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeBaseURLRejectsMarketplaceDownloadURL(t *testing.T) {
+	if got := normalizeRemoteBaseURLHint(`https://marketplace.visualstudio.com/items?itemName=alibaba-cloud.tongyi-lingma`); got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+}
+
+func TestSortBaseURLHintsPrefersCustomEnterpriseEndpoint(t *testing.T) {
+	hints := sortBaseURLHints(uniqueBaseURLHints([]BaseURLHint{
+		{URL: DefaultBaseURL, Source: "default"},
+		{URL: "https://lingma.asiainfo.com", Source: "qodercn-app-config"},
+	}))
+	if got := hints[0].URL; got != "https://lingma.asiainfo.com" {
+		t.Fatalf("first hint = %q, want custom enterprise endpoint", got)
 	}
 }
 
