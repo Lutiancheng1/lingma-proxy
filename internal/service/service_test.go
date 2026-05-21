@@ -58,7 +58,7 @@ func TestDescribeIPCSetupErrorClarifiesClosedLingmaBackend(t *testing.T) {
 		t.Fatal("expected wrapped error")
 	}
 	text := err.Error()
-	if !strings.Contains(text, "session setup timed out") || !strings.Contains(text, "重新打开 Lingma") {
+	if !strings.Contains(text, "session setup timed out") || !strings.Contains(text, "重新打开 Lingma App、QoderCN App") {
 		t.Fatalf("unexpected error text: %s", text)
 	}
 }

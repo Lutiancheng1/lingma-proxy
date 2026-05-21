@@ -3,6 +3,7 @@
 package lingmaipc
 
 const (
-	PipeDir    = ""
-	PipePrefix = ""
+	PipeDir = ""
 )
+
+var PipePrefixes = []string{"lingma-", "qodercn-"}

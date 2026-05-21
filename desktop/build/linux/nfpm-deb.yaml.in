@@ -1,0 +1,28 @@
+name: lingma-proxy-desktop
+arch: __ARCH__
+platform: linux
+version: __VERSION__
+section: utils
+priority: optional
+maintainer: Lutiancheng <lutc5@asiainfo.com>
+description: Desktop GUI for Lingma / QoderCN API proxy
+vendor: Lingma Proxy
+homepage: https://github.com/Lutiancheng1/lingma-proxy
+license: MIT
+depends:
+  - libgtk-3-0
+  - libwebkit2gtk-4.1-0
+contents:
+  - src: ./desktop/build/bin/LingmaProxy
+    dst: /opt/lingma-proxy/LingmaProxy
+  - src: ./desktop/build/linux/lingma-proxy-desktop
+    dst: /usr/bin/lingma-proxy-desktop
+    file_info:
+      mode: 0755
+  - src: ./desktop/build/linux/lingma-proxy.desktop
+    dst: /usr/share/applications/lingma-proxy.desktop
+  - src: ./desktop/build/appicon.png
+    dst: /usr/share/icons/hicolor/256x256/apps/lingma-proxy.png
+scripts:
+  postinstall: ./desktop/build/linux/postinstall.sh
+  postremove: ./desktop/build/linux/postremove.sh

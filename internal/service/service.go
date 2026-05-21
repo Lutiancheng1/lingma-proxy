@@ -45,6 +45,7 @@ type Config struct {
 	WebSocketURL          string
 	RemoteBaseURL         string
 	RemoteAuthFile        string
+	RemoteProxyURL        string
 	RemoteVersion         string
 	Cwd                   string
 	CurrentFilePath       string
@@ -250,7 +251,7 @@ func describeIPCSetupError(operation string, err error) error {
 	}
 	msg := strings.ToLower(err.Error())
 	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "context deadline") {
-		return fmt.Errorf("Lingma IPC %s timed out after %s; Lingma 后台可能已退出，请重新打开 Lingma App 或 IDE 插件后重试: %w", operation, ipcSetupTimeout, err)
+		return fmt.Errorf("Lingma/QoderCN IPC %s timed out after %s; Lingma / QoderCN 后台可能已退出，请重新打开 Lingma App、QoderCN App 或 IDE 插件后重试: %w", operation, ipcSetupTimeout, err)
 	}
 	return err
 }
@@ -904,6 +905,7 @@ func (s *Service) remoteClientLocked() *remote.Client {
 		s.remoteClient = remote.New(remote.Config{
 			BaseURL:     s.cfg.RemoteBaseURL,
 			AuthFile:    s.cfg.RemoteAuthFile,
+			ProxyURL:    s.cfg.RemoteProxyURL,
 			CosyVersion: s.cfg.RemoteVersion,
 			Timeout:     s.cfg.Timeout,
 		})

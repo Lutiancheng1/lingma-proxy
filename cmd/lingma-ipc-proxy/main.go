@@ -18,6 +18,7 @@ import (
 
 	"lingma-ipc-proxy/internal/httpapi"
 	"lingma-ipc-proxy/internal/lingmaipc"
+	"lingma-ipc-proxy/internal/remote"
 	"lingma-ipc-proxy/internal/service"
 )
 
@@ -30,6 +31,7 @@ type fileConfig struct {
 	WebSocketURL          string   `json:"websocket_url"`
 	RemoteBaseURL         string   `json:"remote_base_url"`
 	RemoteAuthFile        string   `json:"remote_auth_file"`
+	RemoteProxyURL        string   `json:"remote_proxy_url"`
 	RemoteVersion         string   `json:"remote_version"`
 	Cwd                   string   `json:"cwd"`
 	CurrentFilePath       string   `json:"current_file_path"`
@@ -118,17 +120,18 @@ func loadConfig() (service.Config, string) {
 
 	host := flag.String("host", cfg.Host, "Listen host")
 	port := flag.Int("port", cfg.Port, "Listen port")
-	transport := flag.String("transport", string(cfg.Transport), "Lingma transport: auto, pipe, websocket")
+	transport := flag.String("transport", string(cfg.Transport), "Lingma/QoderCN transport: auto, pipe, websocket")
 	backend := flag.String("backend", string(cfg.Backend), "Backend mode: ipc or remote")
-	pipe := flag.String("pipe", cfg.Pipe, "Explicit Lingma named pipe path")
-	wsURL := flag.String("ws-url", cfg.WebSocketURL, "Explicit Lingma local websocket URL")
-	remoteBaseURL := flag.String("remote-base-url", cfg.RemoteBaseURL, "Remote Lingma API base URL")
-	remoteAuthFile := flag.String("remote-auth-file", cfg.RemoteAuthFile, "Remote Lingma credentials.json path; empty reads ~/.lingma cache")
-	remoteVersion := flag.String("remote-version", cfg.RemoteVersion, "Remote Lingma cosy version")
-	cwd := flag.String("cwd", cfg.Cwd, "Working directory used when creating Lingma sessions")
+	pipe := flag.String("pipe", cfg.Pipe, "Explicit Lingma/QoderCN IPC socket or named pipe path")
+	wsURL := flag.String("ws-url", cfg.WebSocketURL, "Explicit Lingma/QoderCN local websocket URL")
+	remoteBaseURL := flag.String("remote-base-url", cfg.RemoteBaseURL, "Remote Lingma/QoderCN API base URL")
+	remoteAuthFile := flag.String("remote-auth-file", cfg.RemoteAuthFile, "Remote Lingma/QoderCN credentials.json path; empty reads local login cache")
+	remoteProxyURL := flag.String("remote-proxy-url", cfg.RemoteProxyURL, "Explicit proxy URL for Remote API requests, e.g. http://127.0.0.1:7890")
+	remoteVersion := flag.String("remote-version", cfg.RemoteVersion, "Remote Lingma/QoderCN cosy version")
+	cwd := flag.String("cwd", cfg.Cwd, "Working directory used when creating Lingma/QoderCN sessions")
 	currentFilePath := flag.String("current-file-path", cfg.CurrentFilePath, "Current file path sent through ACP meta")
-	mode := flag.String("mode", cfg.Mode, "Lingma ACP mode value")
-	model := flag.String("model", cfg.Model, "Default Lingma model when API request omits model")
+	mode := flag.String("mode", cfg.Mode, "Lingma/QoderCN ACP mode value")
+	model := flag.String("model", cfg.Model, "Default Lingma/QoderCN model when API request omits model")
 	shellType := flag.String("shell-type", cfg.ShellType, "Shell type sent through ACP meta")
 	timeoutSeconds := flag.Int("timeout", int(cfg.Timeout/time.Second), "Per-request timeout in seconds; 0 disables the proxy deadline")
 	remoteFallbackEnabled := flag.Bool("remote-fallback", cfg.RemoteFallbackEnabled, "Enable remote timeout/5xx fallback to the next available model")
@@ -149,6 +152,7 @@ func loadConfig() (service.Config, string) {
 	cfg.WebSocketURL = strings.TrimSpace(*wsURL)
 	cfg.RemoteBaseURL = strings.TrimSpace(*remoteBaseURL)
 	cfg.RemoteAuthFile = strings.TrimSpace(*remoteAuthFile)
+	cfg.RemoteProxyURL = strings.TrimSpace(*remoteProxyURL)
 	cfg.RemoteVersion = strings.TrimSpace(*remoteVersion)
 	cfg.Cwd = strings.TrimSpace(*cwd)
 	cfg.CurrentFilePath = strings.TrimSpace(*currentFilePath)
@@ -159,6 +163,9 @@ func loadConfig() (service.Config, string) {
 	cfg.Timeout = time.Duration(*timeoutSeconds) * time.Second
 	cfg.RemoteFallbackEnabled = *remoteFallbackEnabled
 	cfg.RemoteFallbackModels = splitCSV(*remoteFallbackModels)
+	if err := remote.ValidateProxyURL(cfg.RemoteProxyURL); err != nil {
+		log.Fatal(err)
+	}
 
 	if configLoaded {
 		configPath = finalConfigPath
@@ -222,6 +229,9 @@ func overlayFileConfig(dst *service.Config, src fileConfig) {
 	if strings.TrimSpace(src.RemoteAuthFile) != "" {
 		dst.RemoteAuthFile = strings.TrimSpace(src.RemoteAuthFile)
 	}
+	if strings.TrimSpace(src.RemoteProxyURL) != "" {
+		dst.RemoteProxyURL = strings.TrimSpace(src.RemoteProxyURL)
+	}
 	if strings.TrimSpace(src.RemoteVersion) != "" {
 		dst.RemoteVersion = strings.TrimSpace(src.RemoteVersion)
 	}
@@ -278,6 +288,9 @@ func overlayEnvConfig(dst *service.Config) {
 	}
 	if value := strings.TrimSpace(os.Getenv("LINGMA_REMOTE_AUTH_FILE")); value != "" {
 		dst.RemoteAuthFile = value
+	}
+	if value := strings.TrimSpace(os.Getenv("LINGMA_REMOTE_PROXY_URL")); value != "" {
+		dst.RemoteProxyURL = value
 	}
 	if value := strings.TrimSpace(os.Getenv("LINGMA_REMOTE_VERSION")); value != "" {
 		dst.RemoteVersion = value
@@ -419,5 +432,8 @@ func defaultShellType() string {
 	if runtime.GOOS == "windows" {
 		return "powershell"
 	}
-	return "zsh"
+	if runtime.GOOS == "darwin" {
+		return "zsh"
+	}
+	return "bash"
 }

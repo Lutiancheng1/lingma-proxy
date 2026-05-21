@@ -28,6 +28,7 @@ type proxyConfigFile struct {
 	WebSocketURL          string   `json:"websocket_url"`
 	RemoteBaseURL         string   `json:"remote_base_url"`
 	RemoteAuthFile        string   `json:"remote_auth_file"`
+	RemoteProxyURL        string   `json:"remote_proxy_url"`
 	RemoteVersion         string   `json:"remote_version"`
 	Cwd                   string   `json:"cwd"`
 	CurrentFilePath       string   `json:"current_file_path"`
@@ -122,6 +123,9 @@ func applyProxyConfigFile(cfg *service.Config, fileCfg proxyConfigFile) {
 	if fileCfg.RemoteAuthFile != "" {
 		cfg.RemoteAuthFile = fileCfg.RemoteAuthFile
 	}
+	if fileCfg.RemoteProxyURL != "" {
+		cfg.RemoteProxyURL = fileCfg.RemoteProxyURL
+	}
 	if fileCfg.RemoteVersion != "" {
 		cfg.RemoteVersion = fileCfg.RemoteVersion
 	}
@@ -167,6 +171,7 @@ func buildProxyConfigFile(cfg service.Config) proxyConfigFile {
 		WebSocketURL:          cfg.WebSocketURL,
 		RemoteBaseURL:         cfg.RemoteBaseURL,
 		RemoteAuthFile:        cfg.RemoteAuthFile,
+		RemoteProxyURL:        cfg.RemoteProxyURL,
 		RemoteVersion:         cfg.RemoteVersion,
 		Cwd:                   cfg.Cwd,
 		CurrentFilePath:       cfg.CurrentFilePath,

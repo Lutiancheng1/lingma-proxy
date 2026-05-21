@@ -21,7 +21,7 @@ type pipeTransport struct {
 func connectPipeTransport(ctx context.Context, pipePath string) (framedTransport, error) {
 	conn, err := winio.DialPipeContext(ctx, pipePath)
 	if err != nil {
-		return nil, fmt.Errorf("connect Lingma IPC pipe %s: %w", pipePath, err)
+		return nil, fmt.Errorf("connect Lingma/QoderCN IPC pipe %s: %w", pipePath, err)
 	}
 	return &pipeTransport{
 		path:   pipePath,

@@ -156,6 +156,9 @@ type DetectionInfo struct {
 	IPCError                string `json:"ipcError,omitempty"`
 	RemoteBaseURL           string `json:"remoteBaseUrl"`
 	RemoteBaseURLSource     string `json:"remoteBaseUrlSource,omitempty"`
+	RemoteProxyURL          string `json:"remoteProxyUrl,omitempty"`
+	RemoteProxySource       string `json:"remoteProxySource,omitempty"`
+	RemoteProxyError        string `json:"remoteProxyError,omitempty"`
 	RemoteCredentialSuccess bool   `json:"remoteCredentialSuccess"`
 	RemoteCredentialSource  string `json:"remoteCredentialSource,omitempty"`
 	RemoteUserID            string `json:"remoteUserId,omitempty"`
@@ -278,6 +281,11 @@ func (a *App) onSecondInstanceLaunch(secondInstanceData options.SecondInstanceDa
 // beforeClose hides the window by default so the proxy can keep running.
 // QuitApp sets quitting=true before allowing the process to exit.
 func (a *App) beforeClose(ctx context.Context) bool {
+	if goruntime.GOOS == "linux" {
+		go a.forceQuit()
+		return true
+	}
+
 	a.mu.Lock()
 	if a.quitting {
 		a.mu.Unlock()
@@ -456,12 +464,18 @@ func (a *App) GetDetectionInfo() DetectionInfo {
 		addr = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	}
 	baseURL := remote.ResolveBaseURLWithSource(cfg.RemoteBaseURL)
+	proxyURL, proxySource := remote.ProxySource(cfg.RemoteProxyURL)
 	info := DetectionInfo{
 		ListenURL:           "http://" + addr,
 		Backend:             string(cfg.Backend),
 		BackendLabel:        backendLabel(cfg.Backend),
 		RemoteBaseURL:       baseURL.URL,
 		RemoteBaseURLSource: baseURL.Source,
+		RemoteProxyURL:      proxyURL,
+		RemoteProxySource:   proxySource,
+	}
+	if err := remote.ValidateProxyURL(proxyURL); err != nil {
+		info.RemoteProxyError = err.Error()
 	}
 
 	if opts, err := lingmaipc.ResolveDialOptions(cfg.Transport, cfg.Pipe, cfg.WebSocketURL); err == nil {
@@ -496,6 +510,9 @@ func (a *App) GetDetectionInfo() DetectionInfo {
 // UpdateConfig updates the configuration, saves to file, and restarts the proxy if running.
 // Frontend sends Timeout in seconds; we convert to time.Duration.
 func (a *App) UpdateConfig(cfg service.Config) error {
+	if err := remote.ValidateProxyURL(cfg.RemoteProxyURL); err != nil {
+		return err
+	}
 	// Convert seconds -> Duration if frontend sent a small value
 	if cfg.Timeout > 0 && cfg.Timeout < time.Second {
 		cfg.Timeout = cfg.Timeout * time.Second
@@ -539,6 +556,9 @@ func (a *App) StartProxy() error {
 	addr := fmt.Sprintf("%s:%d", a.cfg.Host, a.cfg.Port)
 	cfg := a.cfg
 	a.mu.Unlock()
+	if err := remote.ValidateProxyURL(cfg.RemoteProxyURL); err != nil {
+		return err
+	}
 
 	svc := service.New(cfg)
 	server := httpapi.NewServer(addr, svc)
@@ -1620,6 +1640,7 @@ func buildConfigSummary(cfg service.Config, stats TokenStats, status ProxyStatus
 		"backend":               string(cfg.Backend),
 		"transport":             string(cfg.Transport),
 		"remoteBaseURL":         strings.TrimSpace(cfg.RemoteBaseURL),
+		"remoteProxyURL":        strings.TrimSpace(cfg.RemoteProxyURL),
 		"remoteVersion":         strings.TrimSpace(cfg.RemoteVersion),
 		"cwd":                   cfg.Cwd,
 		"currentFilePath":       cfg.CurrentFilePath,
@@ -1888,6 +1909,102 @@ func defaultConfig() service.Config {
 		RemoteFallbackModels:  service.DefaultRemoteFallbackModels(),
 	}
 
+	// Try to load config file from multiple locations
+	configPaths := configSearchPaths()
+	for _, configPath := range configPaths {
+		if info, err := os.Stat(configPath); err == nil && !info.IsDir() {
+			if data, err := os.ReadFile(configPath); err == nil {
+				var fileCfg struct {
+					Host                  string   `json:"host"`
+					Port                  int      `json:"port"`
+					Backend               string   `json:"backend"`
+					Transport             string   `json:"transport"`
+					Pipe                  string   `json:"pipe"`
+					WebSocketURL          string   `json:"websocket_url"`
+					RemoteBaseURL         string   `json:"remote_base_url"`
+					RemoteAuthFile        string   `json:"remote_auth_file"`
+					RemoteProxyURL        string   `json:"remote_proxy_url"`
+					RemoteVersion         string   `json:"remote_version"`
+					Cwd                   string   `json:"cwd"`
+					CurrentFilePath       string   `json:"current_file_path"`
+					Mode                  string   `json:"mode"`
+					Model                 string   `json:"model"`
+					ShellType             string   `json:"shell_type"`
+					SessionMode           string   `json:"session_mode"`
+					TimeoutSeconds        int      `json:"timeout"`
+					WarmupTimeoutSeconds  int      `json:"warmup_timeout"`
+					RemoteFallbackEnabled *bool    `json:"remote_fallback_enabled"`
+					RemoteFallbackModels  []string `json:"remote_fallback_models"`
+				}
+				if err := json.Unmarshal(data, &fileCfg); err == nil {
+					if fileCfg.Host != "" {
+						cfg.Host = fileCfg.Host
+					}
+					if fileCfg.Port > 0 {
+						cfg.Port = fileCfg.Port
+					}
+					if fileCfg.Backend != "" {
+						cfg.Backend = service.BackendMode(fileCfg.Backend)
+					}
+					if fileCfg.Transport != "" {
+						if t, err := lingmaipc.ParseTransport(fileCfg.Transport); err == nil {
+							cfg.Transport = t
+						}
+					}
+					if fileCfg.Pipe != "" {
+						cfg.Pipe = fileCfg.Pipe
+					}
+					if fileCfg.WebSocketURL != "" {
+						cfg.WebSocketURL = fileCfg.WebSocketURL
+					}
+					if fileCfg.RemoteBaseURL != "" {
+						cfg.RemoteBaseURL = fileCfg.RemoteBaseURL
+					}
+					if fileCfg.RemoteAuthFile != "" {
+						cfg.RemoteAuthFile = fileCfg.RemoteAuthFile
+					}
+					if fileCfg.RemoteProxyURL != "" {
+						cfg.RemoteProxyURL = fileCfg.RemoteProxyURL
+					}
+					if fileCfg.RemoteVersion != "" {
+						cfg.RemoteVersion = fileCfg.RemoteVersion
+					}
+					if fileCfg.Cwd != "" {
+						cfg.Cwd = fileCfg.Cwd
+					}
+					if fileCfg.CurrentFilePath != "" {
+						cfg.CurrentFilePath = fileCfg.CurrentFilePath
+					}
+					if fileCfg.Mode != "" {
+						cfg.Mode = fileCfg.Mode
+					}
+					if fileCfg.Model != "" {
+						cfg.Model = fileCfg.Model
+					}
+					if fileCfg.ShellType != "" {
+						cfg.ShellType = fileCfg.ShellType
+					}
+					if fileCfg.SessionMode != "" {
+						cfg.SessionMode = service.SessionMode(fileCfg.SessionMode)
+					}
+					if fileCfg.TimeoutSeconds >= 0 {
+						cfg.Timeout = time.Duration(fileCfg.TimeoutSeconds) * time.Second
+					}
+					if fileCfg.WarmupTimeoutSeconds > 0 {
+						cfg.WarmupTimeout = time.Duration(fileCfg.WarmupTimeoutSeconds) * time.Second
+					}
+					if fileCfg.RemoteFallbackEnabled != nil {
+						cfg.RemoteFallbackEnabled = *fileCfg.RemoteFallbackEnabled
+					}
+					if len(fileCfg.RemoteFallbackModels) > 0 {
+						cfg.RemoteFallbackModels = cleanConfigStrings(fileCfg.RemoteFallbackModels)
+					}
+				}
+				break // loaded successfully
+			}
+		}
+	}
+
 	return cfg
 }
 
@@ -1964,16 +2081,19 @@ func defaultShellType() string {
 	if goruntime.GOOS == "windows" {
 		return "powershell"
 	}
-	return "zsh"
+	if goruntime.GOOS == "darwin" {
+		return "zsh"
+	}
+	return "bash"
 }
 
 func transportFallbackHint() string {
-	return "请确认 Lingma 插件已启动并登录；如果自动探测失败，请到设置页手动填写：远端 API 官方默认域名 https://lingma.alibabacloud.com，企业版请填写你的专属域名；macOS WebSocket 示例 ws://127.0.0.1:36510/，Windows Named Pipe 示例 \\\\.\\pipe\\lingma-xxxx，或 Windows WebSocket 示例 ws://127.0.0.1:36510/。"
+	return "请确认 Lingma / QoderCN 已启动并登录；如果自动探测失败，请到设置页手动填写：远端 API 官方默认域名 https://lingma.alibabacloud.com，企业版请填写你的专属域名；macOS WebSocket 示例 ws://127.0.0.1:36510/，macOS Socket 示例 ~/Library/Application Support/QoderCN/SharedClientCache/qodercn.sock，Windows Named Pipe 示例 \\\\.\\pipe\\lingma-xxxx 或 \\\\.\\pipe\\qodercn-xxxx。"
 }
 
 func warmupFallbackHint(backend service.BackendMode) string {
 	if backend == service.BackendRemote {
 		return "请检查设置页“当前解析结果”里的远端域名是否为官方或企业专属 API 域名；如果出现 OSS/静态资源域名或模型列表 404，请手动填写远端 API 官方默认域名 https://lingma.alibabacloud.com，企业版请填写你的专属域名，并确认登录态未过期。"
 	}
-	return "请确认 Lingma 插件已启动并登录；如果自动探测失败，请到设置页手动填写：macOS WebSocket 示例 ws://127.0.0.1:36510/，Windows Named Pipe 示例 \\\\.\\pipe\\lingma-xxxx，或 Windows WebSocket 示例 ws://127.0.0.1:36510/。"
+	return "请确认 Lingma / QoderCN 已启动并登录；如果自动探测失败，请到设置页手动填写：macOS WebSocket 示例 ws://127.0.0.1:36510/，macOS Socket 示例 ~/Library/Application Support/QoderCN/SharedClientCache/qodercn.sock，Windows Named Pipe 示例 \\\\.\\pipe\\lingma-xxxx 或 \\\\.\\pipe\\qodercn-xxxx。"
 }

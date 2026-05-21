@@ -25,6 +25,37 @@ func TestNewKeepsPositiveTimeout(t *testing.T) {
 	}
 }
 
+func TestValidateProxyURL(t *testing.T) {
+	valid := []string{"", "http://127.0.0.1:7890", "https://proxy.example.com", "socks5://127.0.0.1:1080"}
+	for _, value := range valid {
+		if err := ValidateProxyURL(value); err != nil {
+			t.Fatalf("ValidateProxyURL(%q) = %v, want nil", value, err)
+		}
+	}
+	invalid := []string{"127.0.0.1:7890", "ftp://proxy.example.com", "http://"}
+	for _, value := range invalid {
+		if err := ValidateProxyURL(value); err == nil {
+			t.Fatalf("ValidateProxyURL(%q) = nil, want error", value)
+		}
+	}
+}
+
+func TestProxySourcePrefersExplicitConfig(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://env-proxy:7890")
+	got, source := ProxySource("http://explicit-proxy:7890")
+	if got != "http://explicit-proxy:7890" || source != "explicit config" {
+		t.Fatalf("ProxySource explicit = (%q, %q)", got, source)
+	}
+}
+
+func TestProxySourceReadsEnvironment(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://env-proxy:7890")
+	got, source := ProxySource("")
+	if got != "http://env-proxy:7890" || source != "HTTPS_PROXY" {
+		t.Fatalf("ProxySource env = (%q, %q)", got, source)
+	}
+}
+
 func TestExtractBaseURLFromEndpointLog(t *testing.T) {
 	got := extractBaseURLFromText(`2026-04-10 INFO Update endpoint success. endpoint config: https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com`)
 	want := "https://ai-lingma-example-cn-beijing.rdc.aliyuncs.com"
@@ -288,6 +319,13 @@ func TestExtractMachineIDFromTextMarkers(t *testing.T) {
 	}
 }
 
+func TestExtractMachineIDFromJetBrainsLingmaGeneratedUUID(t *testing.T) {
+	got := extractMachineIDFromText(`2026-04-14T10:18:23.823+0800	INFO	Generated uuid: 4d344c56-5436-432d-9658-506d4d344c2d`)
+	if got != "4d344c56-5436-432d-9658-506d4d344c2d" {
+		t.Fatalf("machine id = %q", got)
+	}
+}
+
 func TestExtractMachineIDFromTextJSON(t *testing.T) {
 	got := extractMachineIDFromText(`{"machineId":"windows-machine-id-1234567890","other":true}`)
 	if got != "windows-machine-id-1234567890" {
@@ -310,6 +348,99 @@ func TestCandidateLingmaCacheDirsIncludesVSCodeSharedClientCache(t *testing.T) {
 	t.Fatalf("missing vscode shared client cache %q in %#v", want, dirs)
 }
 
+func TestCandidateLingmaCacheDirsIncludesQoderCNSharedClientCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	dirs := candidateLingmaCacheDirs()
+	want := filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache")
+	for _, dir := range dirs {
+		if dir == want {
+			return
+		}
+	}
+	t.Fatalf("missing QoderCN shared client cache %q in %#v", want, dirs)
+}
+
+func TestCandidateLingmaCacheDirsIncludesDashedQoderCNSharedClient(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	dirs := candidateLingmaCacheDirs()
+	want := filepath.Join(home, ".qoder-cn", "shared_client")
+	for _, dir := range dirs {
+		if dir == want {
+			return
+		}
+	}
+	t.Fatalf("missing dashed QoderCN shared_client cache %q in %#v", want, dirs)
+}
+
+func TestCredentialLoadErrorSummaryIsCompactByDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	t.Setenv("LINGMA_VERBOSE_CREDENTIAL_ERRORS", "")
+
+	_, err := importLingmaCacheCredential()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	text := err.Error()
+	if !strings.Contains(text, "未找到可用的 QoderCN/Lingma 登录缓存") {
+		t.Fatalf("unexpected compact error: %q", text)
+	}
+	if strings.Contains(text, filepath.Join(home, ".qoder-cn", "shared_client")) {
+		t.Fatalf("compact error should not include full candidate paths: %q", text)
+	}
+	if !strings.Contains(text, "LINGMA_VERBOSE_CREDENTIAL_ERRORS=1") {
+		t.Fatalf("compact error should mention verbose switch: %q", text)
+	}
+}
+
+func TestCredentialLoadErrorVerboseIncludesFullPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	t.Setenv("LINGMA_VERBOSE_CREDENTIAL_ERRORS", "1")
+
+	_, err := importLingmaCacheCredential()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	text := err.Error()
+	want := filepath.Join(home, ".qoder-cn", "shared_client")
+	if !strings.Contains(text, want) {
+		t.Fatalf("verbose error should include full candidate path %q: %q", want, text)
+	}
+}
+
+func TestCandidateLingmaCacheDirsPrefersQoderCNBeforeLingma(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	dirs := candidateLingmaCacheDirs()
+	qoder := filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache")
+	lingma := filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache")
+	qoderIndex, lingmaIndex := -1, -1
+	for i, dir := range dirs {
+		switch dir {
+		case qoder:
+			qoderIndex = i
+		case lingma:
+			lingmaIndex = i
+		}
+	}
+	if qoderIndex < 0 || lingmaIndex < 0 || qoderIndex > lingmaIndex {
+		t.Fatalf("QoderCN cache should be preferred before Lingma cache, qoder=%d lingma=%d dirs=%#v", qoderIndex, lingmaIndex, dirs)
+	}
+}
+
 func TestLoadMachineIDReadsVSCodeSharedClientCacheID(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "cache"), 0755); err != nil {
@@ -323,6 +454,23 @@ func TestLoadMachineIDReadsVSCodeSharedClientCacheID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got != "abcdefghijklmnop1234" {
+		t.Fatalf("machine id = %q", got)
+	}
+}
+
+func TestLoadMachineIDReadsQoderCLIAuthIDFallback(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "cli", ".auth"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cli", ".auth", "id"), []byte("qoder-machine-id-1234567890"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadMachineID(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "qoder-machine-id-1234567890" {
 		t.Fatalf("machine id = %q", got)
 	}
 }

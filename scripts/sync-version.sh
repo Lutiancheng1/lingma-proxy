@@ -62,6 +62,12 @@ writeJSON('desktop/wails.json', (data) => {
   data.info.productVersion = version;
 });
 
+fs.mkdirSync(path.join(root, 'internal', 'version'), { recursive: true });
+fs.writeFileSync(
+  path.join(root, 'internal', 'version', 'version.go'),
+  `package version\n\n// Version is generated from the repository-level VERSION file.\nconst Version = ${JSON.stringify(version)}\n`
+);
+
 replaceBetween(
   'README.md',
   '<!-- VERSION:CURRENT:BEGIN -->',

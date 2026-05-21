@@ -118,6 +118,14 @@ const lastBridgeSnapshot = ref({
   running: false,
 })
 let bridgeStatusPollTimer = null
+const remoteProxyStatus = computed(() => {
+  if (!detection.value) return ''
+  if (detection.value.remoteProxyError) return detection.value.remoteProxyError
+  if (detection.value.remoteProxyUrl) {
+    return `${detection.value.remoteProxyUrl}（${detection.value.remoteProxySource || '显式配置'}）`
+  }
+  return '未显式配置；如存在 HTTP_PROXY / HTTPS_PROXY，Go 默认传输仍会尊重系统环境变量'
+})
 
 const selectOptions = {
   Backend: [
@@ -126,7 +134,7 @@ const selectOptions = {
   ],
   Transport: [
     { value: 'auto', label: '自动' },
-    { value: 'pipe', label: '命名管道' },
+    { value: 'pipe', label: 'Socket / Named Pipe' },
     { value: 'websocket', label: 'WebSocket' },
   ],
   Mode: [
@@ -426,7 +434,7 @@ async function handleBridgeStepClick(step) {
     <div class="page-title">
       <div>
         <h1>设置</h1>
-        <p>配置监听地址、Lingma 传输方式、模型探测超时、会话复用和请求超时。</p>
+        <p>配置监听地址、Lingma / QoderCN 传输方式、模型探测超时、会话复用和请求超时。</p>
       </div>
       <button class="primary-button" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中...' : '保存并重启' }}
@@ -471,7 +479,7 @@ async function handleBridgeStepClick(step) {
             <input v-model.number="config.Port" type="number" placeholder="8095" />
           </div>
           <div class="field">
-            <label>传输方式</label>
+            <label>Lingma / QoderCN 传输方式</label>
             <div class="custom-select" :class="{ open: openSelect === 'Transport' }">
               <button type="button" @click="toggleSelect('Transport')">
                 <span>{{ selectLabel('Transport') }}</span>
@@ -519,19 +527,24 @@ async function handleBridgeStepClick(step) {
           </div>
           <div class="field span-2">
             <label>WebSocket 地址</label>
-            <input v-model="config.WebSocketURL" type="text" placeholder="留空自动探测 Lingma WebSocket" />
+            <input v-model="config.WebSocketURL" type="text" placeholder="留空自动探测 Lingma / QoderCN WebSocket" />
           </div>
           <div class="field span-2">
-            <label>命名管道</label>
-            <input v-model="config.Pipe" type="text" placeholder="留空自动探测 Windows Named Pipe" />
+            <label>Socket / Named Pipe</label>
+            <input v-model="config.Pipe" type="text" placeholder="留空自动探测 macOS Socket / Windows Named Pipe" />
           </div>
           <div class="field span-2">
             <label>远端 API 域名</label>
             <input v-model="config.RemoteBaseURL" type="text" placeholder="留空自动探测，默认 https://lingma.alibabacloud.com" />
           </div>
           <div class="field span-2">
+            <label>远端代理地址</label>
+            <input v-model="config.RemoteProxyURL" type="text" placeholder="可选，例如 http://127.0.0.1:7890" />
+            <small>仅影响远端 API 上游 HTTP 请求，不影响本地 IPC WebSocket / Named Pipe。</small>
+          </div>
+          <div class="field span-2">
             <label>远端认证文件</label>
-            <input v-model="config.RemoteAuthFile" type="text" placeholder="可选 credentials.json；留空只读 ~/.lingma/cache/user" />
+            <input v-model="config.RemoteAuthFile" type="text" placeholder="可选 credentials.json；留空只读本机 Lingma / QoderCN 登录缓存" />
           </div>
           <div class="field span-2">
             <label>远端 Cosy 版本</label>
@@ -540,7 +553,7 @@ async function handleBridgeStepClick(step) {
         </div>
         <div class="hint-box">
           <strong>自动探测失败时</strong>
-          <span>IPC 模式先确认 VS Code / Lingma 插件已启动并登录。远端 API 模式会优先读取认证文件；留空时只读 <code>~/.lingma/cache/user</code>，不会写入或上传登录态。</span>
+          <span>IPC 模式先确认 Lingma / QoderCN 已启动并登录。远端 API 模式会优先读取认证文件；留空时只读本机 Lingma / QoderCN 登录缓存，不会写入或上传登录态。</span>
         </div>
         <div v-if="detection" class="detect-card">
           <div class="detect-title">
@@ -569,6 +582,10 @@ async function handleBridgeStepClick(step) {
               </dd>
             </div>
             <div>
+              <dt>远端代理</dt>
+              <dd :class="{ 'warn-text': detection.remoteProxyError }">{{ remoteProxyStatus }}</dd>
+            </div>
+            <div>
               <dt>登录态来源</dt>
               <dd v-if="detection.remoteCredentialSuccess">{{ detection.remoteCredentialSource }}</dd>
               <dd v-else class="warn-text">{{ detection.remoteCredentialError || '未探测到' }}</dd>
@@ -593,7 +610,7 @@ async function handleBridgeStepClick(step) {
         <div class="panel-header">
           <div>
             <h2>会话与环境</h2>
-            <p>仅在 IPC 插件模式下生效，影响 Lingma 会话上下文和工具执行环境。</p>
+            <p>仅在 IPC 插件模式下生效，影响 Lingma / QoderCN 会话上下文和工具执行环境。</p>
           </div>
           <span class="status-chip" :class="isIPCBackend ? 'ok' : 'warn'">{{ isIPCBackend ? '仅 IPC 生效' : '远端模式忽略' }}</span>
         </div>
@@ -667,75 +684,75 @@ async function handleBridgeStepClick(step) {
             <label>当前文件</label>
             <input v-model="config.CurrentFilePath" type="text" placeholder="可选" />
           </div>
-            <div class="field span-2">
-              <label>工作目录</label>
-              <input v-model="config.Cwd" type="text" placeholder="Lingma 创建 session 时使用的 cwd" />
-            </div>
+          <div class="field span-2">
+            <label>工作目录</label>
+            <input v-model="config.Cwd" type="text" placeholder="Lingma / QoderCN 创建 session 时使用的 cwd" />
           </div>
+        </div>
         </fieldset>
         </div>
 
         <div class="glass-panel">
           <div class="panel-header">
-          <div>
-            <div class="panel-title-row">
-              <h2>Feishu Bot Bridge</h2>
-              <div class="inline-help">
-                <button type="button" class="inline-help-trigger" aria-label="查看会话命令说明">
-                  <i class="bi bi-question-circle" aria-hidden="true"></i>
+            <div>
+              <div class="panel-title-row">
+                <h2>Feishu Bot Bridge</h2>
+                <div class="inline-help">
+                  <button type="button" class="inline-help-trigger" aria-label="查看会话命令说明">
+                    <i class="bi bi-question-circle" aria-hidden="true"></i>
+                  </button>
+                  <div class="inline-help-popover">
+                    <strong>会话命令</strong>
+                    <span><code>/help</code>：查看命令帮助</span>
+                    <span><code>/compact</code>：手动压缩当前会话上下文</span>
+                    <span><code>/summary</code>：查看当前会话摘要</span>
+                    <span><code>/reset</code>：清空当前飞书会话上下文</span>
+                  </div>
+                </div>
+              </div>
+              <p>通过本机 lark-cli 把飞书 Bot 消息桥接到 Lingma Proxy。默认关闭，不影响现有代理功能。</p>
+            </div>
+            <span class="status-chip" :class="bridgeStatus?.running ? 'ok' : 'warn'">
+              {{ bridgeStatus?.running ? '运行中' : '未运行' }}
+            </span>
+          </div>
+
+          <div class="form-grid compact-form-grid">
+            <div class="field">
+              <label>启用 Bridge</label>
+              <label class="switch">
+                <input v-model="bridgeConfig.enabled" type="checkbox" />
+                <span></span>
+              </label>
+            </div>
+            <div class="field">
+              <label>随代理自动启动</label>
+              <label class="switch">
+                <input v-model="bridgeConfig.autoStart" type="checkbox" />
+                <span></span>
+              </label>
+            </div>
+            <div class="field">
+              <label>模型</label>
+              <div class="custom-select" :class="{ open: openSelect === 'BridgeModel' }">
+                <button type="button" @click="toggleSelect('BridgeModel')">
+                  <span>{{ bridgeModelLabel }}</span>
+                  <i class="bi bi-chevron-down" aria-hidden="true"></i>
                 </button>
-                <div class="inline-help-popover">
-                  <strong>会话命令</strong>
-                  <span><code>/help</code>：查看命令帮助</span>
-                  <span><code>/compact</code>：手动压缩当前会话上下文</span>
-                  <span><code>/summary</code>：查看当前会话摘要</span>
-                  <span><code>/reset</code>：清空当前飞书会话上下文</span>
+                <div v-if="openSelect === 'BridgeModel'" class="select-menu">
+                  <button
+                    v-for="model in bridgeModelOptions"
+                    :key="model.id"
+                    :class="{ selected: model.id === bridgeConfig.model }"
+                    type="button"
+                    @click="chooseBridgeModel(model.id)"
+                  >
+                    {{ model.name || model.id }}
+                  </button>
                 </div>
               </div>
             </div>
-            <p>通过本机 lark-cli 把飞书 Bot 消息桥接到 Lingma Proxy。默认关闭，不影响现有代理功能。</p>
           </div>
-          <span class="status-chip" :class="bridgeStatus?.running ? 'ok' : 'warn'">
-            {{ bridgeStatus?.running ? '运行中' : '未运行' }}
-          </span>
-        </div>
-
-          <div class="form-grid compact-form-grid">
-          <div class="field">
-            <label>启用 Bridge</label>
-            <label class="switch">
-              <input v-model="bridgeConfig.enabled" type="checkbox" />
-              <span></span>
-            </label>
-          </div>
-          <div class="field">
-            <label>随代理自动启动</label>
-            <label class="switch">
-              <input v-model="bridgeConfig.autoStart" type="checkbox" />
-              <span></span>
-            </label>
-          </div>
-          <div class="field">
-            <label>模型</label>
-            <div class="custom-select" :class="{ open: openSelect === 'BridgeModel' }">
-              <button type="button" @click="toggleSelect('BridgeModel')">
-                <span>{{ bridgeModelLabel }}</span>
-                <i class="bi bi-chevron-down" aria-hidden="true"></i>
-              </button>
-              <div v-if="openSelect === 'BridgeModel'" class="select-menu">
-                <button
-                  v-for="model in bridgeModelOptions"
-                  :key="model.id"
-                  :class="{ selected: model.id === bridgeConfig.model }"
-                  type="button"
-                  @click="chooseBridgeModel(model.id)"
-                >
-                  {{ model.name || model.id }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
 
         <div class="actions-row bridge-actions-top">
           <button class="primary-button" type="button" :disabled="bridgeBusy" @click="saveBridgeConfig">

@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-Lingma Proxy exposes Tongyi Lingma as standard **OpenAI-compatible** and **Anthropic-compatible** HTTP APIs. It can use either the recommended Remote API backend or the local IDE plugin IPC channel, and ships as both a CLI proxy service and a cross-platform desktop app for macOS and Windows.
+Lingma Proxy exposes Tongyi Lingma / QoderCN as standard **OpenAI-compatible** and **Anthropic-compatible** HTTP APIs. It can use either the recommended Remote API backend or the local IDE IPC channel, and ships as a CLI proxy service for macOS, Windows, and Linux, plus a desktop app for macOS, Windows, and Linux.
 
 The project is designed for tools such as Claude Code, Hermes, CodeBuddy, Codex CLI, OpenCode, custom agents, and any client that can talk to OpenAI or Anthropic style APIs.
 
@@ -17,8 +17,25 @@ Model availability is not the same for every Lingma user.
 
 The proxy now supports two backend modes:
 
-- **Remote API mode (default, recommended)**: imports the local Lingma login cache or an explicit credential file and calls Lingma remote APIs directly. This behaves closest to a normal hosted API, avoids IDE/plugin session and environment limits, and is currently the best mode for Claude Code / Hermes style agents.
-- **IPC plugin mode**: connects to the local Lingma IDE plugin over WebSocket / Named Pipe. This keeps behavior closest to the IDE plugin, but it can inherit IDE session lifetime, local plugin state, and environment constraints, so it is mainly a compatibility fallback.
+- **Remote API mode (default, recommended)**: imports the local Lingma / QoderCN login cache or an explicit credential file and calls the remote APIs directly. This behaves closest to a normal hosted API, avoids IDE/plugin session and environment limits, and is currently the best mode for Claude Code / Hermes style agents.
+- **IPC mode**: connects to the local Lingma / QoderCN runtime over WebSocket / Named Pipe. This keeps behavior closest to the local IDE runtime, but it can inherit IDE session lifetime, local runtime state, and environment constraints, so it is mainly a compatibility fallback.
+
+## Runtime Compatibility
+
+The current macOS validation status is:
+
+For the complete Chat / Responses / Anthropic Messages experience, keep either the QoderCN desktop app or a supported Tongyi Lingma desktop / legacy Lingma runtime running. The VS Code extension `alibaba-cloud.tongyi-lingma` alone is not enough for full IPC generation because it does not expose the `session/new` RPC used by this proxy.
+
+| Runtime | Remote API | IPC WebSocket / Pipe | Status |
+| --- | --- | --- | --- |
+| QoderCN desktop app only | verified | verified on macOS WebSocket | Full OpenAI / Anthropic endpoint matrix passed. |
+| QoderCN desktop app + `alibaba-cloud.tongyi-lingma` VS Code extension | verified | verified; auto-detection prefers QoderCN | Full endpoint matrix passed. |
+| JetBrains Tongyi Lingma plugin in IntelliJ IDEA | verified | verified on macOS WebSocket | Uses `~/.lingma`; model list, Chat Completions, Responses, and Anthropic Messages passed. |
+| Tongyi Lingma desktop app / legacy Lingma runtime | supported as fallback | supported as fallback | Kept for existing users. |
+| `alibaba-cloud.tongyi-lingma` VS Code extension only | remote cache may work | partial only | Model discovery works, but this extension runtime does not support the `session/new` RPC used for full Chat/Responses/Messages generation. |
+| Windows QoderCN | expected | not yet verified on a Windows machine | Named Pipe compatibility still needs Windows real-machine or VM validation. |
+
+Auto-detection prefers QoderCN runtime files first, then falls back to Lingma runtime files. In a local coexistence test, QoderCN exposed `37109`, the VS Code Lingma extension exposed `36510`, and the proxy selected QoderCN.
 
 ## Runtime Requirements and Reasoning Boundaries
 
@@ -29,7 +46,7 @@ The proxy now supports two backend modes:
 ## Current Version
 
 <!-- VERSION:CURRENT:BEGIN -->
-Current desktop app version: `v1.5.3`.
+Current desktop app version: `v1.6.2`.
 
 The canonical source is [VERSION](./VERSION). Run `./scripts/sync-version.sh` to propagate it into [desktop/wails.json](./desktop/wails.json), the desktop UI, and release-facing docs.
 <!-- VERSION:CURRENT:END -->
@@ -42,9 +59,15 @@ Release builds are produced by GitHub Actions for:
 | --- | --- | --- |
 | `lingma-proxy_<tag>_darwin_arm64.tar.gz` | macOS | CLI proxy |
 | `lingma-proxy_<tag>_windows_amd64.zip` | Windows | CLI proxy |
+| `lingma-proxy_<tag>_linux_amd64.tar.gz` | Linux x64 | CLI proxy |
+| `lingma-proxy_<tag>_linux_arm64.tar.gz` | Linux arm64 | CLI proxy |
 | `lingma-proxy-desktop_<tag>_darwin_arm64.dmg` | macOS Apple Silicon | Drag-to-install desktop app |
 | `lingma-proxy-desktop_<tag>_darwin_arm64.zip` | macOS Apple Silicon | Raw `.app` archive |
 | `lingma-proxy-desktop_<tag>_windows_amd64.zip` | Windows | Desktop app |
+| `lingma-proxy-desktop_<tag>_linux_amd64.deb` | Linux x64 | Debian / Ubuntu desktop app |
+| `lingma-proxy-desktop_<tag>_linux_amd64.rpm` | Linux x64 | Fedora / RHEL desktop app |
+| `lingma-proxy-desktop_<tag>_linux_arm64.deb` | Linux arm64 | Debian / Ubuntu desktop app |
+| `lingma-proxy-desktop_<tag>_linux_arm64.rpm` | Linux arm64 | Fedora / RHEL desktop app |
 | `lingma-proxy_<tag>_sha256.txt` | all | Checksums |
 
 ### Which Package Should I Download?
@@ -54,8 +77,13 @@ Release builds are produced by GitHub Actions for:
 | macOS on Apple Silicon (M1/M2/M3/M4) | `lingma-proxy-desktop_<tag>_darwin_arm64.dmg` | Open the DMG and drag `Lingma Proxy.app` to `Applications`. |
 | macOS on Apple Silicon, portable archive | `lingma-proxy-desktop_<tag>_darwin_arm64.zip` | Same app, but packaged as a zip instead of a drag-to-install DMG. |
 | Windows x64 / x86_64 / AMD64 | `lingma-proxy-desktop_<tag>_windows_amd64.zip` | This is the correct package for normal 64-bit Windows PCs, including Intel and AMD CPUs. |
+| Ubuntu / Debian x64 desktop | `lingma-proxy-desktop_<tag>_linux_amd64.deb` | Desktop GUI package. Remote API mode is recommended on Linux. |
+| Fedora / RHEL x64 desktop | `lingma-proxy-desktop_<tag>_linux_amd64.rpm` | Desktop GUI package. Remote API mode is recommended on Linux. |
+| Ubuntu / Debian arm64 desktop | `lingma-proxy-desktop_<tag>_linux_arm64.deb` | Use this for ARM64 Linux VMs, including Ubuntu Desktop in Parallels on Apple Silicon. |
+| Fedora / RHEL arm64 desktop | `lingma-proxy-desktop_<tag>_linux_arm64.rpm` | ARM64 Linux desktop package. Remote API mode is recommended on Linux. |
 | macOS CLI only | `lingma-proxy_<tag>_darwin_arm64.tar.gz` | Terminal-only proxy binary. |
 | Windows CLI only | `lingma-proxy_<tag>_windows_amd64.zip` | Terminal-only proxy binary for 64-bit Windows. |
+| Linux CLI only | `lingma-proxy_<tag>_linux_amd64.tar.gz` or `linux_arm64.tar.gz` | Terminal-only proxy binary. Remote API mode is recommended on Linux. |
 
 There is currently no separate `windows_arm64` package. On a normal x64 Windows machine, choose `windows_amd64`.
 
@@ -69,7 +97,7 @@ The desktop app wraps the proxy with a native-feeling control panel:
 - View full request and response bodies with internal scrolling and hidden scrollbars.
 - Export redacted feedback bundles for troubleshooting without bundling raw login caches or unlimited request payloads.
 - Copy endpoint URLs, model IDs, request logs, and response logs with visible feedback.
-- Detect Lingma IPC paths automatically on macOS and Windows, with manual fallback settings.
+- Detect Lingma / QoderCN IPC paths automatically on macOS and Windows, with manual fallback settings.
 - Follow system theme automatically, or switch light/dark mode manually.
 - Keep the proxy running when the window is closed; quit explicitly from the app/menu.
 
@@ -258,8 +286,8 @@ flowchart LR
 
 | Platform | Default transport | Detection |
 | --- | --- | --- |
-| macOS | WebSocket | reads Lingma `SharedClientCache` files under user application support paths and `~/.lingma` fallbacks |
-| Windows | Named Pipe / WebSocket | scans Lingma named pipes plus `%APPDATA%`, `%LOCALAPPDATA%`, `%ProgramData%`, and `%USERPROFILE%\.lingma` shared cache hints |
+| macOS | WebSocket | reads QoderCN / Lingma `SharedClientCache` files, JetBrains Lingma `~/.lingma/.info.json`, and `~/.lingma` fallbacks |
+| Windows | Named Pipe / WebSocket | scans Lingma / QoderCN named pipes plus `%APPDATA%`, `%LOCALAPPDATA%`, `%ProgramData%`, `%USERPROFILE%\.lingma`, and `%USERPROFILE%\.qoder-cn` shared cache hints |
 | Linux | WebSocket | reads `~/.lingma` / XDG hints when present; manual `--ws-url` is still recommended |
 
 If auto detection fails, set the path manually in the desktop Settings page or pass CLI flags:
@@ -284,9 +312,14 @@ By default it reads the local Lingma login cache in read-only mode:
 ```text
 ~/.lingma/cache/user
 ~/.lingma/cache/id
+~/.lingma/cli/.auth/id
 ~/.lingma/logs/lingma.log
+~/.qoder-cn/shared_client/cache/user
+~/.qoder-cn/shared_client/cache/id
+~/.qoder-cn/shared_client/cli/.auth/id
 %APPDATA%\Lingma\cache\user
 %LOCALAPPDATA%\Lingma\cache\user
+%USERPROFILE%\.qoder-cn\shared_client\cache\user
 XDG config/state Lingma cache paths when present
 ```
 
@@ -298,6 +331,16 @@ lingma-proxy \
   --remote-base-url https://lingma.alibabacloud.com \
   --remote-auth-file ~/.config/lingma-proxy/credentials.json
 ```
+
+If your enterprise network requires an HTTP(S) proxy, configure it explicitly:
+
+```bash
+lingma-proxy \
+  --backend remote \
+  --remote-proxy-url http://127.0.0.1:7890
+```
+
+The same setting is available as JSON config key `remote_proxy_url` or environment variable `LINGMA_REMOTE_PROXY_URL`. When it is empty, Lingma Proxy keeps Go's default transport behavior and still respects `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` from the process environment.
 
 Credential file format:
 
@@ -319,7 +362,8 @@ Notes:
 - Remote API mode is the recommended default for day-to-day agent usage. It bypasses the IDE/plugin IPC runtime, so it is less affected by plugin session state, IDE working directory, or local extension environment limitations.
 - Remote mode does not write or migrate login state. It only reads the local Lingma cache or the credential file you provide.
 - If your Lingma plugin uses a dedicated domain, remote mode first uses `--remote-base-url`, `LINGMA_REMOTE_BASE_URL`, or the JSON config field. If those are empty, it scans Lingma's local logs on macOS, Windows, and Linux for endpoint hints such as `endpoint config:` and marketplace service URLs.
-- The desktop Settings page shows the resolved remote domain and detection source without exposing tokens.
+- `--remote-proxy-url`, `LINGMA_REMOTE_PROXY_URL`, or `remote_proxy_url` only affects Remote API upstream HTTP requests. Local IPC WebSocket / named-pipe connections do not use this proxy.
+- The desktop Settings page shows the resolved remote domain, proxy source, and detection source without exposing tokens.
 - `/v1/models` in remote mode returns remote API model keys, which may not match the IPC plugin display IDs such as `MiniMax-M2.7` or `Kimi-K2.6`.
 - Even after a successful remote login import, the model set may still differ from the examples shown in this repository. In particular, `Kimi-K2.6`, `MiniMax-M2.7`, some `Qwen3` variants, or `Auto / org_auto` can vary by account and tenant.
 - Image requests in remote mode are routed through the IPC image pipeline because the direct remote chat endpoint ignores local `file://` and data URL image payloads. If a request also contains tools, Lingma Proxy first extracts image context through IPC and then sends the tool-capable turn through Remote API native tool calling.
@@ -334,7 +378,102 @@ IPC mode talks to the local Lingma IDE plugin:
 lingma-proxy --backend ipc --transport auto --port 8095
 ```
 
-Use this when VS Code / the Lingma plugin is already running, when you want plugin session behavior, or when you want the exact model list exposed by the local plugin. Compared with Remote API mode, IPC mode is more coupled to the IDE/plugin process and can be affected by that process's session, current project, and local environment.
+Use this when QoderCN, IntelliJ IDEA with the Tongyi Lingma plugin, VS Code with the Lingma plugin, or another supported Lingma runtime is already running, when you want plugin session behavior, or when you want the exact model list exposed by the local plugin. Compared with Remote API mode, IPC mode is more coupled to the IDE/plugin process and can be affected by that process's session, current project, and local environment.
+
+### Docker
+
+Official images are published to GitHub Container Registry:
+
+```bash
+docker run --rm -p 8095:8095 ghcr.io/lutiancheng1/lingma-proxy:<tag>
+```
+
+The container image contains only the CLI proxy. It does not bundle the desktop app, Wails runtime, Node, browser, or any local login cache. A container cannot automatically read the host machine's Lingma / QoderCN login state. Remote API mode is the recommended container mode.
+
+Recommended production practice: bind-mount the host login cache read-only after the user has logged in on the host through Lingma / QoderCN:
+
+```bash
+docker run --rm -p 8095:8095 \
+  -v "$HOME/.lingma:/home/lingma/.lingma:ro" \
+  -v "$HOME/.qoder-cn:/home/lingma/.qoder-cn:ro" \
+  ghcr.io/lutiancheng1/lingma-proxy:<tag> \
+  --backend remote --host 0.0.0.0 --port 8095
+```
+
+This keeps credentials out of the image and lets the container reuse the same local login state as the host. If the host has only one of these directories, mount only the directory that exists.
+
+Alternative: provide an explicit credentials file:
+
+```bash
+docker run --rm -p 8095:8095 \
+  -v "$PWD/credentials.json:/credentials.json:ro" \
+  ghcr.io/lutiancheng1/lingma-proxy:<tag> \
+  --backend remote --remote-auth-file /credentials.json
+```
+
+Enterprise proxy example. Inside Docker, `127.0.0.1` points to the container itself; use `host.docker.internal` when the proxy software is running on the host:
+
+```bash
+docker run --rm -p 8095:8095 \
+  -e LINGMA_REMOTE_PROXY_URL=http://host.docker.internal:7890 \
+  ghcr.io/lutiancheng1/lingma-proxy:<tag>
+```
+
+IPC mode is not the default container target. It may require manually exposing host IDE sockets, named pipes, or WebSocket endpoints and is not part of the Docker compatibility guarantee.
+
+### Linux Desktop
+
+Linux Desktop packages are available for x64 and arm64 Debian / Ubuntu and Fedora / RHEL style systems:
+
+```bash
+sudo apt install ./lingma-proxy-desktop_<tag>_linux_amd64.deb
+# or, on ARM64 Linux:
+sudo apt install ./lingma-proxy-desktop_<tag>_linux_arm64.deb
+```
+
+```bash
+sudo rpm -i ./lingma-proxy-desktop_<tag>_linux_amd64.rpm
+# or, on ARM64 Linux:
+sudo rpm -i ./lingma-proxy-desktop_<tag>_linux_arm64.rpm
+```
+
+Start the app from the system launcher or run:
+
+```bash
+lingma-proxy-desktop
+```
+
+Linux Desktop is a GUI wrapper around the same proxy core as the CLI. Remote API mode is recommended. It still needs a readable local Lingma / QoderCN login cache or an explicit credentials file; the package does not include or copy user login state.
+
+### Linux CLI
+
+Download the Linux asset that matches your CPU architecture, then install the binary:
+
+```bash
+tar -xzf lingma-proxy_<tag>_linux_amd64.tar.gz
+chmod +x lingma-proxy
+./lingma-proxy --backend remote --host 127.0.0.1 --port 8095
+```
+
+On a real Linux host, Remote API mode requires one of these credential sources:
+
+- The user has logged in through a supported Lingma / QoderCN runtime and the local cache is readable from the Linux user account running `lingma-proxy`.
+- Or the user provides an explicit credentials file:
+
+```bash
+./lingma-proxy \
+  --backend remote \
+  --remote-auth-file ~/.config/lingma-proxy/credentials.json
+```
+
+For enterprise networks, pass an explicit proxy:
+
+```bash
+LINGMA_REMOTE_PROXY_URL=http://127.0.0.1:7897 \
+  ./lingma-proxy --backend remote --host 127.0.0.1 --port 8095
+```
+
+Use Linux CLI for terminal, server, SSH, and headless scenarios. Use Linux Desktop when a local GUI is available. Docker remains the recommended container/server package.
 
 ## Quick Start
 
@@ -636,6 +775,7 @@ Example:
   "transport": "auto",
   "remote_base_url": "",
   "remote_auth_file": "",
+  "remote_proxy_url": "",
   "remote_version": "",
   "mode": "agent",
   "shell_type": "zsh",
@@ -756,6 +896,15 @@ Build Windows on Windows:
 npm ci --prefix desktop/frontend
 cd desktop
 wails build -platform windows/amd64 -clean
+```
+
+Build Linux desktop on Ubuntu:
+
+```bash
+sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+npm ci --prefix desktop/frontend
+cd desktop
+wails build -platform linux/amd64 -tags webkit2_41 -clean
 ```
 
 The desktop bundle name is always `Lingma Proxy`.

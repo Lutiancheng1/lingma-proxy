@@ -65,18 +65,18 @@ func loadCredentialFile(path string) (Credential, error) {
 }
 
 func importLingmaCacheCredential() (Credential, error) {
-	var attempts []string
+	var attempts []credentialLoadAttempt
 	for _, lingmaDir := range candidateLingmaCacheDirs() {
 		cred, err := importLingmaCacheCredentialFromDir(lingmaDir)
 		if err == nil {
 			return cred, nil
 		}
-		attempts = append(attempts, fmt.Sprintf("%s: %v", lingmaDir, err))
+		attempts = append(attempts, credentialLoadAttempt{Path: lingmaDir, Err: err})
 	}
 	if len(attempts) == 0 {
 		return Credential{}, errors.New("no Lingma cache directory candidate was found")
 	}
-	return Credential{}, fmt.Errorf("load Lingma login cache: %s", strings.Join(attempts, "; "))
+	return Credential{}, fmt.Errorf("load Lingma/QoderCN login cache: %s", summarizeCredentialLoadAttempts(attempts))
 }
 
 func importLingmaCacheCredentialFromDir(lingmaDir string) (Credential, error) {
@@ -125,8 +125,18 @@ func candidateLingmaCacheDirs() []string {
 	var dirs []string
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		dirs = append(dirs,
+			filepath.Join(home, ".qoder-cn"),
+			filepath.Join(home, ".qoder-cn", "shared_client"),
+			filepath.Join(home, ".qoder-cn", "vscode", "sharedClientCache"),
+			filepath.Join(home, ".qodercn"),
+			filepath.Join(home, ".qodercn", "vscode", "sharedClientCache"),
+			filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache"),
+			filepath.Join(home, "Library", "Application Support", "Qoder", "SharedClientCache"),
+			filepath.Join(home, ".config", "QoderCN"),
+			filepath.Join(home, ".local", "share", "QoderCN"),
 			filepath.Join(home, ".lingma"),
 			filepath.Join(home, ".lingma", "vscode", "sharedClientCache"),
+			filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache"),
 			filepath.Join(home, ".config", "Lingma"),
 			filepath.Join(home, ".local", "share", "Lingma"),
 		)
@@ -134,21 +144,96 @@ func candidateLingmaCacheDirs() []string {
 	for _, envName := range []string{"APPDATA", "LOCALAPPDATA", "ProgramData"} {
 		if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
 			dirs = append(dirs,
+				filepath.Join(value, "QoderCN"),
+				filepath.Join(value, "qodercn"),
+				filepath.Join(value, "QoderCN", "SharedClientCache"),
+				filepath.Join(value, "Qoder"),
+				filepath.Join(value, "Qoder", "SharedClientCache"),
 				filepath.Join(value, "Lingma"),
 				filepath.Join(value, "lingma"),
+				filepath.Join(value, "Lingma", "SharedClientCache"),
 			)
 		}
 	}
 	if value := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); value != "" {
+		dirs = append(dirs, filepath.Join(value, "QoderCN"))
 		dirs = append(dirs, filepath.Join(value, "Lingma"))
 	}
 	return uniquePathStrings(dirs)
 }
 
+type credentialLoadAttempt struct {
+	Path string
+	Err  error
+}
+
+func summarizeCredentialLoadAttempts(attempts []credentialLoadAttempt) string {
+	if strings.TrimSpace(os.Getenv("LINGMA_VERBOSE_CREDENTIAL_ERRORS")) == "1" {
+		details := make([]string, 0, len(attempts))
+		for _, attempt := range attempts {
+			details = append(details, fmt.Sprintf("%s: %v", attempt.Path, attempt.Err))
+		}
+		return strings.Join(details, "; ")
+	}
+
+	missingCount := 0
+	invalidSamples := make([]string, 0, 3)
+	for _, attempt := range attempts {
+		if isMissingCredentialAttempt(attempt.Err) {
+			missingCount++
+			continue
+		}
+		if len(invalidSamples) < 3 {
+			invalidSamples = append(invalidSamples, fmt.Sprintf("%s: %v", compactCredentialPath(attempt.Path), attempt.Err))
+		}
+	}
+
+	parts := []string{
+		fmt.Sprintf("未找到可用的 QoderCN/Lingma 登录缓存或缓存格式不兼容（已检查 %d 个候选位置）", len(attempts)),
+	}
+	if missingCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个位置不存在登录缓存", missingCount))
+	}
+	if len(invalidSamples) > 0 {
+		parts = append(parts, "不兼容缓存示例："+strings.Join(invalidSamples, "; "))
+	}
+	parts = append(parts, "请确认 QoderCN/Lingma 已启动并登录；如需完整候选路径，请设置 LINGMA_VERBOSE_CREDENTIAL_ERRORS=1 后重试")
+	return strings.Join(parts, "；")
+}
+
+func isMissingCredentialAttempt(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "cannot find the path specified") ||
+		strings.Contains(text, "no such file or directory") ||
+		strings.Contains(text, "system cannot find the file specified")
+}
+
+func compactCredentialPath(path string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if cleaned == "" {
+		return path
+	}
+	parts := strings.FieldsFunc(cleaned, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	if len(parts) <= 3 {
+		return cleaned
+	}
+	return filepath.Join("...", filepath.Join(parts[len(parts)-3:]...))
+}
+
 func loadMachineID(lingmaDir string) (string, error) {
-	if body, err := os.ReadFile(filepath.Join(lingmaDir, "cache", "id")); err == nil {
-		if value := strings.TrimSpace(string(body)); value != "" {
-			return value, nil
+	for _, path := range candidateMachineIDFiles(lingmaDir) {
+		if body, err := os.ReadFile(path); err == nil {
+			if value := strings.TrimSpace(string(body)); value != "" {
+				return value, nil
+			}
 		}
 	}
 
@@ -162,7 +247,14 @@ func loadMachineID(lingmaDir string) (string, error) {
 		}
 	}
 
-	return "", errors.New("remote credential requires cache/id or Lingma log machine id; checked cache/id, Lingma app logs, and VS Code Lingma plugin logs")
+	return "", errors.New("remote credential requires cache/id, cli/.auth/id, or Lingma/QoderCN log machine id; checked cache/id, cli auth id, app logs, and IDE shared client logs")
+}
+
+func candidateMachineIDFiles(lingmaDir string) []string {
+	return uniquePathStrings([]string{
+		filepath.Join(lingmaDir, "cache", "id"),
+		filepath.Join(lingmaDir, "cli", ".auth", "id"),
+	})
 }
 
 func candidateMachineIDLogFiles(lingmaDir string) []string {
@@ -223,6 +315,7 @@ func extractMachineIDFromText(text string) string {
 		"machine_id:",
 		"machineId:",
 		"machine-id:",
+		"generated uuid:",
 	}
 	lowerText := strings.ToLower(text)
 	for _, marker := range markers {

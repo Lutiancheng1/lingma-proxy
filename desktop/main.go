@@ -23,11 +23,11 @@ func main() {
 	err := wails.Run(&options.App{
 		Title:             "Lingma Proxy",
 		Width:             1160,
-		Height:            760,
+		Height:            740,
 		MinWidth:          900,
 		MinHeight:         600,
 		StartHidden:       true,
-		HideWindowOnClose: true,
+		HideWindowOnClose: goruntime.GOOS != "linux",
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -35,7 +35,7 @@ func main() {
 		Debug: options.Debug{
 			OpenInspectorOnStartup: enableInspector,
 		},
-		BackgroundColour: &options.RGBA{R: 15, G: 23, B: 42, A: 1},
+		BackgroundColour: &options.RGBA{R: 238, G: 243, B: 248, A: 255},
 		Menu:             appMenu(app),
 		OnStartup:        app.startup,
 		OnBeforeClose:    app.beforeClose,
@@ -49,6 +49,7 @@ func main() {
 		},
 		Frameless: false,
 		Mac: &mac.Options{
+			WebviewIsTransparent: true,
 			TitleBar: &mac.TitleBar{
 				TitlebarAppearsTransparent: false,
 				HideTitle:                  false,

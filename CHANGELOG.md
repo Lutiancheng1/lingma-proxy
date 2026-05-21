@@ -1,6 +1,56 @@
 # Changelog
 
-## Unreleased (target: v1.5.3)
+## Unreleased (target: v1.6.2)
+
+## v1.6.2 - 2026-05-21
+
+- Added official Linux CLI release assets for `linux_amd64` and `linux_arm64`, plus Linux Desktop `.deb` / `.rpm` release assets for both `linux_amd64` and `linux_arm64` built from the Wails desktop app with nFPM.
+- Added a multi-stage Docker image and tag workflow for GHCR (`ghcr.io/lutiancheng1/lingma-proxy:<tag>` and `latest`) without bundling desktop runtime, Node, browser, or local login caches.
+- Added explicit Remote API proxy configuration via `--remote-proxy-url`, `LINGMA_REMOTE_PROXY_URL`, JSON `remote_proxy_url`, and the desktop Settings page. Empty proxy config preserves Go's default `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` behavior.
+- Added Linux-safe desktop defaults: the Linux desktop package exits on window close instead of hiding without a tray restore path, and Linux session shell defaults to `bash`.
+- Documented Docker bind-mount and explicit credential-file startup examples, including the container support boundary that IPC is not guaranteed inside Docker.
+- 新增 Linux CLI 官方 release 资产：`linux_amd64` 与 `linux_arm64`，并新增基于 Wails 桌面端和 nFPM 打包的 `linux_amd64` / `linux_arm64` Desktop `.deb` / `.rpm` release 资产。
+- 新增多阶段 Docker 镜像与 GHCR 发布链路，镜像标签为 `ghcr.io/lutiancheng1/lingma-proxy:<tag>` 和 `latest`，不内置桌面端、Node、浏览器或本机登录缓存。
+- 新增显式远端代理配置：`--remote-proxy-url`、`LINGMA_REMOTE_PROXY_URL`、JSON `remote_proxy_url` 和桌面设置页均可配置；留空时保留 Go 默认的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 行为。
+- 新增 Linux 桌面安全默认行为：Linux 桌面端关闭窗口时直接退出，避免无托盘恢复入口；Linux 会话默认 shell 改为 `bash`。
+- 文档补充 Docker bind mount 登录态、显式凭据文件和代理示例，并明确 Docker 场景不承诺 IPC 开箱即用。
+
+## v1.6.1 - 2026-05-21
+
+- Fixed Windows QoderCN credential discovery for dashed `%USERPROFILE%\.qoder-cn` layouts, including `shared_client` cache/config/log/socket candidates.
+- Reduced noisy Remote API credential errors: the default error now summarizes missing or incompatible QoderCN/Lingma login caches, while `LINGMA_VERBOSE_CREDENTIAL_ERRORS=1` still exposes full candidate paths for diagnostics.
+- Added machine-id fallback discovery from `cli/.auth/id` and JetBrains Lingma `Generated uuid:` log lines, covering IntelliJ IDEA plugin installs that have `cache/user` but no `cache/id`.
+- Verified JetBrains Tongyi Lingma plugin compatibility on macOS: Remote API and IPC WebSocket both passed model list, Chat Completions, Responses, and Anthropic Messages.
+- Documented the JetBrains plugin support boundary and updated QoderCN/Lingma cache path notes in README and architecture docs.
+- 修复 Windows QoderCN 使用 `%USERPROFILE%\.qoder-cn` 目录时的登录态发现，补齐 `shared_client` 下的 cache/config/log/socket 候选路径。
+- 精简远端 API 登录态错误：默认只提示未找到或缓存格式不兼容；需要完整路径时可设置 `LINGMA_VERBOSE_CREDENTIAL_ERRORS=1` 重新诊断。
+- 增加 `cli/.auth/id` 与 JetBrains Lingma 日志 `Generated uuid:` 的 machine-id 兜底解析，覆盖 IntelliJ IDEA 插件只有 `cache/user`、没有 `cache/id` 的安装形态。
+- 已在 macOS 实测 JetBrains 通义灵码插件：Remote API 与 IPC WebSocket 的模型列表、Chat Completions、Responses、Anthropic Messages 均通过。
+- 文档补充 JetBrains 插件支持边界，并更新 QoderCN/Lingma 缓存路径说明。
+
+## v1.6.0 - 2026-05-20
+
+- Added QoderCN runtime compatibility for Remote API credential discovery and IPC transport discovery, including QoderCN shared-client cache paths, macOS socket/WebSocket discovery, and QoderCN-first runtime selection when both QoderCN and Lingma runtimes are installed.
+- Added dual Lingma / QoderCN desktop branding, QoderCN icon support, and updated user-facing Settings, Models, diagnostics, and runtime-copy text to describe the shared Lingma / QoderCN support boundary.
+- Wired the HTTP `/version` endpoint into the repository-level `VERSION` source so API diagnostics now return the real release version instead of a service-name placeholder.
+- Documented the runtime compatibility matrix: QoderCN desktop app is fully verified on macOS; QoderCN plus `alibaba-cloud.tongyi-lingma` still prefers QoderCN; VS Code extension-only mode is partial because it does not expose the full `session/new` IPC generation path.
+- Verified the full OpenAI / Anthropic endpoint matrix in QoderCN-only and QoderCN-plus-VS-Code-extension coexistence modes, including Chat Completions, Responses, Anthropic Messages, debug requests, access logs, and compatibility aliases.
+- Kept repository, module, binary, and config-path naming stable for this release; QoderCN support is introduced as a compatibility expansion rather than a breaking product rename.
+- 新增 QoderCN 运行时兼容：远端 API 登录态发现和 IPC 传输探测都支持 QoderCN SharedClientCache、macOS socket/WebSocket，并在 QoderCN 与 Lingma 同时安装时优先选择 QoderCN。
+- 桌面端品牌位改为 Lingma / QoderCN 双图标共存，新增 QoderCN 图标支持，并统一设置页、模型页、诊断和运行时文案，明确 Lingma / QoderCN 共享支持边界。
+- HTTP `/version` 接入根级 `VERSION` 单一来源，诊断接口现在返回真实发布版本，不再返回服务名占位值。
+- 文档补充运行环境兼容矩阵：macOS QoderCN 桌面端已完整验证；QoderCN 与 `alibaba-cloud.tongyi-lingma` 共存时优先 QoderCN；单独 VS Code 扩展模式为部分支持，因为缺少完整的 `session/new` IPC 生成路径。
+- 完整验证 QoderCN-only 与 QoderCN + VS Code 扩展共存两种场景下的 OpenAI / Anthropic 接口矩阵，覆盖 Chat Completions、Responses、Anthropic Messages、请求调试、访问日志与兼容别名。
+- 本版本保持仓库、Go module、二进制名和配置路径不变；QoderCN 作为兼容能力扩展进入 `1.6.0`，不做破坏性改名。
+
+## v1.5.4 - 2026-05-19
+
+- Fixed desktop model discovery timeout handling so manual model refresh now honors the configured warmup timeout instead of failing after a stale hard-coded 5-second path.
+- Removed the extra low-level timeout clamp from remote model listing so the warmup / refresh timeout configured in desktop settings can propagate end-to-end.
+- Verified the hotfix build line on top of `v1.5.3`, keeping the packaged desktop release flow intact.
+- 修复桌面端模型探测超时链路：手动“刷新模型”现在真正遵循“探测超时秒数”配置，不再走遗留的 5 秒硬编码超时。
+- 移除底层模型列表请求的额外固定超时截断，确保设置页里的 warmup / 探测超时能够端到端生效。
+- 基于 `v1.5.3` 完成热修验证，桌面端打包和发布链路保持不变。
 
 ## v1.5.3 - 2026-05-18
 

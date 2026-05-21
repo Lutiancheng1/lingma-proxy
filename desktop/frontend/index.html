@@ -25,26 +25,26 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: linear-gradient(180deg, #f7fbff 0%, #eef4ff 100%);
         color: #1f2a44;
+        background: linear-gradient(180deg, #f7fbff 0%, #eef4ff 100%);
       }
       .boot-card {
         display: flex;
         align-items: center;
         gap: 14px;
         padding: 18px 22px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
         border-radius: 20px;
         background: rgba(255, 255, 255, 0.82);
-        border: 1px solid rgba(148, 163, 184, 0.22);
         box-shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
         backdrop-filter: blur(14px);
       }
       .boot-spinner {
         width: 18px;
         height: 18px;
-        border-radius: 999px;
         border: 2px solid rgba(37, 99, 235, 0.16);
         border-top-color: #2563eb;
+        border-radius: 999px;
         animation: boot-spin 0.9s linear infinite;
       }
       .boot-copy {
@@ -57,8 +57,8 @@
         font-weight: 700;
       }
       .boot-subtitle {
-        font-size: 13px;
         color: #64748b;
+        font-size: 13px;
       }
       @keyframes boot-spin {
         to { transform: rotate(360deg); }
@@ -72,7 +72,7 @@
         <div class="boot-spinner"></div>
         <div class="boot-copy">
             <div class="boot-title">Lingma Proxy 正在启动</div>
-            <div class="boot-subtitle">正在加载界面与本地缓存…</div>
+            <div class="boot-subtitle">正在加载界面与本地缓存...</div>
         </div>
     </div>
 </div>
