@@ -81,12 +81,19 @@ func installCLI(ctx context.Context, onLine func(string)) error {
 	}
 	emitInstallLine(onLine, "安装飞书 CLI: npm install -g @larksuite/cli")
 	if err := runInstallStep(ctx, []string{"npm", "install", "-g", "@larksuite/cli"}, onLine); err != nil {
-		return fmt.Errorf("install lark-cli failed: command=%q node=%s npm=%s npx=%s error=%w", "npm install -g @larksuite/cli", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
+		resetResolvedCommandEnv()
+		if cli := detectBinary("lark-cli", "--version"); cli.Found {
+			emitInstallLine(onLine, "飞书 CLI 安装命令返回错误，但 lark-cli 已可用，继续安装 Skills："+describeBinary(cli))
+		} else {
+			return fmt.Errorf("install lark-cli failed: command=%q node=%s npm=%s npx=%s error=%w", "npm install -g @larksuite/cli", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
+		}
 	}
+	resetResolvedCommandEnv()
 	if err := installSkills(ctx, onLine); err != nil {
 		return fmt.Errorf("install lark-cli skills failed: node=%s npm=%s npx=%s error=%w", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
 	}
 	emitInstallLine(onLine, "验证 lark-cli 安装结果...")
+	resetResolvedCommandEnv()
 	cli := detectBinary("lark-cli", "--version")
 	if !cli.Found {
 		return fmt.Errorf("install lark-cli failed: install command completed but lark-cli is still missing in resolved PATH")
@@ -115,9 +122,9 @@ func installSkills(ctx context.Context, onLine func(string)) error {
 
 func skillsInstallCommands() [][]string {
 	return [][]string{
-		{"npx", "-y", "skills", "add", "larksuite/cli", "-y", "-g"},
 		{"npx", "-y", "skills@1.5.6", "add", "larksuite/cli", "-y", "-g"},
 		{"npx", "-y", "skills@1.5.5", "add", "larksuite/cli", "-y", "-g"},
+		{"npx", "-y", "skills", "add", "larksuite/cli", "-y", "-g"},
 	}
 }
 

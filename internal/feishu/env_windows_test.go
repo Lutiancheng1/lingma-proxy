@@ -28,3 +28,16 @@ func TestResolvedPATHIncludesWindowsNodeDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvedPATHIncludesWindowsNPMConfigPrefix(t *testing.T) {
+	t.Setenv("PATH", `C:\Windows\System32`)
+	t.Setenv("Path", `C:\Windows\System32`)
+	t.Setenv("npm_config_prefix", `D:\node.js\node_global`)
+	resetResolvedCommandEnv()
+
+	got := resolvedPATH()
+	want := `D:\node.js\node_global`
+	if !strings.Contains(got, want) {
+		t.Fatalf("resolved PATH %q missing npm_config_prefix %q", got, want)
+	}
+}

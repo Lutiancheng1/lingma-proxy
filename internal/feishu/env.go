@@ -25,7 +25,7 @@ func resolvedCommandEnv() []string {
 		next := make([]string, 0, len(base)+1)
 		pathWritten := false
 		for _, item := range base {
-			if strings.HasPrefix(item, "PATH=") {
+			if isPATHEnvItem(item) {
 				next = append(next, "PATH="+commandPath)
 				pathWritten = true
 				continue
@@ -38,6 +38,12 @@ func resolvedCommandEnv() []string {
 		commandEnv = next
 	})
 	return append([]string(nil), commandEnv...)
+}
+
+func resetResolvedCommandEnv() {
+	commandEnvOnce = sync.Once{}
+	commandEnv = nil
+	commandPath = ""
 }
 
 func resolvedPATH() string {
@@ -57,6 +63,7 @@ func resolvedPATH() string {
 			segments = append(segments, filepath.Join(appData, "npm"))
 		}
 	}
+	segments = append(segments, npmGlobalPATHSegments(segments)...)
 	segments = uniqueStrings(segments)
 	if selected := selectSupportedNodeBinDir(segments); selected != "" {
 		segments = placeSelectedNodeDir(segments, selected)
@@ -69,6 +76,9 @@ func windowsNodePATHSegments() []string {
 		return nil
 	}
 	segments := make([]string, 0, 4)
+	if nvmSymlink := strings.TrimSpace(os.Getenv("NVM_SYMLINK")); nvmSymlink != "" {
+		segments = append(segments, nvmSymlink)
+	}
 	for _, envName := range []string{"ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"} {
 		root := strings.TrimSpace(os.Getenv(envName))
 		if root == "" {
@@ -81,6 +91,52 @@ func windowsNodePATHSegments() []string {
 		segments = append(segments, filepath.Join(root, "nodejs"))
 	}
 	return segments
+}
+
+func npmGlobalPATHSegments(baseSegments []string) []string {
+	prefixes := npmGlobalPrefixes(baseSegments)
+	out := make([]string, 0, len(prefixes)*2)
+	for _, prefix := range prefixes {
+		if prefix == "" {
+			continue
+		}
+		if runtime.GOOS == "windows" {
+			out = append(out, prefix)
+			continue
+		}
+		out = append(out, filepath.Join(prefix, "bin"))
+	}
+	return out
+}
+
+func npmGlobalPrefixes(baseSegments []string) []string {
+	var prefixes []string
+	if prefix := strings.TrimSpace(os.Getenv("npm_config_prefix")); prefix != "" {
+		prefixes = append(prefixes, prefix)
+	}
+	npmPath, err := lookPathInSegments("npm", baseSegments)
+	if err != nil {
+		return uniqueStrings(prefixes)
+	}
+	for _, args := range [][]string{{"config", "get", "prefix"}, {"prefix", "-g"}} {
+		if prefix := npmPrefixFromCommand(npmPath, baseSegments, args...); prefix != "" {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	return uniqueStrings(prefixes)
+}
+
+func npmPrefixFromCommand(npmPath string, baseSegments []string, args ...string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, npmPath, args...)
+	cmd.Env = commandEnvForPATH(strings.Join(baseSegments, string(os.PathListSeparator)))
+	applyCommandPlatformOptions(cmd)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func nodeVersionManagerPATHSegments() []string {
@@ -276,7 +332,11 @@ func lookPathWithResolvedEnv(name string) (string, error) {
 		}
 		return "", exec.ErrNotFound
 	}
-	for _, dir := range pathSegments(resolvedPATH()) {
+	return lookPathInSegments(name, pathSegments(resolvedPATH()))
+}
+
+func lookPathInSegments(name string, segments []string) (string, error) {
+	for _, dir := range segments {
 		candidate := filepath.Join(dir, name)
 		if runtime.GOOS == "windows" {
 			for _, ext := range []string{".exe", ".cmd", ".bat"} {
@@ -290,6 +350,29 @@ func lookPathWithResolvedEnv(name string) (string, error) {
 		}
 	}
 	return "", exec.ErrNotFound
+}
+
+func commandEnvForPATH(pathValue string) []string {
+	base := os.Environ()
+	next := make([]string, 0, len(base)+1)
+	pathWritten := false
+	for _, item := range base {
+		if isPATHEnvItem(item) {
+			next = append(next, "PATH="+pathValue)
+			pathWritten = true
+			continue
+		}
+		next = append(next, item)
+	}
+	if !pathWritten {
+		next = append(next, "PATH="+pathValue)
+	}
+	return next
+}
+
+func isPATHEnvItem(item string) bool {
+	key, _, ok := strings.Cut(item, "=")
+	return ok && strings.EqualFold(key, "PATH")
 }
 
 func commandWithEnv(name string, args ...string) *exec.Cmd {
