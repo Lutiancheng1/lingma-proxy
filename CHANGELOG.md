@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased (target: v1.6.4)
+## Unreleased (target: v1.6.5)
+
+## v1.6.5 - 2026-05-22
+
+- Feishu Bridge branch only; no GitHub Release assets are published from this branch.
+- Synced the mainline `v1.6.5` startup model probing optimization: the last successful Remote API domain is cached and preferred on the next launch, cached models are shown immediately after reopening, and background startup probing uses a shorter path than manual refresh.
+- Synced the Logs table header layout fix so the header background spans the full log panel width while Feishu-specific session/chat columns remain aligned.
+- Kept Feishu Bridge branch-specific behavior unchanged: macOS/Windows artifacts are produced from the branch workflow only.
+- 仅 Feishu Bridge 分支使用；本分支不发布 GitHub Release assets。
+- 同步主线 `v1.6.5` 启动模型探测优化：缓存并优先使用上一次成功的远端 API 域名，重新打开时先展示缓存模型，后台启动探测使用比手动刷新更短的路径。
+- 同步日志页表头全宽修复，Feishu 专属会话 / Chat ID 列继续保持对齐。
+- Feishu Bridge 分支专属行为保持不变：仅通过分支 workflow 生成 macOS / Windows artifact。
 
 ## v1.6.4 - 2026-05-21
 

@@ -49,6 +49,11 @@ type BaseURLHint struct {
 	Source string
 }
 
+type baseURLCacheFile struct {
+	URL       string `json:"url"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 type Model struct {
 	Key         string `json:"key"`
 	DisplayName string `json:"display_name"`
@@ -184,12 +189,65 @@ func ResolveBaseURLCandidates() []BaseURLHint {
 		}
 	}
 	hints = sortBaseURLHints(uniqueBaseURLHints(hints))
+	if cached := cachedBaseURLHint(); cached.URL != "" {
+		hints = uniqueBaseURLHints(append([]BaseURLHint{cached}, hints...))
+	}
 	for _, hint := range hints {
 		if hint.URL == DefaultBaseURL {
 			return hints
 		}
 	}
 	return append(hints, BaseURLHint{URL: DefaultBaseURL, Source: "default"})
+}
+
+func cachedBaseURLHint() BaseURLHint {
+	path, err := baseURLCachePath()
+	if err != nil {
+		return BaseURLHint{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return BaseURLHint{}
+	}
+	var cache baseURLCacheFile
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return BaseURLHint{}
+	}
+	url := normalizeRemoteBaseURLHint(cache.URL)
+	if url == "" {
+		return BaseURLHint{}
+	}
+	return BaseURLHint{URL: url, Source: "last successful remote domain"}
+}
+
+func cacheSuccessfulBaseURL(raw string) {
+	url := normalizeRemoteBaseURLHint(raw)
+	if url == "" {
+		return
+	}
+	path, err := baseURLCachePath()
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return
+	}
+	data, err := json.MarshalIndent(baseURLCacheFile{URL: url, UpdatedAt: time.Now().Format(time.RFC3339)}, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0644)
+}
+
+func baseURLCachePath() (string, error) {
+	if dir, err := os.UserConfigDir(); err == nil && strings.TrimSpace(dir) != "" {
+		return filepath.Join(dir, "lingma-ipc-proxy", "remote-base-url.json"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "lingma-ipc-proxy", "remote-base-url.json"), nil
 }
 
 func (c *Client) Warmup(ctx context.Context) error {
@@ -203,6 +261,9 @@ func (c *Client) Warmup(ctx context.Context) error {
 
 func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 	models, err := c.listModels(ctx)
+	if err == nil && c.autoBaseURL {
+		cacheSuccessfulBaseURL(c.cfg.BaseURL)
+	}
 	if err == nil || !c.autoBaseURL || ctx.Err() != nil {
 		return models, err
 	}
@@ -259,6 +320,7 @@ func (c *Client) listModelsWithAutoBaseURLFallback(ctx context.Context, firstErr
 		c.cfg.BaseURL = baseURL
 		models, err := c.listModels(ctx)
 		if err == nil {
+			cacheSuccessfulBaseURL(c.cfg.BaseURL)
 			return models, nil
 		}
 		lastErr = err

@@ -180,6 +180,24 @@ func TestSortBaseURLHintsPrefersCustomEnterpriseEndpoint(t *testing.T) {
 	}
 }
 
+func TestResolveBaseURLCandidatesPreferCachedSuccess(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tempDir, ".config"))
+	t.Setenv("APPDATA", filepath.Join(tempDir, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(tempDir, "AppData", "Local"))
+	t.Setenv("ProgramData", filepath.Join(tempDir, "ProgramData"))
+	cacheSuccessfulBaseURL("https://lingma.asiainfo.com/algo/api/v2/model/list")
+
+	hints := ResolveBaseURLCandidates()
+	if len(hints) == 0 {
+		t.Fatal("expected candidates")
+	}
+	if got := hints[0]; got.URL != "https://lingma.asiainfo.com" || got.Source != "last successful remote domain" {
+		t.Fatalf("first hint = %+v, want cached successful domain", got)
+	}
+}
+
 func TestModelListStatusErrorSuggestsManualRemoteBaseURLOn404(t *testing.T) {
 	client := New(Config{BaseURL: "https://lingma-ide.oss-rg-china-mainland.aliyuncs.com"})
 	err := client.modelListStatusError(404, `<Error><Code>NoSuchKey</Code></Error>`)

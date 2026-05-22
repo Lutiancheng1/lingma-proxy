@@ -2656,6 +2656,11 @@ button:disabled {
   position: sticky;
   top: 0;
   z-index: 1;
+  box-sizing: border-box;
+  width: calc(100% + 32px);
+  margin: 0 -16px;
+  padding-right: 16px;
+  padding-left: 16px;
   color: var(--muted);
   background: rgba(250, 252, 255, 0.94);
   font-family: inherit;
