@@ -596,26 +596,22 @@ func (a *App) StartProxy() error {
 	runtime.LogInfof(a.ctx, msg)
 	a.emitLog("info", msg)
 
-	// Warm up backend and fetch models in background so the HTTP endpoint
-	// becomes available immediately after the desktop app launches/restarts.
+	// Fetching /v1/models warms up the selected backend and refreshes the model
+	// cache. Keep startup probing shorter than manual probing so a slow runtime
+	// does not make the desktop launch feel stuck.
 	go func() {
-		if _, err := a.fetchModelsWithRetry(addr, effectiveWarmupTimeout(cfg), 4, 750*time.Millisecond); err != nil {
-			a.emitLog("warn", fmt.Sprintf("模型自动探测失败：%v", err))
-		}
-	}()
-	go func() {
-		warmupCtx, cancel := context.WithTimeout(context.Background(), effectiveWarmupTimeout(cfg))
-		defer cancel()
-		if err := svc.Warmup(warmupCtx); err != nil {
-			runtime.LogWarningf(a.ctx, "warmup failed: %v", err)
-			a.emitLog("warn", fmt.Sprintf("%s warmup failed: %v. %s", backendLabel(cfg.Backend), err, warmupFallbackHint(cfg.Backend)))
+		hasCachedModels := a.hasModels()
+		models, err := a.fetchModelsWithRetry(addr, startupModelProbeTimeout(cfg, hasCachedModels), startupModelProbeAttempts(hasCachedModels), 750*time.Millisecond)
+		if err != nil {
+			runtime.LogWarningf(a.ctx, "startup model refresh failed: %v", err)
+			if !hasCachedModels {
+				a.emitLog("warn", fmt.Sprintf("模型自动探测失败：%v", err))
+			}
 			return
 		}
 		runtime.LogInfof(a.ctx, "%s warmup completed", backendLabel(cfg.Backend))
 		a.emitLog("info", fmt.Sprintf("%s warmup completed", backendLabel(cfg.Backend)))
-		if _, err := a.fetchModelsWithRetry(addr, effectiveWarmupTimeout(cfg), 2, time.Second); err != nil {
-			runtime.LogWarningf(a.ctx, "post-warmup model refresh failed: %v", err)
-		}
+		_ = models
 	}()
 
 	return nil
@@ -834,6 +830,12 @@ func (a *App) GetModels() []ModelInfo {
 	return a.models
 }
 
+func (a *App) hasModels() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.models) > 0
+}
+
 // GetRequestSummaries returns recent request records without large request/response bodies.
 func (a *App) GetRequestSummaries() []RequestRecord {
 	a.mu.RLock()
@@ -924,6 +926,27 @@ func (a *App) fetchModelsWithRetry(addr string, timeout time.Duration, attempts 
 	return nil, lastErr
 }
 
+func startupModelProbeAttempts(hasCachedModels bool) int {
+	if hasCachedModels {
+		return 1
+	}
+	return 2
+}
+
+func startupModelProbeTimeout(cfg service.Config, hasCachedModels bool) time.Duration {
+	timeout := effectiveWarmupTimeout(cfg)
+	if hasCachedModels {
+		if timeout > 5*time.Second {
+			return 5 * time.Second
+		}
+		return timeout
+	}
+	if timeout > 12*time.Second {
+		return 12 * time.Second
+	}
+	return timeout
+}
+
 func (a *App) SelectModel(modelID string) (ProxyStatus, error) {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
@@ -998,6 +1021,9 @@ func (a *App) fetchModels(addr string, timeout time.Duration) ([]ModelInfo, erro
 	a.mu.Lock()
 	changed := !sameModelList(a.models, models)
 	a.models = models
+	if changed {
+		a.saveAppStateLocked()
+	}
 	a.mu.Unlock()
 
 	if changed {
@@ -1054,6 +1080,7 @@ type appStateFile struct {
 	Requests []RequestRecord `json:"requests"`
 	Logs     []AppLog        `json:"logs"`
 	Stats    TokenStats      `json:"stats"`
+	Models   []ModelInfo     `json:"models,omitempty"`
 }
 
 func (a *App) loadAppState() error {
@@ -1090,6 +1117,7 @@ func (a *App) loadAppState() error {
 	a.requests = state.Requests
 	a.logs = state.Logs
 	a.stats = state.Stats
+	a.models = state.Models
 	if a.stats.ByModel == nil {
 		a.stats.ByModel = map[string]int{}
 	}
@@ -1135,6 +1163,7 @@ func (a *App) flushAppStateLocked() {
 		Requests: trimPersistedRequests(a.requests),
 		Logs:     trimPersistedLogs(a.logs),
 		Stats:    a.stats,
+		Models:   a.models,
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

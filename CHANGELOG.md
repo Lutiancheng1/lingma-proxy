@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased (target: v1.6.4)
+## Unreleased (target: v1.6.5)
+
+## v1.6.5 - 2026-05-22
+
+- Cached the last successful auto-detected Remote API domain and made it the first candidate on the next launch, avoiding repeated slow retries through stale default or runtime-discovered domains.
+- Reduced desktop startup model probing cost: startup now uses a single `/v1/models` path for warmup plus model refresh, uses a short probe when cached models already exist, and keeps the full configured warmup timeout for manual model refresh.
+- Persisted the last successful model list in desktop state so the Dashboard can show known models immediately after reopening while the background refresh runs.
+- Fixed the Logs table header layout so the header background spans the full log panel width while row content keeps its inner padding.
+- 缓存上一次自动探测成功的远端 API 域名，并在下次启动时优先使用，避免每次重新打开都先尝试过期默认域名或错误运行时候选导致探测变慢。
+- 优化桌面端启动模型探测：启动阶段改为单一路径完成 warmup 与模型刷新；已有模型缓存时使用短探测；手动“探测模型”仍保留设置页配置的完整 warmup 超时。
+- 持久化上一次成功的模型列表，重新打开桌面端时仪表盘可以先展示已知模型，再由后台刷新更新。
+- 修复日志页表头布局：表头背景铺满整个日志面板宽度，日志内容行继续保留内边距。
 
 ## v1.6.4 - 2026-05-21
 
