@@ -7,10 +7,14 @@
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "lutc5",
-    "email": "lutc5@asiainfo.com"
+    "name": "Lutiancheng1",
+    "email": "85276107+Lutiancheng1@users.noreply.github.com"
   },
   "info": {
-    "productVersion": "1.6.5"
+    "companyName": "Lutiancheng1",
+    "productName": "Lingma Proxy",
+    "productVersion": "1.6.5",
+    "copyright": "Copyright © 2026 Lutiancheng1",
+    "comments": "Lingma / QoderCN compatible proxy"
   }
 }

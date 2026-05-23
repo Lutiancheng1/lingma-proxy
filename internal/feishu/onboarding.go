@@ -13,6 +13,7 @@ import (
 )
 
 var urlPattern = regexp.MustCompile(`https?://[^\s]+`)
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 
 type cliConfigFile struct {
 	Apps []struct {
@@ -109,6 +110,7 @@ func runStreamingCommand(ctx context.Context, cmd *exec.Cmd, onLine func(string)
 		return err
 	}
 	scan := func(scanner *bufio.Scanner) {
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if onLine != nil {
@@ -127,6 +129,7 @@ func runStreamingCommand(ctx context.Context, cmd *exec.Cmd, onLine func(string)
 }
 
 func formatOutputLine(line string) string {
+	line = ansiPattern.ReplaceAllString(line, "")
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return ""

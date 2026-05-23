@@ -38,3 +38,35 @@ func TestSkillsInstallCommandsIncludePinnedFallbacks(t *testing.T) {
 		t.Fatalf("skillsInstallCommands = %#v, want latest skills fallback last", commands)
 	}
 }
+
+func TestSelectPreferredCompatibleNodeVersionPrefersNode22(t *testing.T) {
+	output := `
+    16.20.2
+  * 24.16.0 (Currently using 64-bit executable)
+    22.11.0
+    20.18.0
+`
+	if got := selectPreferredCompatibleNodeVersion(output); got != "22.11.0" {
+		t.Fatalf("selectPreferredCompatibleNodeVersion() = %q, want 22.11.0", got)
+	}
+}
+
+func TestSelectPreferredCompatibleNodeVersionFallsBackToNode20(t *testing.T) {
+	output := `
+    24.16.0
+    20.18.0
+`
+	if got := selectPreferredCompatibleNodeVersion(output); got != "20.18.0" {
+		t.Fatalf("selectPreferredCompatibleNodeVersion() = %q, want 20.18.0", got)
+	}
+}
+
+func TestSelectPreferredCompatibleNodeVersionRejectsOldVersions(t *testing.T) {
+	output := `
+    16.20.2
+    20.11.1
+`
+	if got := selectPreferredCompatibleNodeVersion(output); got != "" {
+		t.Fatalf("selectPreferredCompatibleNodeVersion() = %q, want empty", got)
+	}
+}

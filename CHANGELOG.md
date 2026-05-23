@@ -8,11 +8,15 @@
 - Synced the mainline `v1.6.5` startup model probing optimization: the last successful Remote API domain is cached and preferred on the next launch, cached models are shown immediately after reopening, and background startup probing uses a shorter path than manual refresh.
 - Synced the Logs table header layout fix so the header background spans the full log panel width while Feishu-specific session/chat columns remain aligned.
 - Hardened Windows Feishu CLI installation again: custom npm global prefixes such as `D:\node.js\node_global` are detected without requiring users to edit the system PATH, npm install cleanup failures are tolerated when `lark-cli` is actually usable, and pinned `skills` versions are tried before the currently broken latest package.
+- Aligned the App installer and Windows fallback script on a stable Node strategy: prefer Node.js 22.11.0, fall back to 20.18.0, and avoid selecting the highest current Node by default.
+- Added a Settings-page Feishu Bridge installation guide with copyable fallback commands for Windows/manual troubleshooting.
 - Kept Feishu Bridge branch-specific behavior unchanged: macOS/Windows artifacts are produced from the branch workflow only.
 - 仅 Feishu Bridge 分支使用；本分支不发布 GitHub Release assets。
 - 同步主线 `v1.6.5` 启动模型探测优化：缓存并优先使用上一次成功的远端 API 域名，重新打开时先展示缓存模型，后台启动探测使用比手动刷新更短的路径。
 - 同步日志页表头全宽修复，Feishu 专属会话 / Chat ID 列继续保持对齐。
 - 再次加固 Windows 飞书 CLI 安装：无需用户手动改系统 PATH，也能识别 `D:\node.js\node_global` 这类自定义 npm 全局目录；当 npm 安装脚本清理临时目录失败但 `lark-cli` 实际可用时继续后续流程；优先使用固定兼容的 `skills` 版本，最后才回退 latest。
+- App 内安装和 Windows 兜底脚本统一为稳定 Node 策略：优先 Node.js 22.11.0，失败回退 20.18.0，不再默认选择最高 current 版本。
+- 设置页新增 Feishu Bridge 安装指南弹层，提供可复制的 Windows / 手动排障兜底命令。
 - Feishu Bridge 分支专属行为保持不变：仅通过分支 workflow 生成 macOS / Windows artifact。
 
 ## v1.6.4 - 2026-05-21

@@ -114,6 +114,9 @@ func npmGlobalPrefixes(baseSegments []string) []string {
 	if prefix := strings.TrimSpace(os.Getenv("npm_config_prefix")); prefix != "" {
 		prefixes = append(prefixes, prefix)
 	}
+	if os.Getenv("FEISHU_SKIP_NPM_PREFIX_PROBE") == "1" {
+		return uniqueStrings(prefixes)
+	}
 	npmPath, err := lookPathInSegments("npm", baseSegments)
 	if err != nil {
 		return uniqueStrings(prefixes)
@@ -155,6 +158,7 @@ func nodeVersionManagerPATHSegments() []string {
 	case "windows":
 		for _, root := range []string{
 			filepath.Join(home, "AppData", "Roaming", "nvm"),
+			filepath.Join(home, "AppData", "Local", "nvm"),
 			filepath.Join(home, "AppData", "Local", "fnm_multishells"),
 			filepath.Join(home, "AppData", "Local", "fnm", "node-versions"),
 			filepath.Join(home, "AppData", "Local", "Volta", "tools", "image", "node"),
@@ -378,6 +382,9 @@ func isPATHEnvItem(item string) bool {
 func commandWithEnv(name string, args ...string) *exec.Cmd {
 	executable := resolveCommandName(name)
 	cmd := exec.Command(executable, args...)
+	if shell, shellArgs, ok := windowsShellCommand(executable, args); ok {
+		cmd = exec.Command(shell, shellArgs...)
+	}
 	cmd.Env = resolvedCommandEnv()
 	applyCommandPlatformOptions(cmd)
 	return cmd
@@ -386,9 +393,25 @@ func commandWithEnv(name string, args ...string) *exec.Cmd {
 func commandContextWithEnv(ctx context.Context, name string, args ...string) *exec.Cmd {
 	executable := resolveCommandName(name)
 	cmd := exec.CommandContext(ctx, executable, args...)
+	if shell, shellArgs, ok := windowsShellCommand(executable, args); ok {
+		cmd = exec.CommandContext(ctx, shell, shellArgs...)
+	}
 	cmd.Env = resolvedCommandEnv()
 	applyCommandPlatformOptions(cmd)
 	return cmd
+}
+
+func windowsShellCommand(executable string, args []string) (string, []string, bool) {
+	if runtime.GOOS != "windows" {
+		return "", nil, false
+	}
+	ext := strings.ToLower(filepath.Ext(executable))
+	if ext != ".cmd" && ext != ".bat" {
+		return "", nil, false
+	}
+	shellArgs := []string{"/D", "/C", "call", executable}
+	shellArgs = append(shellArgs, args...)
+	return "cmd.exe", shellArgs, true
 }
 
 func resolveCommandName(name string) string {

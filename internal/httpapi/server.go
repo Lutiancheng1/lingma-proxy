@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,9 @@ type Server struct {
 	// OnRequest is called after each request completes with summary info.
 	// method, path, statusCode, duration, requestBody, responseBody
 	OnRequest func(method, path string, statusCode int, duration time.Duration, reqBody, respBody string)
+	// AppLogs returns persisted desktop application logs. It is optional because
+	// the CLI server does not have a desktop app state file.
+	AppLogs func(limit int, source string) []DebugAppLogRecord
 }
 
 type anthropicRequest struct {
@@ -123,6 +127,17 @@ type debugLogRecord struct {
 	Message string `json:"message"`
 }
 
+type DebugAppLogRecord struct {
+	CreatedAt string `json:"createdAt,omitempty"`
+	Time      string `json:"time"`
+	Source    string `json:"source,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	ChatID    string `json:"chatId,omitempty"`
+	MessageID string `json:"messageId,omitempty"`
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+}
+
 func NewServer(addr string, svc *service.Service) *Server {
 	s := &Server{
 		svc: svc,
@@ -133,8 +148,10 @@ func NewServer(addr string, svc *service.Service) *Server {
 	mux.HandleFunc("/health", s.handleRoot)
 	mux.HandleFunc("/debug/requests", s.handleDebugRequests)
 	mux.HandleFunc("/debug/access-logs", s.handleDebugLogs)
+	mux.HandleFunc("/debug/app-logs", s.handleDebugAppLogs)
 	mux.HandleFunc("/api/requests", s.handleDebugRequests)
 	mux.HandleFunc("/api/access-logs", s.handleDebugLogs)
+	mux.HandleFunc("/api/app-logs", s.handleDebugAppLogs)
 	mux.HandleFunc("/debug/logs", s.handleDebugLogs)
 	mux.HandleFunc("/api/logs", s.handleDebugLogs)
 	mux.HandleFunc("/capabilities", s.handleCapabilities)
@@ -286,6 +303,51 @@ func (s *Server) handleDebugLogs(w http.ResponseWriter, r *http.Request) {
 		"service": "lingma-proxy",
 		"kind":    "http_access_logs",
 		"count":   len(logs),
+		"logs":    logs,
+		"state":   s.svc.State(),
+	})
+}
+
+func (s *Server) handleDebugAppLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
+	if s.AppLogs == nil {
+		writeOpenAIError(w, http.StatusNotImplemented, "not_supported", "desktop app logs are not available in this process")
+		return
+	}
+
+	limit := 500
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			switch {
+			case parsed < 1:
+				limit = 1
+			case parsed > 5000:
+				limit = 5000
+			default:
+				limit = parsed
+			}
+		}
+	}
+	source := strings.TrimSpace(r.URL.Query().Get("source"))
+
+	logs := s.AppLogs(limit, source)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"service": "lingma-proxy",
+		"kind":    "desktop_app_logs",
+		"count":   len(logs),
+		"source":  source,
 		"logs":    logs,
 		"state":   s.svc.State(),
 	})
@@ -2199,7 +2261,7 @@ func decodeJSON(r *http.Request, out any) error {
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }
@@ -2647,7 +2709,7 @@ func (s *Server) withRecorder(next http.Handler) http.Handler {
 
 func isDebugInspectionPath(path string) bool {
 	switch path {
-	case "/debug/requests", "/debug/logs", "/api/requests", "/api/logs", "/debug/access-logs", "/api/access-logs":
+	case "/debug/requests", "/debug/logs", "/api/requests", "/api/logs", "/debug/access-logs", "/api/access-logs", "/debug/app-logs", "/api/app-logs":
 		return true
 	default:
 		return false
@@ -3052,11 +3114,18 @@ func parseLocalImagePath(raw string) *service.Image {
 
 	path := raw
 	if strings.HasPrefix(raw, "file://") {
-		u, err := url.Parse(raw)
-		if err != nil {
-			return nil
+		if strings.Contains(raw, `\`) {
+			path = strings.TrimPrefix(raw, "file://")
+		} else {
+			u, err := url.Parse(raw)
+			if err != nil {
+				return nil
+			}
+			path = u.Path
+			if host := strings.TrimSpace(u.Host); host != "" {
+				path = "//" + host + path
+			}
 		}
-		path = u.Path
 	}
 	if strings.HasPrefix(path, "~") {
 		home, err := os.UserHomeDir()
@@ -3065,7 +3134,11 @@ func parseLocalImagePath(raw string) *service.Image {
 		}
 		path = home + strings.TrimPrefix(path, "~")
 	}
-	if !strings.HasPrefix(path, "/") {
+	path = filepath.FromSlash(path)
+	if len(path) >= 3 && path[0] == filepath.Separator && path[2] == ':' {
+		path = path[1:]
+	}
+	if !filepath.IsAbs(path) {
 		return nil
 	}
 

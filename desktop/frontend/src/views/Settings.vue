@@ -35,6 +35,7 @@ const bridgeStatusLoaded = ref(false)
 const bridgeSaving = ref(false)
 const bridgeBusy = ref(false)
 const bridgeRefreshing = ref(false)
+const bridgeSetupGuideOpen = ref(false)
 const openSelect = ref('')
 const fallbackModelsText = ref('')
 const availableBridgeModels = ref([])
@@ -164,6 +165,44 @@ const selectLabel = computed(() => (field) => {
   const option = selectOptions[field]?.find((item) => item.value === config.value[field])
   return option?.label || '请选择'
 })
+
+const bridgeSetupCommands = [
+  {
+    title: 'Windows 一键脚本（推荐兜底）',
+    command: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\windows\\install-feishu-cli.ps1 -PersistPath',
+    note: '在源码仓库根目录执行；cmd.exe / PowerShell 都可复制运行。会扫描已有 Node；如检测到 nvm-windows 会优先用 nvm 安装/切换 LTS，再修复 npm 全局目录并安装 lark-cli 与 Skills。',
+  },
+  {
+    title: '可选：切换 npm 镜像',
+    command: 'npm config set registry https://registry.npmmirror.com',
+    note: '公司网络或 npmjs 访问慢时使用；能直接访问 npmjs 可跳过。',
+  },
+  {
+    title: '安装飞书 CLI',
+    command: 'npm install -g @larksuite/cli',
+    note: '需要 Node.js 20.12+，推荐当前 LTS。macOS 一键安装会优先复用 nvm/fnm/volta/Homebrew 中可用的 Node。',
+  },
+  {
+    title: '安装 CLI Skills',
+    command: 'npx -y skills@1.5.6 add larksuite/cli -y -g',
+    note: '固定 1.5.6 是为了避开部分环境下 latest skills 的安装异常。',
+  },
+  {
+    title: '首次初始化飞书应用',
+    command: 'lark-cli config init --new --lang zh',
+    note: '会打开浏览器，按页面完成应用创建或选择已有应用。',
+  },
+  {
+    title: '登录并授权',
+    command: 'lark-cli auth login --recommend',
+    note: '完成授权后回到 Lingma Proxy 点击“刷新状态”。',
+  },
+  {
+    title: '验证授权',
+    command: 'lark-cli auth status --verify',
+    note: '返回 valid 后即可保存配置并启动 Bridge。',
+  },
+]
 
 function toggleSelect(field) {
   openSelect.value = openSelect.value === field ? '' : field
@@ -354,6 +393,15 @@ async function withBridgeAction(message, action) {
 function openBridgeURL(url) {
   if (!url) return
   BrowserOpenURL(url)
+}
+
+async function copyBridgeSetupCommand(command) {
+  try {
+    await navigator.clipboard?.writeText(command)
+    emit('notice', '命令已复制')
+  } catch (e) {
+    emit('log', 'warn', '命令复制失败：' + (e.message || String(e)))
+  }
 }
 
 async function installBridgeCLI() {
@@ -779,8 +827,18 @@ async function handleBridgeStepClick(step) {
           </button>
         </div>
 
-          <div class="hint-box compact-hint">
-          <strong>推荐接入路径</strong>
+          <div class="hint-box compact-hint bridge-setup-hint">
+          <div class="hint-title-row">
+            <strong>推荐接入路径</strong>
+            <button
+              type="button"
+              class="inline-help-trigger guide-help-trigger"
+              aria-label="查看 Feishu Bridge 安装步骤"
+              @click="bridgeSetupGuideOpen = true"
+            >
+              <i class="bi bi-question-circle" aria-hidden="true"></i>
+            </button>
+          </div>
           <span>按顺序完成“安装 CLI 与 Skills” → “初始化飞书应用” → “登录并授权”，全部完成后再保存配置并启动 Bridge。</span>
         </div>
 
@@ -882,5 +940,52 @@ async function handleBridgeStepClick(step) {
         </div>
       </div>
     </section>
+
+    <div v-if="bridgeSetupGuideOpen" class="modal-backdrop" @click.self="bridgeSetupGuideOpen = false">
+      <section class="modal-card bridge-guide-modal">
+        <div class="modal-header">
+          <div>
+            <h2>Feishu Bridge 安装指南</h2>
+            <p>优先使用设置页三张卡片完成接入；自动安装失败时，再按下方命令手动兜底。</p>
+          </div>
+          <button class="secondary-button" type="button" @click="bridgeSetupGuideOpen = false">关闭</button>
+        </div>
+        <div class="modal-body bridge-guide-body">
+          <div class="guide-section">
+            <h3>推荐流程</h3>
+            <ol>
+              <li>点击“安装 CLI 与 Skills”，等待状态变为“已完成”。</li>
+              <li>点击“初始化飞书应用”，在浏览器里创建或选择已有飞书应用。</li>
+              <li>点击“登录并授权”，在浏览器里完成账号授权。</li>
+              <li>三步都完成后，保存 Bridge 配置并启动 Bridge。</li>
+            </ol>
+          </div>
+
+          <div class="guide-section">
+            <h3>手动兜底命令</h3>
+            <p>如果自动安装因为 npm registry、公司网络、PATH 或临时目录清理失败，可以逐条执行下面命令。</p>
+            <div class="command-list">
+              <div v-for="item in bridgeSetupCommands" :key="item.command" class="command-card">
+                <div class="command-card-head">
+                  <strong>{{ item.title }}</strong>
+                  <button class="secondary-button" type="button" @click="copyBridgeSetupCommand(item.command)">复制</button>
+                </div>
+                <code>{{ item.command }}</code>
+                <span>{{ item.note }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="guide-section">
+            <h3>环境注意事项</h3>
+            <p>Node.js 需要 20.12+，推荐使用当前 LTS。Node 16 不支持当前飞书 CLI 安装链路。</p>
+            <p>macOS 点击“安装飞书 CLI”时，会先扫描已有 Node；不满足要求时依次尝试 nvm、fnm、volta、Homebrew。没有这些工具时，需要先手动安装 Node.js。</p>
+            <p>Windows 点击“安装飞书 CLI”时，会先扫描已有 Node；不满足要求时优先走 nvm-windows 安装/切换 LTS，再尝试 winget。上方 PowerShell 脚本用于自动安装失败后的手动兜底。</p>
+            <p>如果 npm 全局目录是 <code>D:\node.js\node_global</code> 这类自定义路径，新版会自动探测；手动安装完成后回到设置页点击“刷新状态”。</p>
+            <p>如果提示缺少权限 scope，按飞书对话里返回的授权链接补授权，完成后再次发送原问题。</p>
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
 </template>

@@ -10,8 +10,9 @@ import (
 const windowsCreateNoWindow = 0x08000000
 
 func applyCommandPlatformOptions(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: windowsCreateNoWindow,
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
+	cmd.SysProcAttr.HideWindow = true
+	cmd.SysProcAttr.CreationFlags |= windowsCreateNoWindow
 }

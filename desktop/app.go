@@ -127,6 +127,9 @@ type App struct {
 	stateFlushTimer *time.Timer
 	stateFlushAt    time.Time
 	bootStartedAt   time.Time
+
+	lastFeishuProbeLog   string
+	lastFeishuProbeLogAt time.Time
 }
 
 // ModelInfo represents a model returned by /v1/models
@@ -562,6 +565,7 @@ func (a *App) StartProxy() error {
 
 	svc := service.New(cfg)
 	server := httpapi.NewServer(addr, svc)
+	server.AppLogs = a.debugAppLogs
 	server.OnRequest = func(method, path string, statusCode int, duration time.Duration, reqBody, respBody string) {
 		inputTokens, outputTokens := extractTokenUsage(respBody)
 		model := extractRequestModel(reqBody)
@@ -692,6 +696,44 @@ func (a *App) GetLogDetail(createdAt string) (AppLog, error) {
 		}
 	}
 	return AppLog{}, fmt.Errorf("log not found")
+}
+
+func (a *App) debugAppLogs(limit int, source string) []httpapi.DebugAppLogRecord {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	source = strings.TrimSpace(strings.ToLower(source))
+	a.mu.Lock()
+	a.flushAppStateLocked()
+	logs := make([]AppLog, len(a.logs))
+	copy(logs, a.logs)
+	a.mu.Unlock()
+
+	capHint := len(logs)
+	if capHint > limit {
+		capHint = limit
+	}
+	out := make([]httpapi.DebugAppLogRecord, 0, capHint)
+	for i := len(logs) - 1; i >= 0 && len(out) < limit; i-- {
+		entry := logs[i]
+		if source != "" && strings.ToLower(strings.TrimSpace(entry.Source)) != source {
+			continue
+		}
+		out = append(out, httpapi.DebugAppLogRecord{
+			CreatedAt: entry.CreatedAt,
+			Time:      entry.Time,
+			Source:    entry.Source,
+			SessionID: entry.SessionID,
+			ChatID:    entry.ChatID,
+			MessageID: entry.MessageID,
+			Level:     entry.Level,
+			Message:   redactPlainText(entry.Message),
+		})
+	}
+	return out
 }
 
 func (a *App) ClearLogs() {

@@ -171,12 +171,18 @@ func (m *Manager) InstallCLI(ctx context.Context) error {
 	m.emit(status)
 
 	err := installCLI(ctx, func(line string) {
+		line = formatOutputLine(line)
+		if line == "" {
+			return
+		}
 		m.mu.Lock()
 		m.status.LastOutput = line
 		status := m.status
 		m.mu.Unlock()
 		m.emit(status)
-		m.logf("info", "飞书 CLI 安装进度："+line)
+		if shouldLogCLIProgress(line) {
+			m.logf("info", "飞书 CLI 安装进度："+line)
+		}
 	})
 	m.refreshStatus(ctx)
 
@@ -210,6 +216,29 @@ func userFacingInstallError(err error) string {
 	default:
 		return "飞书 CLI 安装失败：请查看日志或反馈包中的详细 npm/npx 输出。"
 	}
+}
+
+func shouldLogCLIProgress(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "error") ||
+		strings.Contains(lower, "failed") ||
+		strings.Contains(lower, "unsupported") ||
+		strings.Contains(lower, "warn") ||
+		strings.Contains(trimmed, "失败") ||
+		strings.Contains(trimmed, "错误") {
+		return true
+	}
+	return strings.Contains(trimmed, "安装飞书 CLI") ||
+		strings.Contains(trimmed, "验证 lark-cli") ||
+		strings.Contains(trimmed, "lark-cli version") ||
+		strings.Contains(trimmed, "Using Node.js") ||
+		strings.Contains(trimmed, "Using npm global prefix") ||
+		strings.Contains(trimmed, "Check lark-cli skills") ||
+		strings.Contains(trimmed, "Install lark-cli")
 }
 
 func (m *Manager) StartSetupNew(ctx context.Context) error {
@@ -613,6 +642,8 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 	}
 	m.logf("info", fmt.Sprintf("Feishu bridge 开始处理: model=%s forceToolUse=%t rounds=%d", model, forceToolUse, rounds), logMeta)
 	replyText := ""
+	lastToolOutput := ""
+	toolCallsExecuted := false
 conversation:
 	for i := 0; i < rounds; i++ {
 		resp, err := callLLMForConversation(ctx, proxyURL, model, messages, forceToolUse)
@@ -645,6 +676,7 @@ conversation:
 			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
 			m.logf("info", fmt.Sprintf("Feishu bridge tool call: %s %s", tc.Function.Name, compactJSON(args)), logMeta)
 			result := executeTool(tc.Function.Name, args)
+			toolCallsExecuted = true
 			content := result.Output
 			if len(result.MissingScopes) > 0 {
 				scopes := uniqueNonEmpty(result.MissingScopes)
@@ -671,6 +703,7 @@ conversation:
 				})
 				break conversation
 			}
+			lastToolOutput = content
 			m.logf("info", fmt.Sprintf("Feishu bridge tool result: %s %s", tc.Function.Name, summarizeText(result.Output, 160)), logMeta)
 			messages = append(messages, map[string]any{
 				"role":         "tool",
@@ -684,8 +717,11 @@ conversation:
 			})
 		}
 	}
+	if strings.TrimSpace(replyText) == "" && toolCallsExecuted {
+		replyText = m.synthesizeToolFinalReply(ctx, proxyURL, model, messages, lastToolOutput, logMeta)
+	}
 	if strings.TrimSpace(replyText) == "" {
-		replyText = "已完成处理。"
+		replyText = "抱歉，我执行了处理但没有拿到可用结果。请换个更具体的关键词或文档范围再试。"
 	}
 	if !endsWithAssistantReply(rawHistory, replyText) {
 		rawHistory = append(rawHistory, map[string]any{"role": "assistant", "content": replyText})
@@ -697,6 +733,38 @@ conversation:
 	} else {
 		m.logf("info", "Feishu bridge 回复已发送: message="+trimmedID(event.MessageID), logMeta)
 	}
+}
+
+func (m *Manager) synthesizeToolFinalReply(ctx context.Context, proxyURL string, model string, messages []map[string]any, lastToolOutput string, meta LogMeta) string {
+	m.logf("info", "Feishu bridge 工具轮次结束，尝试生成最终答复", meta)
+	finalMessages := cloneMessages(messages)
+	finalMessages = append(finalMessages, map[string]any{
+		"role":    "system",
+		"content": "工具调用阶段已经结束。请只基于上面的工具结果，用中文直接回答用户的问题；不要再要求用户自己执行命令；如果结果为空或不足，请明确说明没有查到，并给出下一步建议。",
+	})
+	resp, err := callLLMPlain(ctx, proxyURL, model, finalMessages)
+	if err != nil {
+		m.logf("warn", "Feishu bridge 最终答复生成失败："+err.Error(), meta)
+		return fallbackToolResultReply(lastToolOutput)
+	}
+	if len(resp.Choices) == 0 {
+		m.logf("warn", "Feishu bridge 最终答复生成无 choices", meta)
+		return fallbackToolResultReply(lastToolOutput)
+	}
+	reply := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if reply == "" {
+		m.logf("warn", "Feishu bridge 最终答复为空，回退到工具结果摘要", meta)
+		return fallbackToolResultReply(lastToolOutput)
+	}
+	return reply
+}
+
+func fallbackToolResultReply(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	return "我已经执行了查询，但模型没有生成最终总结。以下是最后一次工具结果摘要：\n\n" + truncatePreserveLines(output, 2800)
 }
 
 func (m *Manager) storeConversation(chatID string, history []map[string]any) {
@@ -1021,6 +1089,14 @@ func summarizeText(text string, limit int) string {
 		return text
 	}
 	return text[:limit] + "..."
+}
+
+func truncatePreserveLines(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "\n... (truncated)"
 }
 
 func trimmedID(value string) string {

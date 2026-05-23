@@ -1286,6 +1286,91 @@ button {
   max-height: none;
 }
 
+.bridge-guide-modal {
+  width: min(780px, calc(100vw - 48px));
+}
+
+.bridge-guide-body {
+  gap: 16px;
+}
+
+.guide-section {
+  display: grid;
+  gap: 8px;
+}
+
+.guide-section h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.guide-section p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.guide-section ol {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.command-list {
+  display: grid;
+  gap: 10px;
+}
+
+.command-card {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.command-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.command-card-head strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.command-card code,
+.guide-section code {
+  color: var(--text);
+  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.command-card code {
+  display: block;
+  padding: 9px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.04);
+  white-space: pre;
+}
+
+.command-card span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .feedback-result-row label {
   color: var(--muted);
   font-size: 12px;
@@ -1834,6 +1919,23 @@ button:disabled {
   margin-bottom: 14px;
 }
 
+.hint-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.bridge-setup-hint {
+  position: relative;
+}
+
+.guide-help-trigger {
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+}
+
 .compact-form-grid {
   row-gap: 14px;
 }
@@ -2190,6 +2292,14 @@ button:disabled {
 :root[data-theme='dark'] .inline-help-popover {
   background: rgba(15, 23, 42, 0.96);
   box-shadow: 0 16px 40px rgba(2, 6, 23, 0.38);
+}
+
+:root[data-theme='dark'] .command-card {
+  background: rgba(15, 23, 42, 0.52);
+}
+
+:root[data-theme='dark'] .command-card code {
+  background: rgba(2, 6, 23, 0.32);
 }
 
 .detect-title {

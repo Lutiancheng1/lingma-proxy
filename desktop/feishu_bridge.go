@@ -261,12 +261,23 @@ func (a *App) RefreshFeishuBridgeStatus() feishu.Status {
 }
 
 func (a *App) logFeishuProbeStatus(status feishu.Status) {
-	a.emitLogWithSource("feishu-bridge", "info", fmt.Sprintf("Feishu probe paths: node=%s npm=%s npx=%s lark-cli=%s",
+	message := fmt.Sprintf("Feishu probe paths: node=%s npm=%s npx=%s lark-cli=%s",
 		displayBinaryPath(status.Node.Path),
 		displayBinaryPath(status.NPM.Path),
 		displayBinaryPath(status.NPX.Path),
 		displayBinaryPath(status.CLI.Path),
-	))
+	)
+	now := time.Now()
+	a.mu.Lock()
+	shouldLog := message != a.lastFeishuProbeLog || now.Sub(a.lastFeishuProbeLogAt) >= 5*time.Minute
+	if shouldLog {
+		a.lastFeishuProbeLog = message
+		a.lastFeishuProbeLogAt = now
+	}
+	a.mu.Unlock()
+	if shouldLog {
+		a.emitLogWithSource("feishu-bridge", "info", message)
+	}
 }
 
 func displayBinaryPath(path string) string {
