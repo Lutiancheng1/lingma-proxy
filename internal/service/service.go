@@ -1254,8 +1254,7 @@ func (s *Service) runPromptLocked(
 		{"type": "text", "text": text},
 	}
 
-	// Build contextParams for images using Lingma's native format
-	var contextParams []map[string]any
+	imageScheme := s.ipcImageURIScheme()
 	for _, img := range images {
 		if img.Data == "" && img.URL == "" {
 			continue
@@ -1265,69 +1264,38 @@ func (s *Service) runPromptLocked(
 			mediaType = "image/jpeg"
 		}
 
-		// Determine file extension from mediaType
-		ext := "jpg"
-		switch mediaType {
-		case "image/png":
-			ext = "png"
-		case "image/gif":
-			ext = "gif"
-		case "image/webp":
-			ext = "webp"
-		case "image/bmp":
-			ext = "bmp"
-		}
-
-		// If we have base64 data, save to temp file and build lingma URI
 		var imageURI string
 		if img.Data != "" {
-			tmpFile, err := os.CreateTemp("", "lingma-img-*"+"."+ext)
-			if err == nil {
+			if tmpFile, err := os.CreateTemp("", "lingma-img-*"+imageExtension(mediaType)); err == nil {
+				tmpPath := tmpFile.Name()
+				_ = tmpFile.Close()
 				data, _ := base64.StdEncoding.DecodeString(img.Data)
 				if len(data) > 0 {
-					_ = os.WriteFile(tmpFile.Name(), data, 0644)
-					absPath, _ := filepath.Abs(tmpFile.Name())
-					imageURI = "lingma:///agent/file?path=" + url.QueryEscape(absPath)
+					_ = os.WriteFile(tmpPath, data, 0644)
+					if absPath, err := filepath.Abs(tmpPath); err == nil {
+						imageURI = fmt.Sprintf("%s:///agent/file?path=%s", imageScheme, url.QueryEscape(absPath))
+					}
 				}
-				tmpFile.Close()
 			}
 		}
-		if imageURI == "" && img.URL != "" {
+		if img.URL != "" {
 			imageURI = img.URL
 		}
-
-		// Add to promptItems using Lingma native image format
-		itemPrompt := map[string]any{
+		if imageURI == "" {
+			continue
+		}
+		promptItems = append(promptItems, map[string]any{
 			"type":     "image",
 			"mimeType": mediaType,
-		}
-		if imageURI != "" {
-			itemPrompt["uri"] = imageURI
-		}
-		if img.Data != "" {
-			itemPrompt["data"] = img.Data
-		}
-		promptItems = append(promptItems, itemPrompt)
-
-		// Add to contextParams using Lingma native format
-		item := map[string]any{
-			"type":     "image",
-			"mimeType": mediaType,
-		}
-		if imageURI != "" {
-			item["uri"] = imageURI
-		}
-		if img.Data != "" {
-			item["data"] = img.Data
-		}
-		contextParams = append(contextParams, item)
+			"data":     img.Data,
+			"uri":      imageURI,
+		})
 	}
 
 	params := map[string]any{
-		"sessionId":     sessionID,
-		"prompt":        promptItems,
-		"contextParams": contextParams,
-		"_meta":         meta,
+		"sessionId": sessionID,
+		"prompt":    promptItems,
+		"_meta":     meta,
 	}
 	// Fallback: if images have URLs, also pass via extra field
 	for _, img := range images {
@@ -1405,6 +1373,14 @@ func (s *Service) runPromptLocked(
 	}
 }
 
+func (s *Service) ipcImageURIScheme() string {
+	values := strings.ToLower(strings.Join([]string{s.cfg.Pipe, s.cfg.WebSocketURL, s.pipePath, s.endpoint}, " "))
+	if strings.Contains(values, "qoder") || strings.Contains(values, "qodercn") {
+		return "qodercn"
+	}
+	return lingmaipc.DefaultImageURIScheme(s.cfg.Pipe, s.cfg.WebSocketURL)
+}
+
 func (s *Service) deleteSessionLocked(ctx context.Context, client *lingmaipc.Client, sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -1436,6 +1412,21 @@ func extractLastUserImages(messages []ChatMessage) []Image {
 		}
 	}
 	return nil
+}
+
+func imageExtension(mediaType string) string {
+	switch mediaType {
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/bmp":
+		return ".bmp"
+	default:
+		return ".jpg"
+	}
 }
 
 func buildLingmaPrompt(req ChatRequest, mode SessionMode, emulateTools bool) (string, error) {

@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased (target: v1.6.5)
+## Unreleased (target: v1.6.6)
+
+## v1.6.6 - 2026-05-25
+
+- Enabled the desktop WebView inspector in packaged release builds, so installed desktop apps keep the right-click `Inspect Element` menu for UI/style/runtime troubleshooting.
+- Fixed QoderCN IPC image requests by using QoderCN's native `qodercn:///agent/file?path=...` image URI scheme while preserving `lingma:///agent/file?path=...` compatibility for legacy Lingma runtimes.
+- Removed the ineffective IPC image `contextParams` branch and restored image payloads to the `session/prompt` image item shape that both QoderCN and Lingma consume.
+- Verified the full IPC image path with `/Users/tiancheng/Pictures/ik2.jpg` on both QoderCN and Lingma runtimes; both returned correct visual descriptions of the coastal rocks / cloudy seascape.
+- 正式 Release 桌面包保留 WebView Inspector，安装后的桌面 App 也可以通过右键 `Inspect Element` 排查 UI 样式和运行时问题。
+- 修复 QoderCN IPC 图片请求：连接 QoderCN 时使用原生 `qodercn:///agent/file?path=...` 图片 URI，同时保留旧 Lingma 运行时的 `lingma:///agent/file?path=...` 兼容。
+- 移除无效的 IPC 图片 `contextParams` 挂载分支，恢复为 QoderCN 与 Lingma 都实际消费的 `session/prompt` image item 结构。
+- 已用 `/Users/tiancheng/Pictures/ik2.jpg` 分别验证 QoderCN 与 Lingma 两条 IPC 图片链路，二者均能正确描述海边礁石 / 阴云海景。
 
 ## v1.6.5 - 2026-05-22
 

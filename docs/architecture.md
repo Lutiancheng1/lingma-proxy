@@ -148,6 +148,7 @@ Local transport client for Lingma / QoderCN IPC.
 Responsibilities:
 
 - detect WebSocket / pipe endpoint, preferring QoderCN runtime files before Lingma runtime files
+- provide the runtime-specific IPC image URI scheme (`qodercn:///...` for QoderCN, `lingma:///...` for legacy Lingma)
 - dial and reconnect
 - send RPC messages such as:
   - `session/new`

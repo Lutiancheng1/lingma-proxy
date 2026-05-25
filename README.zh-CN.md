@@ -49,7 +49,7 @@
 ## 当前版本
 
 <!-- VERSION:CURRENT:BEGIN -->
-当前桌面端版本：`v1.6.5`。
+当前桌面端版本：`v1.6.6`。
 
 唯一来源是 [VERSION](./VERSION)。执行 `./scripts/sync-version.sh` 会把它同步到 [desktop/wails.json](./desktop/wails.json)、桌面 UI 和面向发布的文档块。
 <!-- VERSION:CURRENT:END -->
@@ -279,6 +279,7 @@ GitHub Actions 会在 Release 中产出：
 | Anthropic Messages base64 image block | 已验证 | 通过 `/v1/messages` 实测，模型可以正确描述图片内容。 |
 | Claude Code 粘贴图片 | 已验证 | 已用 Claude Code 风格的 Anthropic 请求实测：长上下文、tools、base64 图片块和 Claude image-cache 路径标记同时存在时可用。 |
 | Claude Code 粘贴图片 + tools | 已验证 | 远端模式会先用 IPC 提取最新图片轮次的上下文，再回到 Remote API 原生工具调用。 |
+| QoderCN IPC 图片请求 | 已验证 | 代理现在会使用 QoderCN 原生的 `qodercn:///agent/file?path=...` 图片 URI，不再误用旧 Lingma URI；已用 `/Users/tiancheng/Pictures/ik2.jpg` 实测。 |
 | Hermes CLI `hermes chat --image` | 已验证 | 使用 `--provider custom --model kmodel --image /Users/tiancheng/Pictures/ik2.jpg` 实测；Hermes 会向 `/v1/chat/completions` 发送 OpenAI `image_url`，模型可以正确描述图片内容。 |
 | OpenClaw `infer image describe --file` | 已验证 | 配置 `lingma-proxy/kmodel` 为 `text+image` 后实测；OpenClaw 会发送 OpenAI `image_url`，模型可以正确描述图片内容。 |
 | OpenClaw `agent` 图片标记 | 部分验证 | 图片文件进入 OpenClaw 每个 session 的 sandbox 后可用；直接引用 `/Users/.../Pictures/ik2.jpg` 会先被 OpenClaw 自己的沙盒拒绝，尚未作为图片请求进入代理。 |
@@ -287,6 +288,7 @@ GitHub Actions 会在 Release 中产出：
 关键限制和行为：
 
 - 远端 API 模式的图片理解仍依赖 Lingma IPC 图片链路，因为直连远端聊天接口不会稳定消费本地 `file://` 和 data URL 图片。
+- IPC 图片 URI 会按运行时区分：QoderCN 使用 `qodercn:///agent/file?path=...`，旧 Lingma 运行时继续使用 `lingma:///agent/file?path=...`。
 - 如果请求同时包含图片和工具，代理会只取“最后一条带图片的用户消息”构造一个紧凑的 IPC 图片理解请求，把得到的图片上下文追加回原请求，再交给 Remote API 原生工具调用。
 - 因此图片请求要求 Lingma App / IDE 插件保持运行；如果 Lingma 被彻底退出，纯文本 Remote API 仍可工作，但图片理解会失败并提示重新打开 Lingma。
 - 请求日志会脱敏大段图片 base64，只保留图片载荷标记，避免日志 UI 被撑爆。
@@ -433,6 +435,7 @@ lingma-proxy \
 - 远端模式的 `/v1/models` 返回的是远端接口模型 key，不一定等同于 IPC 插件模式里看到的 `MiniMax-M2.7`、`Kimi-K2.6` 等展示名。
 - 即使成功导入了远端登录态，模型集合也可能和本仓库示例不同。尤其是 `Kimi-K2.6`、`MiniMax-M2.7`、部分 `Qwen3` 变体、`Auto / org_auto`，都可能随着账号和租户不同而变化。
 - 远端模式下的图片请求会自动走 IPC 图片链路，因为直连远端聊天接口不会直接消费本地 `file://` 和 data URL 图片。若请求同时带工具，代理会先通过 IPC 提取图片上下文，再把不含图片但包含上下文的请求交给 Remote API 原生工具调用。
+- QoderCN IPC 图片轮次使用 QoderCN 原生的 `qodercn:///agent/file?path=...` URI；旧 Lingma 运行时继续使用 `lingma:///agent/file?path=...` URI。
 - 当前本机实测：`/health`、`/v1/models`、OpenAI 流式 / 非流式、Claude Code Anthropic + Bash 工具调用均可用；Claude Code 完整工具链耗时明显高于简单 OpenAI 请求。
 - 该模式参考了 [ZipperCode/lingma2api](https://github.com/ZipperCode/lingma2api) 对 Lingma 远端接口、签名和登录态结构的探索，本仓库将其作为可切换后端集成到现有 OpenAI / Anthropic / 桌面 App 架构中。
 
@@ -1084,16 +1087,12 @@ Release workflow 会执行：
 
 ### 建议的 Release 文案模板
 
-可以直接作为 `v1.5.3` 的 GitHub Release 正文使用：
+可以直接作为下一个主线 tag 的 GitHub Release 正文草稿使用：
 
-- 请求流 / 日志页改成“摘要优先、详情按需加载”，长时间排查时前端热路径不再长期持有完整正文。
-- 请求内容 / 响应内容详情区新增局部 `Cmd/Ctrl+F` 搜索，支持命中计数、高亮和上下跳转。
-- 修复同秒请求选中问题：桌面端记录切换为稳定 UUID，首页跳转到请求流和列表高亮都更准确。
-- 把原生确认框替换为统一的应用内确认弹层，请求流清空、日志清空和桌面端退出确认使用同一套交互。
-- 调试接口语义拆分为 `/debug/requests` 和 `/debug/access-logs`；`/debug/logs` 仅作为兼容别名保留。
-- 版本号改为仓库级 `VERSION` 单一来源，并增加同步脚本、漂移检查脚本和 CI 校验，减少发版时的人肉维护点。
-- 基于桌面版 `<desktop-version>` 和 Brew 安装版 `codex-cli 0.130.0` 完整验证：纯文本、多步工具、文件修改 + diff、图片输入、图片 + 工具后续调用，以及桌面端重启后的重试恢复。
-- 保持 Remote API 作为默认推荐后端，同时保留 IPC 插件模式作为兼容兜底。
+- 修复 QoderCN IPC 图片输入：连接 QoderCN 时使用原生 `qodercn:///agent/file?path=...` URI，同时保留旧 Lingma 运行时的 `lingma:///...` 兼容。
+- 已用 `/Users/tiancheng/Pictures/ik2.jpg` 验证 QoderCN IPC 图片链路；模型可以正确描述海边礁石和海浪，QoderCN 日志显示 `image detect success` / `upload image success`，不再出现 `invalid uri`。
+- 正式 Release 桌面包和本地构建包都保留 WebView Inspector，右键 `Inspect Element` 可用于排查安装包里的 UI 样式和运行时问题。
+- 继续保留标准发版闸门：版本同步、release notes 检查、Go 测试、前端构建和本地桌面重建后再打 tag。
 
 ## 与上游项目的关系
 

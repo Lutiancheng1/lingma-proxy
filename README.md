@@ -46,7 +46,7 @@ Auto-detection prefers QoderCN runtime files first, then falls back to Lingma ru
 ## Current Version
 
 <!-- VERSION:CURRENT:BEGIN -->
-Current desktop app version: `v1.6.5`.
+Current desktop app version: `v1.6.6`.
 
 The canonical source is [VERSION](./VERSION). Run `./scripts/sync-version.sh` to propagate it into [desktop/wails.json](./desktop/wails.json), the desktop UI, and release-facing docs.
 <!-- VERSION:CURRENT:END -->
@@ -233,6 +233,7 @@ Image support is implemented at the proxy protocol layer and then validated agai
 | Anthropic Messages base64 image block | Verified | Tested through `/v1/messages`; the model correctly described the image content. |
 | Claude Code pasted image | Verified | Tested with Claude Code style Anthropic messages containing long history, tools, a base64 image block, and Claude's image-cache path marker. |
 | Claude Code pasted image + tools | Verified | Remote mode extracts the latest image turn through IPC, then continues with Remote API native tool calling. |
+| QoderCN IPC image requests | Verified | The proxy now emits QoderCN's native `qodercn:///agent/file?path=...` image URI scheme instead of the legacy Lingma URI; verified with `/Users/tiancheng/Pictures/ik2.jpg`. |
 | Hermes CLI `hermes chat --image` | Verified | Tested with `--provider custom --model kmodel --image /Users/tiancheng/Pictures/ik2.jpg`; Hermes sends OpenAI `image_url` to `/v1/chat/completions` and the model described the image correctly. |
 | OpenClaw `infer image describe --file` | Verified | Tested with a `lingma-proxy/kmodel` provider configured as `text+image`; OpenClaw sends OpenAI `image_url` and the model described the image correctly. |
 | OpenClaw `agent` image marker | Partially verified | Works after the referenced image is available inside OpenClaw's per-session sandbox. A host path such as `/Users/.../Pictures/ik2.jpg` is rejected by OpenClaw's own sandbox before it reaches the proxy as an image. |
@@ -241,6 +242,7 @@ Image support is implemented at the proxy protocol layer and then validated agai
 Important behavior:
 
 - Remote API mode still uses Lingma's IPC image pipeline for image understanding because the direct remote chat endpoint does not reliably consume local `file://` and data URL images.
+- The IPC image URI scheme is runtime-specific: QoderCN uses `qodercn:///agent/file?path=...`, while legacy Lingma runtimes continue to use `lingma:///agent/file?path=...`.
 - If the request includes both images and tools, the proxy first creates a compact image-only IPC turn from the latest image-bearing user message, appends the extracted image context to the original request, and then uses Remote API native tool calling.
 - Because of that image fallback, Lingma App / IDE plugin must remain running for image requests. If Lingma is fully quit, text-only Remote API calls can still work, but image understanding will fail with a reopen-Lingma hint.
 - Request logs redact large image payloads, so use the debug endpoints or desktop request details to confirm that an image marker exists without exposing the full base64 body.
@@ -368,6 +370,7 @@ Notes:
 - `/v1/models` in remote mode returns remote API model keys, which may not match the IPC plugin display IDs such as `MiniMax-M2.7` or `Kimi-K2.6`.
 - Even after a successful remote login import, the model set may still differ from the examples shown in this repository. In particular, `Kimi-K2.6`, `MiniMax-M2.7`, some `Qwen3` variants, or `Auto / org_auto` can vary by account and tenant.
 - Image requests in remote mode are routed through the IPC image pipeline because the direct remote chat endpoint ignores local `file://` and data URL image payloads. If a request also contains tools, Lingma Proxy first extracts image context through IPC and then sends the tool-capable turn through Remote API native tool calling.
+- QoderCN IPC image turns use QoderCN's native `qodercn:///agent/file?path=...` URI. Older Lingma runtimes keep the legacy `lingma:///agent/file?path=...` URI.
 - Local validation passed `/health`, `/v1/models`, OpenAI streaming/non-streaming chat, and Claude Code Anthropic + Bash tool use. Claude Code full tool runs are much slower than simple OpenAI requests because the client sends a large context and performs a second tool-result turn.
 - This mode is inspired by the remote API and credential-signing research in [ZipperCode/lingma2api](https://github.com/ZipperCode/lingma2api), integrated here as a switchable backend under the existing OpenAI / Anthropic / desktop app architecture.
 
@@ -978,14 +981,12 @@ If you need a temporary packaging tag without changing the app's internal versio
 
 ### Suggested release summary template
 
-Use the following as the GitHub Release body draft for `v1.5.3`:
+Use the following as the GitHub Release body draft for the next mainline tag:
 
-- Tightened the desktop Requests / Logs views into summary-first lists with on-demand detail loading, reducing hot-path memory pressure during long-running inspections.
-- Added scoped `Cmd/Ctrl+F` search inside request and response detail panes, including match counting, highlighting, and next / previous navigation.
-- Fixed same-second request selection by switching desktop record identity to stable UUIDs, so Dashboard-to-Requests jumps and row highlighting stay accurate.
-- Replaced fragile native confirm dialogs with a shared in-app confirmation modal for clearing Requests / Logs and for the unified desktop quit-confirm flow.
-- Split debug inspection semantics: `/debug/requests` now returns request inspection records, while `/debug/access-logs` returns HTTP access-log summaries; `/debug/logs` remains a compatibility alias.
-- Moved the desktop app version to the repository-wide `VERSION` source and added sync / drift-check scripts plus CI enforcement for release-facing versioned files.
+- Fixed QoderCN IPC image input by using QoderCN's native `qodercn:///agent/file?path=...` URI scheme while keeping `lingma:///...` compatibility for legacy Lingma runtimes.
+- Verified the QoderCN IPC image path with `/Users/tiancheng/Pictures/ik2.jpg`; the model correctly described the coastal rocks and waves, and QoderCN logs reported `image detect success` / `upload image success` with no `invalid uri`.
+- Kept the WebView inspector available in packaged desktop releases as well as local builds, so right-click `Inspect Element` can be used to debug installed UI/style/runtime issues.
+- Retained the normal release gate: version sync, release-note check, Go tests, frontend build, and local desktop rebuild before tagging.
 
 ## Star History
 
