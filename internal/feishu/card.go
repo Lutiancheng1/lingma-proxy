@@ -306,11 +306,11 @@ func renderCardV1(state cardState) (string, error) {
 
 func cardHeaderTitle(state cardState) string {
 	title := strings.TrimSpace(state.Title)
-	if title == "" {
-		title = "Lingma · 飞书 Bridge"
-	}
 	if label := strings.TrimSpace(state.StatusLabel); label != "" {
-		return title + " · " + label
+		if title == "" {
+			return label
+		}
+		return title + " " + label
 	}
 	return title
 }
@@ -384,7 +384,7 @@ type cardWriter struct {
 	streamStarted bool // logs the first successful streamUpdateCardContent
 }
 
-func newCardWriter(m *Manager, rootMessage string, model string, meta LogMeta) *cardWriter {
+func newCardWriter(m *Manager, rootMessage string, title string, model string, meta LogMeta) *cardWriter {
 	return &cardWriter{
 		manager:     m,
 		rootMessage: rootMessage,
@@ -393,7 +393,7 @@ func newCardWriter(m *Manager, rootMessage string, model string, meta LogMeta) *
 		startedAt:   time.Now(),
 		useCardKit:  true, // will be set to false if CardKit APIs fail
 		state: cardState{
-			Title:       "Lingma · 飞书 Bridge",
+			Title:       strings.TrimSpace(title),
 			Status:      "thinking",
 			StatusLabel: "正在思考",
 			Model:       model,

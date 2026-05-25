@@ -14,6 +14,7 @@ type Config struct {
 	AutoStart      bool              `json:"autoStart"`
 	Brand          string            `json:"brand"`
 	Model          string            `json:"model"`
+	BotName        string            `json:"botName"`
 	BotIdentity    string            `json:"botIdentity"`
 	MCPEnabled     bool              `json:"mcpEnabled"`
 	MCPServers     []MCPServerConfig `json:"mcpServers,omitempty"`
@@ -39,12 +40,22 @@ func NormalizeConfig(cfg Config) Config {
 	if strings.TrimSpace(cfg.Model) == "" {
 		cfg.Model = DefaultModel
 	}
+	cfg.BotName = limitBotName(cfg.BotName)
 	cfg.BotIdentity = limitBotIdentity(cfg.BotIdentity)
 	cfg.MCPServers = normalizeMCPServerConfigs(cfg.MCPServers)
 	if cfg.MaxToolRounds <= 0 || cfg.MaxToolRounds == legacyMaxToolRounds {
 		cfg.MaxToolRounds = DefaultMaxToolRounds
 	}
 	return cfg
+}
+
+func limitBotName(value string) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= 40 {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:40]))
 }
 
 func limitBotIdentity(value string) string {

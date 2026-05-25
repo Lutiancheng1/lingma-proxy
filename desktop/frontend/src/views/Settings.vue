@@ -31,6 +31,7 @@ const bridgeConfig = ref({
   autoStart: false,
   brand: 'feishu',
   model: 'kmodel',
+  botName: '',
   botIdentity: '',
   mcpEnabled: false,
   mcpServers: [],
@@ -45,6 +46,7 @@ const bridgeRefreshing = ref(false)
 const bridgeSetupGuideOpen = ref(false)
 const bridgeAdvancedDialogOpen = ref(false)
 const bridgeMCPJSONDialogOpen = ref(false)
+const bridgeBotNameDraft = ref('')
 const bridgeIdentityDraft = ref('')
 const bridgeMCPEnabledDraft = ref(false)
 const bridgeMCPServersDraft = ref([])
@@ -435,6 +437,7 @@ function bridgeAdvancedServersFromStatus() {
 }
 
 function openBridgeAdvancedDialog() {
+  bridgeBotNameDraft.value = String(bridgeConfig.value.botName || '')
   bridgeIdentityDraft.value = String(bridgeConfig.value.botIdentity || '')
   bridgeMCPEnabledDraft.value = Boolean(bridgeConfig.value.mcpEnabled)
   bridgeMCPServersDraft.value = bridgeAdvancedServersFromStatus()
@@ -529,6 +532,7 @@ function bridgeMCPServerMeta(server) {
 async function saveBridgeAdvancedSettings() {
   bridgeConfig.value = {
     ...bridgeConfig.value,
+    botName: bridgeBotNameDraft.value.trim(),
     botIdentity: bridgeIdentityDraft.value.trim(),
     mcpEnabled: bridgeMCPEnabledDraft.value,
     mcpServers: bridgeMCPServersDraft.value.map((server) => ({
@@ -1245,12 +1249,20 @@ async function handleBridgeStepClick(step) {
         <div class="modal-header">
           <div>
             <h2>Feishu Bridge 高级设置</h2>
-            <p>身份描述留空时使用内置默认；MCP 工具默认只扫描展示，启用后才会暴露给 Bot 调用。</p>
+            <p>Bot 名称只影响飞书回复卡片显示；MCP 工具默认只扫描展示，启用后才会暴露给 Bot 调用。</p>
           </div>
           <button class="secondary-button" type="button" @click="bridgeAdvancedDialogOpen = false">关闭</button>
         </div>
         <div class="modal-body bridge-advanced-body">
           <div class="advanced-section">
+            <div class="field">
+              <label>Bot 名称</label>
+              <input
+                v-model="bridgeBotNameDraft"
+                maxlength="40"
+                placeholder="留空时卡片只显示“正在思考 / 已完成”"
+              />
+            </div>
             <div class="field">
               <label>Bot 身份描述</label>
               <textarea

@@ -75,6 +75,7 @@ export namespace feishu {
 	    autoStart: boolean;
 	    brand: string;
 	    model: string;
+	    botName: string;
 	    botIdentity: string;
 	    mcpEnabled: boolean;
 	    mcpServers?: MCPServerConfig[];
@@ -91,6 +92,7 @@ export namespace feishu {
 	        this.autoStart = source["autoStart"];
 	        this.brand = source["brand"];
 	        this.model = source["model"];
+	        this.botName = source["botName"];
 	        this.botIdentity = source["botIdentity"];
 	        this.mcpEnabled = source["mcpEnabled"];
 	        this.mcpServers = this.convertValues(source["mcpServers"], MCPServerConfig);

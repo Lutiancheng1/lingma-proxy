@@ -44,6 +44,20 @@ func TestRenderFinalCardV2UsesCollapsedToolPanels(t *testing.T) {
 	}
 }
 
+func TestCardHeaderTitleUsesBotNameStatusFormat(t *testing.T) {
+	got := cardHeaderTitle(cardState{Title: "Aily", StatusLabel: "正在思考"})
+	if got != "Aily 正在思考" {
+		t.Fatalf("card title = %q, want bot status format", got)
+	}
+}
+
+func TestCardHeaderTitleFallsBackToStatusOnly(t *testing.T) {
+	got := cardHeaderTitle(cardState{StatusLabel: "已完成"})
+	if got != "已完成" {
+		t.Fatalf("card title = %q, want status only", got)
+	}
+}
+
 func TestRenderStepsMarkdownOmitsToolBodies(t *testing.T) {
 	rendered := renderStepsMarkdown([]cardStep{{
 		Kind:  "tool",

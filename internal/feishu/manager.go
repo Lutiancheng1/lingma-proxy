@@ -21,6 +21,7 @@ const (
 	conversationDebounceDelay        = 600 * time.Millisecond
 	autoCompactTokenThreshold        = 60000
 	feishuMarkdownReplyChunkLimit    = 2800
+	defaultBotDisplayName            = "飞书 Bridge"
 )
 
 var (
@@ -1049,7 +1050,7 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 		rounds = DefaultMaxToolRounds
 	}
 	m.logf("info", fmt.Sprintf("Feishu bridge 开始处理: model=%s forceToolUse=%t rounds=%d", model, forceToolUse, rounds), logMeta)
-	card := newCardWriter(m, event.MessageID, model, logMeta)
+	card := newCardWriter(m, event.MessageID, botDisplayName(cfg), model, logMeta)
 	card.SetStatus("thinking", "正在思考")
 	replyText := ""
 	lastToolOutput := ""
@@ -1118,7 +1119,7 @@ conversation:
 		rawHistory = append(rawHistory, cloneMessage(assistant))
 		if len(msg.ToolCalls) == 0 {
 			replyText = strings.TrimSpace(msg.Content)
-			card.SetStatus("done", "完成")
+			card.SetStatus("done", "已完成")
 			m.logf("info", "Feishu bridge 生成直接回复（无工具调用）", logMeta)
 			break
 		}
@@ -1302,7 +1303,7 @@ conversation:
 		return
 	}
 	if card.Status() != "done" && card.Status() != "stopped" && card.Status() != "error" {
-		card.SetStatus("done", "完成")
+		card.SetStatus("done", "已完成")
 	}
 	card.Finalize(replyText, "")
 	m.logf("info", "Feishu bridge 卡片回复已完成: message="+trimmedID(event.MessageID), logMeta)
@@ -1943,13 +1944,14 @@ func usageFromResponse(resp *llmResponse) callUsage {
 func (m *Manager) commandInitText(chatID string, fallbackModel string) string {
 	model := m.resolveSessionModel(chatID, fallbackModel)
 	cfg := m.Config()
+	name := botDisplayNameOrDefault(cfg)
 	groupRule := "群聊默认仅在 @我时响应"
 	if !cfg.GroupOnlyAtBot {
 		groupRule = "群聊会响应所有消息"
 	}
 	skills := m.skillSummaryLine()
 	return strings.Join([]string{
-		"嗨，我是 Lingma · 飞书 Bridge。我可以帮你在飞书内调用 Lingma 代理 + lark CLI 完成对话、文档、日程、知识库等操作。",
+		"嗨，我是 " + name + "。我可以帮你在飞书内调用 Lingma 代理 + lark CLI 完成对话、文档、日程、知识库等操作。",
 		"",
 		"- 当前模型：`" + model + "`",
 		"- " + groupRule,
@@ -1958,6 +1960,20 @@ func (m *Manager) commandInitText(chatID string, fallbackModel string) string {
 		"",
 		"发送 /help 查看完整命令列表。",
 	}, "\n")
+}
+
+func botDisplayName(cfg Config) string {
+	if name := strings.TrimSpace(cfg.BotName); name != "" {
+		return limitBotName(name)
+	}
+	return ""
+}
+
+func botDisplayNameOrDefault(cfg Config) string {
+	if name := botDisplayName(cfg); name != "" {
+		return name
+	}
+	return defaultBotDisplayName
 }
 
 func (m *Manager) skillSummaryLine() string {

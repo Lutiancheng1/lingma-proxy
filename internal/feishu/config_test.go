@@ -41,6 +41,16 @@ func TestNormalizeConfigTrimsAndLimitsBotIdentity(t *testing.T) {
 	}
 }
 
+func TestNormalizeConfigTrimsAndLimitsBotName(t *testing.T) {
+	cfg := NormalizeConfig(Config{BotName: "  " + strings.Repeat("飞书助手", 20) + "  "})
+	if len([]rune(cfg.BotName)) > 40 {
+		t.Fatalf("bot name should be limited, got len=%d", len([]rune(cfg.BotName)))
+	}
+	if strings.HasPrefix(cfg.BotName, " ") || strings.HasSuffix(cfg.BotName, " ") {
+		t.Fatalf("bot name should be trimmed: %q", cfg.BotName)
+	}
+}
+
 func TestNormalizeConfigDedupesMCPServers(t *testing.T) {
 	cfg := NormalizeConfig(Config{
 		Brand: "feishu",

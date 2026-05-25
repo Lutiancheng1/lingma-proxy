@@ -372,7 +372,7 @@ func TestCardWriterFallsBackToLegacyWhenCardKitCreateFails(t *testing.T) {
 	t.Setenv("FEISHU_FAIL_CARDKIT_CREATE", "1")
 
 	manager := NewManager(ManagerOptions{})
-	card := newCardWriter(manager, "om_cardkit_root", "kmodel", LogMeta{MessageID: "om_cardkit_root"})
+	card := newCardWriter(manager, "om_cardkit_root", "", "kmodel", LogMeta{MessageID: "om_cardkit_root"})
 	card.SetReply("CardKit 不可用时走 legacy 卡片。")
 
 	got := string(mustReadFileContainingEventually(t, replyLog, "--msg-type interactive"))
