@@ -397,8 +397,9 @@ try {
             throw "npx was not found."
         }
         $commands = @(
-            @("-y", "skills@1.5.6", "add", "larksuite/cli", "-y", "-g"),
-            @("-y", "skills@1.5.5", "add", "larksuite/cli", "-y", "-g"),
+            @("-y", "skills@1.5.6", "add", "https://open.feishu.cn", "--skill", "-y", "-g"),
+            @("-y", "skills@1.5.5", "add", "https://open.feishu.cn", "--skill", "-y", "-g"),
+            @("-y", "skills", "add", "https://open.feishu.cn", "--skill", "-y", "-g"),
             @("-y", "skills", "add", "larksuite/cli", "-y", "-g")
         )
         $lastError = $null

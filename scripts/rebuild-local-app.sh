@@ -10,6 +10,7 @@ BUILD_APP_PATH="$DESKTOP_DIR/build/bin/$APP_NAME"
 INSTALL_APP_PATH="/Applications/$APP_NAME"
 WAILS_BIN="${WAILS_BIN:-/Users/tiancheng/go/bin/wails}"
 OPEN_AFTER_BUILD="${OPEN_AFTER_BUILD:-1}"
+ENABLE_DEVTOOLS="${ENABLE_DEVTOOLS:-1}"
 
 log() {
   printf '[rebuild-local-app] %s\n' "$1"
@@ -67,7 +68,12 @@ stop_existing_app() {
 build_app() {
   log "Building desktop app with Wails"
   cd "$DESKTOP_DIR"
-  "$WAILS_BIN" build -platform darwin/arm64 -clean
+  local build_args=(build -platform darwin/arm64 -clean)
+  if [ "$ENABLE_DEVTOOLS" = "1" ]; then
+    log "DevTools enabled for local package (right-click Inspect Element available)"
+    build_args+=(-devtools -ldflags "-X main.devtoolsBuild=true")
+  fi
+  "$WAILS_BIN" "${build_args[@]}"
 }
 
 install_app() {

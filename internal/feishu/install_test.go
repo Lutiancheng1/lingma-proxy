@@ -39,6 +39,34 @@ func TestSkillsInstallCommandsIncludePinnedFallbacks(t *testing.T) {
 	}
 }
 
+func TestSkillsInstallCommandsUseOfficialEndpoint(t *testing.T) {
+	commands := skillsInstallCommands()
+	hasOfficial := false
+	for _, argv := range commands {
+		joined := ""
+		for _, a := range argv {
+			joined += " " + a
+		}
+		if containsString(argv, "https://open.feishu.cn") && containsString(argv, "--skill") {
+			hasOfficial = true
+			break
+		}
+		_ = joined
+	}
+	if !hasOfficial {
+		t.Fatalf("expected at least one command targeting https://open.feishu.cn with --skill flag, got %#v", commands)
+	}
+}
+
+func containsString(slice []string, target string) bool {
+	for _, s := range slice {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSelectPreferredCompatibleNodeVersionPrefersNode22(t *testing.T) {
 	output := `
     16.20.2

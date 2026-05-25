@@ -33,6 +33,44 @@ flowchart LR
 
 ---
 
+## 1.5 Feishu Bridge
+
+An optional subsystem that connects the proxy to Feishu (Lark) as a bot, enabling chat-based AI interactions with streaming card output.
+
+```mermaid
+flowchart LR
+    A["Feishu user<br/>sends message"] --> B["lark-cli event stream"]
+    B --> C["internal/feishu/manager.go<br/>event handler"]
+    C --> D["LLM (streaming)<br/>via proxy"]
+    D --> E["cardWriter<br/>CardKit / legacy / markdown"]
+    E --> F["Feishu card<br/>typewriter effect"]
+```
+
+Key components:
+
+| Module | Responsibility |
+|--------|---------------|
+| `internal/feishu/manager.go` | Event handling, conversation state, LLM orchestration, lark-cli subprocess management |
+| `internal/feishu/card.go` | CardKit schema 2.0 streaming cards, legacy schema 1.0 fallback, cardWriter state machine |
+| `internal/feishu/llm.go` | Streaming and non-streaming LLM calls via proxy SSE |
+| `internal/feishu/tools.go` | lark-cli tool definitions and execution (IM, Drive, Calendar, etc.) |
+| `internal/feishu/prompt.go` | System prompt construction, skill excerpt injection, tool-use decision logic |
+| `internal/feishu/skills.go` | Skill discovery (disk scan + lock file) |
+| `internal/feishu/config.go` | Feishu Bridge configuration model |
+| `internal/feishu/install.go` | lark-cli and Skills installation |
+| `internal/feishu/onboarding.go` | lark-cli init and auth flow |
+| `internal/feishu/env.go` | PATH resolution for lark-cli / Node / npm |
+
+Card streaming architecture (3-tier graceful degradation):
+
+1. **CardKit streaming** (schema 2.0, `streaming_mode: true`): Element-level `PUT` with typewriter effect at 70ms/char
+2. **Legacy PATCH** (schema 1.0, `PATCH /im/v1/messages/:id`): Whole-card refresh every ~300ms
+3. **Plain markdown** (`lark-cli im +messages-reply --markdown`): Last resort fallback
+
+CardKit sequence management: All API calls to the same card must use a strictly increasing `sequence` integer (1–2147483647), otherwise error 300317 is returned.
+
+---
+
 ## 2. Runtime Modes
 
 ### 2.1 Remote API mode
@@ -282,8 +320,10 @@ Persisted local state:
 
 Production packaging rules:
 
-- packaged app should not auto-open inspector
-- local development can opt in with `LINGMA_DESKTOP_DEBUG=1`
+- desktop packages keep Wails DevTools enabled so the right-click default context menu can open `Inspect Element`
+- packaged apps should not auto-open inspector by default
+- launch with `LINGMA_DESKTOP_DEBUG=1` only when the inspector should open immediately on startup
+- local-only rebuilds may opt out with `ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh`
 
 ---
 
@@ -324,9 +364,12 @@ If you are extending the system, start here:
 - `internal/service/service.go`
 - `internal/lingmaipc/*`
 - `internal/remote/*`
+- `internal/feishu/manager.go`
+- `internal/feishu/card.go`
+- `internal/feishu/prompt.go`
 - `desktop/app.go`
 - `desktop/main.go`
 
 ---
 
-Document version: 2026-05-06
+Document version: 2026-05-24

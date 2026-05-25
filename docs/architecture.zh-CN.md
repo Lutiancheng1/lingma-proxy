@@ -33,6 +33,46 @@ flowchart LR
 
 ---
 
+## 1.5 Feishu Bridge
+
+可选子系统，将代理接入飞书（Lark）Bot，支持基于聊天的 AI 交互和流式卡片输出。
+
+```mermaid
+flowchart LR
+    A["飞书用户<br/>发送消息"] --> B["lark-cli 事件流"]
+    B --> C["internal/feishu/manager.go<br/>事件处理"]
+    C --> D["LLM（流式）<br/>通过代理"]
+    D --> E["cardWriter<br/>CardKit / legacy / markdown"]
+    E --> F["飞书卡片<br/>打字机效果"]
+```
+
+核心组件：
+
+| 模块 | 职责 |
+|------|------|
+| `internal/feishu/manager.go` | 事件处理、会话状态、LLM 编排、lark-cli 子进程管理 |
+| `internal/feishu/card.go` | CardKit schema 2.0 流式卡片、legacy schema 1.0 降级、cardWriter 状态机 |
+| `internal/feishu/llm.go` | 流式和非流式 LLM 调用（经代理 SSE） |
+| `internal/feishu/tools.go` | lark-cli 工具定义与执行（IM、云盘、日历等） |
+| `internal/feishu/prompt.go` | 系统提示词构建、skill 摘要注入、工具使用决策 |
+| `internal/feishu/skills.go` | 技能发现（磁盘扫描 + lock 文件） |
+| `internal/feishu/config.go` | Feishu Bridge 配置模型 |
+| `internal/feishu/install.go` | lark-cli 和 Skills 安装 |
+| `internal/feishu/onboarding.go` | lark-cli 初始化和授权流程 |
+| `internal/feishu/env.go` | lark-cli / Node / npm 的 PATH 解析 |
+
+卡片流式架构（三级优雅降级）：
+
+1. **CardKit 流式**（schema 2.0，`streaming_mode: true`）：Element 级 `PUT`，70ms/字打字机效果
+2. **Legacy PATCH**（schema 1.0，`PATCH /im/v1/messages/:id`）：整卡刷新，约 300ms 一次
+3. **纯 markdown**（`lark-cli im +messages-reply --markdown`）：最后兜底
+
+CardKit sequence 管理：同一卡片的所有 API 调用必须使用严格递增的 `sequence` 整数（1–2147483647），否则返回 300317 错误。
+
+**分支定位**：`feat/feishu-bridge-go` 为实验分支，仅通过 GitHub Actions 产出 artifact 供内测下载，不参与 release 发布，不合入 main。
+
+---
+
 ## 2. 运行模式
 
 ### 2.1 Remote API 模式
@@ -281,8 +321,10 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 
 打包要求：
 
-- 生产包不自动打开 Inspector / 调试入口
-- 本地开发可通过 `LINGMA_DESKTOP_DEBUG=1` 显式开启
+- 桌面包保留 Wails DevTools，让右键默认菜单可以打开 `Inspect Element`
+- 打包后的 App 默认不自动弹出 Inspector
+- 只有通过 `LINGMA_DESKTOP_DEBUG=1` 启动时才会启动即打开 Inspector
+- 仅本地重建包可用 `ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh` 关闭右键调试菜单
 
 ---
 
@@ -323,9 +365,12 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 - `internal/service/service.go`
 - `internal/lingmaipc/*`
 - `internal/remote/*`
+- `internal/feishu/manager.go`
+- `internal/feishu/card.go`
+- `internal/feishu/prompt.go`
 - `desktop/app.go`
 - `desktop/main.go`
 
 ---
 
-文档版本：2026-05-06
+文档版本：2026-05-24

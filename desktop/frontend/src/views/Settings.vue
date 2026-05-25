@@ -5,16 +5,19 @@ import {
   GetConfig,
   GetDetectionInfo,
   GetFeishuBridgeConfig,
+  GetFeishuBridgeMCPJSON,
   GetFeishuBridgeStatus,
   GetModels,
   InstallFeishuCLI,
   RefreshFeishuBridgeStatus,
+  ReinstallFeishuSkills,
   StartFeishuBridge,
   StartFeishuCLILogin,
   StartFeishuCLISetupNew,
   StopFeishuBridge,
   UpdateConfig,
   UpdateFeishuBridgeConfig,
+  SaveFeishuBridgeMCPJSON,
 } from '../../wailsjs/go/main/App.js'
 import { safeEventsOff, safeEventsOn } from '../utils/wailsSafe'
 
@@ -28,14 +31,28 @@ const bridgeConfig = ref({
   autoStart: false,
   brand: 'feishu',
   model: 'kmodel',
-  maxToolRounds: 5,
+  botIdentity: '',
+  mcpEnabled: false,
+  mcpServers: [],
+  maxToolRounds: 0,
 })
 const bridgeStatus = ref(null)
 const bridgeStatusLoaded = ref(false)
+const bridgeInitialStatusLoading = ref(true)
 const bridgeSaving = ref(false)
 const bridgeBusy = ref(false)
 const bridgeRefreshing = ref(false)
 const bridgeSetupGuideOpen = ref(false)
+const bridgeAdvancedDialogOpen = ref(false)
+const bridgeMCPJSONDialogOpen = ref(false)
+const bridgeIdentityDraft = ref('')
+const bridgeMCPEnabledDraft = ref(false)
+const bridgeMCPServersDraft = ref([])
+const bridgeMCPExpanded = ref({})
+const bridgeMCPJSONDraft = ref('')
+const bridgeMCPJSONPath = ref('')
+const bridgeMCPJSONError = ref('')
+const bridgeMCPJSONSaving = ref(false)
 const openSelect = ref('')
 const fallbackModelsText = ref('')
 const availableBridgeModels = ref([])
@@ -68,7 +85,7 @@ const bridgeReady = computed(() => {
   )
 })
 const bridgeStatusPending = computed(() => {
-  return !bridgeStatusLoaded.value || (bridgeRefreshing.value && !bridgeStatus.value?.lastCheckedAt)
+  return bridgeInitialStatusLoading.value || !bridgeStatusLoaded.value || (bridgeRefreshing.value && !bridgeStatus.value?.lastCheckedAt)
 })
 const bridgeSetupLinkVisible = computed(() => Boolean(bridgeStatus.value?.setupUrl) && !bridgeStatus.value?.config?.configured)
 const bridgeLoginLinkVisible = computed(() => Boolean(bridgeStatus.value?.loginUrl) && !bridgeStatus.value?.auth?.authorized)
@@ -78,6 +95,11 @@ const bridgeStartButtonLabel = computed(() => {
   if (bridgeStatus.value?.running) return '停止 Bridge'
   if (bridgeConfig.value.enabled) return '启动 Bridge'
   return '启用并启动 Bridge'
+})
+const bridgeMCPServers = computed(() => Array.isArray(bridgeStatus.value?.mcpServers) ? bridgeStatus.value.mcpServers : [])
+const bridgeMCPServerGroups = computed(() => groupMCPServersBySource(bridgeMCPServersDraft.value))
+const bridgeAdvancedLabel = computed(() => {
+  return '设置'
 })
 const bridgeInstallStepDone = computed(() => {
   const status = bridgeStatus.value
@@ -169,8 +191,8 @@ const selectLabel = computed(() => (field) => {
 const bridgeSetupCommands = [
   {
     title: 'Windows 一键脚本（推荐兜底）',
-    command: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\windows\\install-feishu-cli.ps1 -PersistPath',
-    note: '在源码仓库根目录执行；cmd.exe / PowerShell 都可复制运行。会扫描已有 Node；如检测到 nvm-windows 会优先用 nvm 安装/切换 LTS，再修复 npm 全局目录并安装 lark-cli 与 Skills。',
+    command: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/Lutiancheng1/lingma-ipc-proxy/main/scripts/windows/install-feishu-cli.ps1 -UseBasicParsing -OutFile $env:TEMP\\install-feishu-cli.ps1; & $env:TEMP\\install-feishu-cli.ps1 -PersistPath"',
+    note: 'App 已内置一键安装（上方"点击安装"按钮），仅在自动安装失败、想纯手动复现时才需要这条命令。脚本会从 GitHub 拉取后落到临时目录执行；如检测到 nvm-windows 会优先用 nvm 安装/切换 LTS，再修复 npm 全局目录并安装 lark-cli 与 Skills。',
   },
   {
     title: '可选：切换 npm 镜像',
@@ -184,8 +206,8 @@ const bridgeSetupCommands = [
   },
   {
     title: '安装 CLI Skills',
-    command: 'npx -y skills@1.5.6 add larksuite/cli -y -g',
-    note: '固定 1.5.6 是为了避开部分环境下 latest skills 的安装异常。',
+    command: 'npx -y skills@1.5.6 add https://open.feishu.cn --skill -y -g',
+    note: '使用飞书官方 well-known 清单源（含 26+ skills），固定 skills@1.5.6 以避开 latest 偶发安装异常。',
   },
   {
     title: '首次初始化飞书应用',
@@ -243,14 +265,11 @@ onMounted(async () => {
       ? config.value.RemoteFallbackModels.join('\n')
       : ''
     await refreshDetection()
-    const cachedStatus = await GetFeishuBridgeStatus()
-    applyBridgeStatus(cachedStatus, false)
-    bridgeStatusLoaded.value = Boolean(cachedStatus?.lastCheckedAt || cachedStatus?.config?.configured || cachedStatus?.auth?.authorized || cachedStatus?.cli?.found)
-    if (!bridgeStatusLoaded.value) {
-      await refreshBridgeStatus(false)
-    }
+    bridgeStatus.value = await GetFeishuBridgeStatus()
+    await refreshBridgeStatus(false)
   } catch (e) {
     emit('log', 'error', '配置加载失败：' + (e.message || String(e)))
+    bridgeInitialStatusLoading.value = false
   }
 
   safeEventsOn('feishu:status', (nextStatus) => {
@@ -275,6 +294,7 @@ function applyBridgeStatus(nextStatus, announce = false) {
   const prev = { ...lastBridgeSnapshot.value }
   bridgeStatus.value = nextStatus
   bridgeStatusLoaded.value = true
+  bridgeInitialStatusLoading.value = false
   lastBridgeSnapshot.value = {
     configured: Boolean(nextStatus?.config?.configured),
     authorized: Boolean(nextStatus?.auth?.authorized),
@@ -362,7 +382,7 @@ async function saveBridgeConfig() {
     bridgeConfig.value = {
       ...bridgeConfig.value,
       brand: 'feishu',
-      maxToolRounds: Number(bridgeConfig.value.maxToolRounds) || 5,
+      maxToolRounds: 0,
     }
     await UpdateFeishuBridgeConfig(bridgeConfig.value)
     emit('notice', 'Feishu Bridge 配置已保存')
@@ -374,6 +394,196 @@ async function saveBridgeConfig() {
   } finally {
     bridgeSaving.value = false
   }
+}
+
+function bridgeAdvancedServersFromStatus() {
+  const saved = new Map((Array.isArray(bridgeConfig.value.mcpServers) ? bridgeConfig.value.mcpServers : []).map((server) => [String(server.name || '').toLowerCase(), server]))
+  const statusServers = Array.isArray(bridgeStatus.value?.mcpServers) ? bridgeStatus.value.mcpServers : []
+  const merged = new Map()
+  for (const item of statusServers) {
+    const key = String(item.name || '').toLowerCase()
+    const savedItem = saved.get(key)
+    const enabled = Boolean(savedItem?.enabled ?? item.enabled)
+    const message = enabled && item.message === '未启用' ? '' : (item.message || '')
+    merged.set(key, {
+      name: item.name,
+      source: item.source || savedItem?.source || '',
+      sourceClient: item.sourceClient || savedItem?.sourceClient || sourceClientFromPath(item.source || savedItem?.source || ''),
+      command: item.command || savedItem?.command || '',
+      args: Array.isArray(item.args) ? item.args : (Array.isArray(savedItem?.args) ? savedItem.args : []),
+      env: savedItem?.env || {},
+      enabled,
+      available: Boolean(item.available),
+      toolCount: Number(item.toolCount || 0),
+      tools: Array.isArray(item.tools) ? item.tools : [],
+      message,
+    })
+  }
+  for (const item of saved.values()) {
+    const key = String(item.name || '').toLowerCase()
+    if (!merged.has(key)) {
+      merged.set(key, {
+        ...item,
+        available: false,
+        toolCount: 0,
+        tools: [],
+        message: '未在本机扫描结果中发现',
+      })
+    }
+  }
+  return Array.from(merged.values()).sort((a, b) => String(a.name).localeCompare(String(b.name)))
+}
+
+function openBridgeAdvancedDialog() {
+  bridgeIdentityDraft.value = String(bridgeConfig.value.botIdentity || '')
+  bridgeMCPEnabledDraft.value = Boolean(bridgeConfig.value.mcpEnabled)
+  bridgeMCPServersDraft.value = bridgeAdvancedServersFromStatus()
+  bridgeAdvancedDialogOpen.value = true
+}
+
+async function refreshBridgeAdvancedMCP() {
+  await refreshBridgeStatus(true, true)
+  bridgeMCPServersDraft.value = bridgeAdvancedServersFromStatus()
+}
+
+async function openBridgeMCPJSONDialog() {
+  bridgeMCPJSONError.value = ''
+  try {
+    const result = await GetFeishuBridgeMCPJSON()
+    bridgeMCPJSONDraft.value = result?.content || ''
+    bridgeMCPJSONPath.value = result?.path || ''
+    bridgeMCPJSONDialogOpen.value = true
+  } catch (e) {
+    bridgeMCPJSONError.value = e.message || String(e)
+    bridgeMCPJSONDraft.value = ''
+    bridgeMCPJSONPath.value = ''
+    bridgeMCPJSONDialogOpen.value = true
+  }
+}
+
+async function saveBridgeMCPJSON() {
+  bridgeMCPJSONSaving.value = true
+  bridgeMCPJSONError.value = ''
+  try {
+    const result = await SaveFeishuBridgeMCPJSON(bridgeMCPJSONDraft.value)
+    bridgeMCPJSONDraft.value = result?.content || bridgeMCPJSONDraft.value
+    bridgeMCPJSONPath.value = result?.path || bridgeMCPJSONPath.value
+    emit('notice', `自定义 MCP JSON 已保存，解析到 ${result?.serverCount || 0} 个 server`)
+    await refreshBridgeStatus(false, true)
+    bridgeMCPServersDraft.value = bridgeAdvancedServersFromStatus()
+    bridgeMCPJSONDialogOpen.value = false
+  } catch (e) {
+    bridgeMCPJSONError.value = e.message || String(e)
+  } finally {
+    bridgeMCPJSONSaving.value = false
+  }
+}
+
+function toggleBridgeMCPServer(name) {
+  bridgeMCPServersDraft.value = bridgeMCPServersDraft.value.map((server) => {
+    if (server.name !== name) return server
+    const enabled = !server.enabled
+    return { ...server, enabled, message: enabled && server.message === '未启用' ? '' : server.message }
+  })
+}
+
+function toggleBridgeMCPTools(name) {
+  const key = String(name || '')
+  bridgeMCPExpanded.value = {
+    ...bridgeMCPExpanded.value,
+    [key]: !bridgeMCPExpanded.value[key],
+  }
+}
+
+function bridgeMCPToolLabel(tool) {
+  return tool?.function || tool?.name || 'unknown_tool'
+}
+
+function bridgeMCPToolDescription(tool) {
+  const rawName = String(tool?.name || '').trim()
+  const functionName = String(tool?.function || '').trim()
+  const desc = String(tool?.description || '').trim()
+  const parts = []
+  if (rawName && functionName && rawName !== functionName) {
+    parts.push(`原始：${rawName}`)
+  }
+  if (desc) {
+    parts.push(desc)
+  }
+  return parts.join(' · ')
+}
+
+function bridgeMCPServerMeta(server) {
+  if (!server?.enabled) return '未启用'
+  if (!bridgeMCPEnabledDraft.value) return '需打开总开关'
+  if (server.available) return `${server.toolCount || 0} tools`
+  const message = String(server.message || '').trim()
+  if (message && message !== '未启用') return message
+  const saved = Array.isArray(bridgeConfig.value.mcpServers)
+    ? bridgeConfig.value.mcpServers.find((item) => String(item.name || '').toLowerCase() === String(server.name || '').toLowerCase())
+    : null
+  if (!bridgeConfig.value.mcpEnabled || !saved?.enabled) return '保存后检测'
+  return bridgeRefreshing.value ? '检测中...' : '待检测'
+}
+
+async function saveBridgeAdvancedSettings() {
+  bridgeConfig.value = {
+    ...bridgeConfig.value,
+    botIdentity: bridgeIdentityDraft.value.trim(),
+    mcpEnabled: bridgeMCPEnabledDraft.value,
+    mcpServers: bridgeMCPServersDraft.value.map((server) => ({
+      name: server.name,
+      source: server.source,
+      sourceClient: server.sourceClient,
+      command: server.command,
+      args: Array.isArray(server.args) ? server.args : [],
+      env: {},
+      enabled: Boolean(server.enabled),
+    })),
+  }
+  const saved = await saveBridgeConfig()
+  if (saved) {
+    bridgeAdvancedDialogOpen.value = false
+    await refreshBridgeStatus(false, false)
+  }
+}
+
+function clearBridgeIdentity() {
+  bridgeIdentityDraft.value = ''
+}
+
+function groupMCPServersBySource(servers) {
+  const groups = new Map()
+  for (const server of Array.isArray(servers) ? servers : []) {
+    const source = server.sourceClient || sourceClientFromPath(server.source) || '本机配置'
+    if (!groups.has(source)) {
+      groups.set(source, [])
+    }
+    groups.get(source).push(server)
+  }
+  return Array.from(groups.entries())
+    .map(([source, items]) => ({
+      source,
+      servers: items.slice().sort((a, b) => String(a.name).localeCompare(String(b.name))),
+    }))
+    .sort((a, b) => a.source.localeCompare(b.source))
+}
+
+function sourceClientFromPath(path) {
+  const value = String(path || '').toLowerCase()
+  if (value.includes('qodercn')) return 'QoderCN'
+  if (value.includes('qoder')) return 'Qoder'
+  if (value.includes('lingma')) return 'Lingma'
+  if (value.includes('antigravity')) return 'Antigravity'
+  if (value.includes('cursor')) return 'Cursor'
+  if (value.includes('claude')) return 'Claude'
+  if (value.includes('codex')) return 'Codex'
+  if (value.includes('windsurf') || value.includes('codeium')) return 'Windsurf'
+  if (value.includes('vscodium')) return 'VSCodium'
+  if (value.includes('code') || value.includes('.vscode')) return 'VS Code'
+  if (value.includes('zed')) return 'Zed'
+  if (value.includes('continue')) return 'Continue'
+  return ''
 }
 
 async function withBridgeAction(message, action) {
@@ -406,6 +616,10 @@ async function copyBridgeSetupCommand(command) {
 
 async function installBridgeCLI() {
   await withBridgeAction('飞书 CLI 安装已触发', () => InstallFeishuCLI())
+}
+
+async function reinstallBridgeSkills() {
+  await withBridgeAction('飞书 Skills 重新安装已触发', () => ReinstallFeishuSkills())
 }
 
 async function startBridgeSetupNew() {
@@ -759,12 +973,25 @@ async function handleBridgeStepClick(step) {
                   <button type="button" class="inline-help-trigger" aria-label="查看会话命令说明">
                     <i class="bi bi-question-circle" aria-hidden="true"></i>
                   </button>
-                  <div class="inline-help-popover">
-                    <strong>会话命令</strong>
-                    <span><code>/help</code>：查看命令帮助</span>
-                    <span><code>/compact</code>：手动压缩当前会话上下文</span>
-                    <span><code>/summary</code>：查看当前会话摘要</span>
-                    <span><code>/reset</code>：清空当前飞书会话上下文</span>
+                  <div class="inline-help-popover inline-help-popover--commands">
+                    <strong>飞书会话命令</strong>
+                    <em>在飞书内直接发给机器人，仅对当前会话生效</em>
+                    <h5>上下文管理</h5>
+                    <span><code>/help</code>：查看完整命令帮助</span>
+                    <span><code>/init</code>：让机器人自我介绍当前能力</span>
+                    <span><code>/status</code>：查看本会话运行状态</span>
+                    <span><code>/summary</code>：查看本会话压缩摘要</span>
+                    <span><code>/compact</code>：手动压缩本会话上下文</span>
+                    <span><code>/reset</code> · <code>/clear</code> · <code>/new</code>：清空本会话上下文</span>
+                    <span><code>/undo</code>：撤回最近一轮（assistant + 关联 tool）</span>
+                    <span><code>/retry</code>：撤回最近一轮并提示重新发送</span>
+                    <span><code>/stop</code>：停止当前正在处理的任务</span>
+                    <h5>模型与代理</h5>
+                    <span><code>/models</code>：列出代理可用模型</span>
+                    <span><code>/model &lt;name&gt;</code>：本会话切换模型；不带参数查看当前</span>
+                    <span><code>/model default</code>：恢复使用全局默认模型</span>
+                    <span><code>/mcp</code>：查看已启用 MCP server 和工具数量</span>
+                    <span><code>/cost</code>：查看本会话 prompt / completion tokens 估算</span>
                   </div>
                 </div>
               </div>
@@ -809,6 +1036,13 @@ async function handleBridgeStepClick(step) {
                   </button>
                 </div>
               </div>
+            </div>
+            <div class="field">
+              <label>高级设置</label>
+              <button class="identity-config-button" type="button" @click="openBridgeAdvancedDialog">
+                <span>{{ bridgeAdvancedLabel }}</span>
+                <i class="bi bi-sliders" aria-hidden="true"></i>
+              </button>
             </div>
           </div>
 
@@ -872,47 +1106,65 @@ async function handleBridgeStepClick(step) {
           <div class="detect-title">
             <strong>当前状态</strong>
             <button type="button" :disabled="bridgeRefreshing" @click="refreshBridgeStatus">
-              {{ bridgeRefreshing ? '检测中...' : '刷新状态' }}
+              {{ bridgeStatusPending ? '检测中...' : (bridgeRefreshing ? '检测中...' : '刷新状态') }}
             </button>
+          </div>
+          <div v-if="bridgeStatusPending" class="status-loading-row">
+            <span class="loading-dot"></span>
+            <span>正在检测 Feishu Bridge 运行环境...</span>
           </div>
           <dl>
             <div>
               <dt>平台</dt>
-              <dd>{{ bridgeStatusPending ? '-' : `${bridgeStatus.platform} · ${bridgeStatus.arch}` }}</dd>
+              <dd>{{ bridgeStatusPending ? '检测中...' : `${bridgeStatus.platform} · ${bridgeStatus.arch}` }}</dd>
             </div>
             <div>
               <dt>Node / npm / npx</dt>
               <dd :class="{ 'warn-text': !bridgeStatusPending && (!bridgeStatus.node?.found || !bridgeStatus.npm?.found || !bridgeStatus.npx?.found) }">
-                {{ bridgeStatusPending ? '-' : `${bridgeStatus.node?.version || '缺失'} / ${bridgeStatus.npm?.version || '缺失'} / ${bridgeStatus.npx?.version || '缺失'}` }}
+                {{ bridgeStatusPending ? '检测中...' : `${bridgeStatus.node?.version || '缺失'} / ${bridgeStatus.npm?.version || '缺失'} / ${bridgeStatus.npx?.version || '缺失'}` }}
               </dd>
             </div>
             <div>
               <dt>lark-cli</dt>
               <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.cli?.found }">
-                {{ bridgeStatusPending ? '-' : (bridgeStatus.cli?.version || '未安装') }}
+                {{ bridgeStatusPending ? '检测中...' : (bridgeStatus.cli?.version || '未安装') }}
               </dd>
             </div>
             <div>
               <dt>Skills</dt>
               <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.skillsReady }">
-                {{ bridgeStatusPending ? '-' : (bridgeStatus.skillsReady ? '已就绪' : '缺失或未完整安装') }}
+                <span>{{ bridgeStatusPending ? '检测中...' : (bridgeStatus.installRunning && !bridgeStatus.skillsReady ? '安装中…' : (bridgeStatus.skillsReady ? '已就绪' : '缺失或未完整安装')) }}</span>
+                <button
+                  v-if="!bridgeStatusPending && !bridgeStatus.skillsReady && bridgeStatus.cli?.found && !bridgeStatus.installRunning"
+                  type="button"
+                  class="inline-action-btn"
+                  @click="reinstallBridgeSkills"
+                >
+                  重新安装 Skills
+                </button>
+              </dd>
+            </div>
+            <div>
+              <dt>MCP</dt>
+              <dd :class="{ 'warn-text': !bridgeStatusPending && bridgeConfig.mcpEnabled && bridgeMCPServers.filter((server) => server.enabled && server.available).length === 0 }">
+                {{ bridgeStatusPending ? '检测中...' : (bridgeConfig.mcpEnabled ? `${bridgeMCPServers.filter((server) => server.enabled && server.available).length}/${bridgeMCPServers.filter((server) => server.enabled).length} 已启用可用` : '未启用') }}
               </dd>
             </div>
             <div>
               <dt>CLI 配置</dt>
               <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.config?.configured }">
-                {{ bridgeStatusPending ? '-' : (bridgeStatus.config?.configured ? `${bridgeStatus.config?.appId || '已配置'} · ${bridgeStatus.config?.brand || 'feishu'}` : (bridgeStatus.config?.message || '未初始化')) }}
+                {{ bridgeStatusPending ? '检测中...' : (bridgeStatus.config?.configured ? `${bridgeStatus.config?.appId || '已配置'} · ${bridgeStatus.config?.brand || 'feishu'}` : (bridgeStatus.config?.message || '未初始化')) }}
               </dd>
             </div>
             <div>
               <dt>授权状态</dt>
               <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.auth?.authorized }">
-                {{ bridgeStatusPending ? '-' : (bridgeStatus.auth?.authorized ? `${bridgeStatus.auth?.userName || '已授权'} · ${bridgeStatus.auth?.tokenStatus || 'ok'}` : (bridgeStatus.auth?.message || '未授权')) }}
+                {{ bridgeStatusPending ? '检测中...' : (bridgeStatus.auth?.authorized ? `${bridgeStatus.auth?.userName || '已授权'} · ${bridgeStatus.auth?.tokenStatus || 'ok'}` : (bridgeStatus.auth?.message || '未授权')) }}
               </dd>
             </div>
             <div>
               <dt>运行状态</dt>
-              <dd>{{ bridgeStatusPending ? '-' : (bridgeStatus.running ? `运行中 · ${formatDateTime(bridgeStatus.lastStartedAt) || bridgeStatus.lastStartedAt || ''}` : '未运行') }}</dd>
+              <dd>{{ bridgeStatusPending ? '检测中...' : (bridgeStatus.running ? `运行中 · ${formatDateTime(bridgeStatus.lastStartedAt) || bridgeStatus.lastStartedAt || ''}` : '未运行') }}</dd>
             </div>
             <div v-if="bridgeStatusPending || bridgeStatus.lastCheckedAt">
               <dt>最近检测</dt>
@@ -984,6 +1236,140 @@ async function handleBridgeStepClick(step) {
             <p>如果 npm 全局目录是 <code>D:\node.js\node_global</code> 这类自定义路径，新版会自动探测；手动安装完成后回到设置页点击“刷新状态”。</p>
             <p>如果提示缺少权限 scope，按飞书对话里返回的授权链接补授权，完成后再次发送原问题。</p>
           </div>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="bridgeAdvancedDialogOpen" class="modal-backdrop" @click.self="bridgeAdvancedDialogOpen = false">
+      <section class="modal-card bridge-advanced-modal">
+        <div class="modal-header">
+          <div>
+            <h2>Feishu Bridge 高级设置</h2>
+            <p>身份描述留空时使用内置默认；MCP 工具默认只扫描展示，启用后才会暴露给 Bot 调用。</p>
+          </div>
+          <button class="secondary-button" type="button" @click="bridgeAdvancedDialogOpen = false">关闭</button>
+        </div>
+        <div class="modal-body bridge-advanced-body">
+          <div class="advanced-section">
+            <div class="field">
+              <label>Bot 身份描述</label>
+              <textarea
+                v-model="bridgeIdentityDraft"
+                maxlength="2000"
+                placeholder="例如：你是研发效能助手，面向内部开发同学。回复要直接、简洁，优先给可执行结论。"
+              ></textarea>
+            </div>
+            <p class="identity-note">这段内容不会替代工具调用规则、权限规则和真实数据约束。需要恢复默认时清空后保存。</p>
+          </div>
+
+          <div class="advanced-section">
+            <div class="advanced-section-head">
+              <div>
+                <h3>MCP 工具</h3>
+                <p>优先读取本机已有 MCP 配置；单个 server 启用后才会进入 Bot 工具清单。</p>
+              </div>
+              <label class="switch">
+                <input v-model="bridgeMCPEnabledDraft" type="checkbox" />
+                <span></span>
+              </label>
+            </div>
+            <div class="actions-row">
+              <button class="secondary-button" type="button" @click="openBridgeMCPJSONDialog">
+                自定义 MCP JSON
+              </button>
+              <button class="secondary-button" type="button" :disabled="bridgeRefreshing" @click="refreshBridgeAdvancedMCP">
+                {{ bridgeRefreshing ? '扫描中...' : '扫描本机 MCP' }}
+              </button>
+            </div>
+            <div class="mcp-server-list">
+              <div v-if="bridgeMCPServersDraft.length === 0" class="mcp-empty">
+                未扫描到 MCP 配置。当前会检查 Cursor、Claude、Codex、QoderCN、Lingma、Antigravity、Windsurf、VS Code、Zed、Continue 和项目级 .mcp.json 等主流路径。
+              </div>
+              <div v-for="group in bridgeMCPServerGroups" :key="group.source" class="mcp-source-group">
+                <div class="mcp-source-title">{{ group.source }}</div>
+                <div
+                  v-for="server in group.servers"
+                  :key="server.name"
+                  class="mcp-server-card"
+                  :class="{ enabled: server.enabled, unavailable: server.enabled && !server.available && server.message !== '未启用' }"
+                >
+                  <button
+                    type="button"
+                    class="mcp-server-row"
+                    @click="toggleBridgeMCPServer(server.name)"
+                  >
+                    <span class="mcp-server-toggle" :class="{ on: server.enabled }"></span>
+                    <span class="mcp-server-main">
+                      <strong>{{ server.name }}</strong>
+                      <small>{{ server.command }} {{ Array.isArray(server.args) ? server.args.join(' ') : '' }}</small>
+                      <em>{{ server.source || '自定义配置' }}</em>
+                    </span>
+                    <span class="mcp-server-meta">
+                      {{ bridgeMCPServerMeta(server) }}
+                    </span>
+                  </button>
+                  <button
+                    v-if="Array.isArray(server.tools) && server.tools.length > 0"
+                    type="button"
+                    class="mcp-tools-toggle"
+                    @click.stop="toggleBridgeMCPTools(server.name)"
+                  >
+                    <span>{{ bridgeMCPExpanded[server.name] ? '⌄' : '›' }}</span>
+                    <span>{{ server.tools.length }} 个转换后的 tools</span>
+                  </button>
+                  <div v-if="bridgeMCPExpanded[server.name] && Array.isArray(server.tools) && server.tools.length > 0" class="mcp-tool-list">
+                    <div v-for="tool in server.tools" :key="bridgeMCPToolLabel(tool)" class="mcp-tool-chip">
+                      <code>{{ bridgeMCPToolLabel(tool) }}</code>
+                      <small v-if="bridgeMCPToolDescription(tool)">{{ bridgeMCPToolDescription(tool) }}</small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" @click="clearBridgeIdentity">清空</button>
+          <div class="actions-row">
+            <button class="secondary-button" type="button" @click="bridgeAdvancedDialogOpen = false">取消</button>
+            <button class="primary-button" type="button" :disabled="bridgeSaving" @click="saveBridgeAdvancedSettings">
+              {{ bridgeSaving ? '保存中...' : '保存生效' }}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="bridgeMCPJSONDialogOpen" class="modal-backdrop" @click.self="bridgeMCPJSONDialogOpen = false">
+      <section class="modal-card bridge-mcp-json-modal">
+        <div class="modal-header">
+          <div>
+            <h2>自定义 MCP JSON</h2>
+            <p>保存到应用自己的 MCP 配置文件，保存成功后会自动解析并刷新 MCP 列表。</p>
+          </div>
+          <button class="secondary-button" type="button" @click="bridgeMCPJSONDialogOpen = false">关闭</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>配置文件</label>
+            <input :value="bridgeMCPJSONPath" readonly />
+          </div>
+          <div class="field mcp-json-edit-pane">
+            <label>JSON 文件内容</label>
+            <textarea
+              v-model="bridgeMCPJSONDraft"
+              class="mcp-json-editor"
+              spellcheck="false"
+              placeholder='{"mcpServers":{"context7":{"command":"npx","args":["-y","@upstash/context7-mcp@latest"]}}}'
+            ></textarea>
+          </div>
+          <p v-if="bridgeMCPJSONError" class="mcp-json-error">{{ bridgeMCPJSONError }}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" @click="bridgeMCPJSONDialogOpen = false">取消</button>
+          <button class="primary-button" type="button" :disabled="bridgeMCPJSONSaving" @click="saveBridgeMCPJSON">
+            {{ bridgeMCPJSONSaving ? '保存中...' : '保存并解析' }}
+          </button>
         </div>
       </section>
     </div>

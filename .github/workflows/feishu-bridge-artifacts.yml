@@ -75,7 +75,7 @@ jobs:
       - name: Build app
         run: |
           cd desktop
-          wails build -platform darwin/arm64 -clean
+          wails build -platform darwin/arm64 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
 
       - name: Package app
         run: |
@@ -140,7 +140,7 @@ jobs:
         shell: pwsh
         run: |
           Push-Location desktop
-          wails build -platform windows/amd64 -clean
+          wails build -platform windows/amd64 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
           Pop-Location
 
       - name: Package app

@@ -42,6 +42,12 @@ type proxyConfigFile struct {
 	RemoteFallbackModels  []string `json:"remote_fallback_models"`
 }
 
+type MCPJSONFile struct {
+	Path        string `json:"path"`
+	Content     string `json:"content"`
+	ServerCount int    `json:"serverCount"`
+}
+
 func loadDesktopConfig() (service.Config, feishu.Config) {
 	cfg := defaultConfig()
 	bridgeCfg := feishu.DefaultConfig()
@@ -80,7 +86,7 @@ func parseDesktopConfig(data []byte, baseProxy service.Config, baseBridge feishu
 			applyProxyConfigFile(&cfg, proxyFile)
 		}
 		if rawBridge, ok := probe["feishuBridge"]; ok {
-			var savedBridge feishu.Config
+			savedBridge := baseBridge
 			if err := json.Unmarshal(rawBridge, &savedBridge); err == nil {
 				bridgeCfg = feishu.NormalizeConfig(savedBridge)
 			}
@@ -187,11 +193,10 @@ func buildProxyConfigFile(cfg service.Config) proxyConfigFile {
 }
 
 func (a *App) saveDesktopConfig(proxyCfg service.Config, bridgeCfg feishu.Config) error {
-	home, err := os.UserHomeDir()
+	dir, err := lingmaProxyConfigDir()
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(home, ".config", "lingma-proxy")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
@@ -206,6 +211,89 @@ func (a *App) saveDesktopConfig(proxyCfg service.Config, bridgeCfg feishu.Config
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "config.json"), data, 0644)
+}
+
+func lingmaProxyConfigDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "lingma-proxy"), nil
+}
+
+func customMCPConfigFilePath() (string, error) {
+	dir, err := lingmaProxyConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "mcp.json"), nil
+}
+
+func (a *App) GetFeishuBridgeMCPJSON() (MCPJSONFile, error) {
+	path, err := customMCPConfigFilePath()
+	if err != nil {
+		return MCPJSONFile{}, err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		data = []byte(defaultCustomMCPJSON())
+	} else if err != nil {
+		return MCPJSONFile{}, err
+	}
+	servers, validateErr := feishu.ValidateMCPJSONConfig(path, data)
+	count := len(servers)
+	result := MCPJSONFile{Path: path, Content: string(data), ServerCount: count}
+	if validateErr != nil && strings.TrimSpace(string(data)) != strings.TrimSpace(defaultCustomMCPJSON()) {
+		return result, validateErr
+	}
+	return result, nil
+}
+
+func (a *App) SaveFeishuBridgeMCPJSON(content string) (MCPJSONFile, error) {
+	path, err := customMCPConfigFilePath()
+	if err != nil {
+		return MCPJSONFile{}, err
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		content = defaultCustomMCPJSON()
+	}
+	servers, err := feishu.ValidateMCPJSONConfig(path, []byte(content))
+	if err != nil {
+		return MCPJSONFile{Path: path, Content: content}, err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return MCPJSONFile{}, err
+	}
+	var formatted any
+	data := []byte(content)
+	if err := json.Unmarshal(data, &formatted); err == nil {
+		if pretty, err := json.MarshalIndent(formatted, "", "  "); err == nil {
+			data = append(pretty, '\n')
+			content = string(data)
+		}
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return MCPJSONFile{}, err
+	}
+	feishu.SetCustomMCPConfigPath(path)
+	if a.bridge != nil {
+		a.bridge.SetConfig(a.GetFeishuBridgeConfig())
+		_ = a.bridge.Probe(context.Background())
+	}
+	return MCPJSONFile{Path: path, Content: content, ServerCount: len(servers)}, nil
+}
+
+func defaultCustomMCPJSON() string {
+	return `{
+  "mcpServers": {
+    "example": {
+      "command": "npx",
+      "args": ["-y", "your-mcp-server"]
+    }
+  }
+}`
 }
 
 func (a *App) saveConfig(cfg service.Config) error {
@@ -293,6 +381,13 @@ func (a *App) InstallFeishuCLI() error {
 		return fmt.Errorf("feishu bridge manager not initialized")
 	}
 	return a.bridge.InstallCLI(context.Background())
+}
+
+func (a *App) ReinstallFeishuSkills() error {
+	if a.bridge == nil {
+		return fmt.Errorf("feishu bridge manager not initialized")
+	}
+	return a.bridge.ReinstallSkills(context.Background())
 }
 
 func (a *App) StartFeishuCLISetupNew() error {

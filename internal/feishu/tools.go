@@ -24,6 +24,7 @@ type ToolExecutionResult struct {
 	MissingScopes []string
 	ConsoleURL    string
 	Hint          string
+	IsError       bool
 }
 
 type permissionRequirement struct {
@@ -40,7 +41,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_cli_exec",
-				"description": "通用飞书 CLI 执行入口。适用于云盘、邮箱、通讯录、妙记、视频会议、幻灯片、白板、审批、考勤、OKR 等当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；如果未显式指定 --as，则会自动追加 --as user。",
+				"description": "通用飞书 CLI 执行入口。适用于云盘、邮箱、通讯录、妙记、视频会议、幻灯片、白板、审批、考勤、OKR 等当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；如果未显式指定 --as，则会自动追加 --as user。\n\n重要命令格式规则：\n- lark-cli 的子命令分两类：原生子命令（如 drive file list）和 skill 快捷命令（带 + 前缀，如 im +chat-list、im +messages-send）\n- IM 相关操作必须使用 + 前缀快捷命令：im +chat-list（列出群聊）、im +chat-create（创建群聊）、im +messages-send（发消息）、im +messages-search（搜消息）、im +messages-reply（回复消息）\n- 其他 skill 快捷命令：calendar +agenda、calendar +create、docs +create、docs +fetch 等\n- 不存在 im chats list、im chat list、im messages send 这类不带 + 的写法，这些会报错\n- 示例 argv：[\"im\", \"+chat-list\", \"--limit\", \"10\"]、[\"drive\", \"file\", \"list\"]、[\"calendar\", \"+agenda\"]",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -65,6 +66,25 @@ func toolDefinitions() []map[string]any {
 						"start": map[string]any{"type": "string", "description": "起始日期，格式 YYYY-MM-DD，默认今天"},
 						"end":   map[string]any{"type": "string", "description": "结束日期，格式 YYYY-MM-DD，默认今天"},
 					},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "mcp_call",
+				"description": "调用已启用的本机 MCP 工具。仅在系统提示词列出可用 MCP server/tool 时使用；server 和 tool 必须精确匹配提示词中的名称。飞书数据优先用 lark-cli 工具，浏览器、文件、外部系统等通用扩展能力再用 MCP。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"server": map[string]any{"type": "string", "description": "MCP server 名称，例如 playwright-mcp-server"},
+						"tool":   map[string]any{"type": "string", "description": "MCP tool 名称，例如 browser_navigate"},
+						"arguments": map[string]any{
+							"type":        "object",
+							"description": "传给 MCP tool 的参数对象。必须符合该 tool 的 schema。",
+						},
+					},
+					"required": []string{"server", "tool", "arguments"},
 				},
 			},
 		},
@@ -213,6 +233,34 @@ func toolDefinitions() []map[string]any {
 	}
 }
 
+func toolDefinitionsWithMCP(mcpTools []mcpTool) []map[string]any {
+	defs := toolDefinitions()
+	for _, tool := range mcpTools {
+		name := strings.TrimSpace(tool.Function)
+		if name == "" {
+			continue
+		}
+		schema := tool.InputSchema
+		if schema == nil {
+			schema = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		description := strings.TrimSpace(tool.Description)
+		if description == "" {
+			description = "MCP tool"
+		}
+		description = fmt.Sprintf("[%s/%s] %s", tool.Server, tool.Name, description)
+		defs = append(defs, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        name,
+				"description": description,
+				"parameters":  schema,
+			},
+		})
+	}
+	return defs
+}
+
 func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 	switch toolName {
 	case "lark_cli_exec":
@@ -226,6 +274,7 @@ func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 		if len(argv) == 0 {
 			return nil, fmt.Errorf("argv 不能为空")
 		}
+		argv = normalizeLarkCLIArgv(argv)
 		if !containsAsFlag(argv) {
 			argv = append(argv, "--as", "user")
 		}
@@ -339,11 +388,22 @@ func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 }
 
 func executeTool(toolName string, args map[string]any) ToolExecutionResult {
+	return executeToolContext(context.Background(), toolName, args)
+}
+
+func executeToolContext(parent context.Context, toolName string, args map[string]any) ToolExecutionResult {
+	return executeToolContextWithConfig(parent, DefaultConfig(), toolName, args)
+}
+
+func executeToolContextWithConfig(parent context.Context, cfg Config, toolName string, args map[string]any) ToolExecutionResult {
+	if toolName == "mcp_call" {
+		return executeMCPToolContext(parent, cfg, args)
+	}
 	cmdArgs, err := buildToolCommand(toolName, args)
 	if err != nil {
-		return ToolExecutionResult{Output: "[error] " + err.Error()}
+		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout())
+	ctx, cancel := context.WithTimeout(parent, toolTimeout())
 	defer cancel()
 	cmd := commandContextWithEnv(ctx, cmdArgs[0], cmdArgs[1:]...)
 	output, err := cmd.CombinedOutput()
@@ -357,7 +417,7 @@ func executeTool(toolName string, args map[string]any) ToolExecutionResult {
 		result = result[:4000] + "\n... (truncated; do not infer unseen content)"
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		return ToolExecutionResult{Output: "[error] command timed out (30s)"}
+		return ToolExecutionResult{Output: "[error] command timed out (30s)", IsError: true}
 	}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && result != "" {
@@ -366,6 +426,7 @@ func executeTool(toolName string, args map[string]any) ToolExecutionResult {
 				MissingScopes: perm.Scopes,
 				ConsoleURL:    perm.ConsoleURL,
 				Hint:          perm.Hint,
+				IsError:       true,
 			}
 		}
 		return ToolExecutionResult{
@@ -373,9 +434,33 @@ func executeTool(toolName string, args map[string]any) ToolExecutionResult {
 			MissingScopes: perm.Scopes,
 			ConsoleURL:    perm.ConsoleURL,
 			Hint:          perm.Hint,
+			IsError:       true,
 		}
 	}
 	return ToolExecutionResult{Output: result}
+}
+
+func executeToolContextWithRuntime(parent context.Context, cfg Config, runtime *MCPRuntime, toolName string, args map[string]any) ToolExecutionResult {
+	if runtime != nil && runtime.IsMCPFunction(toolName) {
+		if !cfg.MCPEnabled {
+			return ToolExecutionResult{Output: "[error] MCP 未启用", IsError: true}
+		}
+		ctx, cancel := context.WithTimeout(parent, toolTimeout())
+		defer cancel()
+		result, err := runtime.CallTool(ctx, toolName, args)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		result = strings.TrimSpace(result)
+		if result == "" {
+			result = "[no output]"
+		}
+		if len(result) > 4000 {
+			result = result[:4000] + "\n... (truncated; do not infer unseen content)"
+		}
+		return ToolExecutionResult{Output: result}
+	}
+	return executeToolContextWithConfig(parent, cfg, toolName, args)
 }
 
 func normalizeToolOutput(result string) string {
@@ -508,6 +593,67 @@ func stringListArg(args map[string]any, key string) []string {
 	default:
 		return nil
 	}
+}
+
+func normalizeLarkCLIArgv(argv []string) []string {
+	if len(argv) == 0 {
+		return argv
+	}
+	out := append([]string(nil), argv...)
+	lower := make([]string, len(out))
+	for i, item := range out {
+		lower[i] = strings.ToLower(strings.TrimSpace(item))
+	}
+	replace := func(n int, shortcut string) []string {
+		next := make([]string, 0, 1+len(out)-n)
+		next = append(next, out[0], shortcut)
+		next = append(next, out[n:]...)
+		return next
+	}
+	if len(out) >= 3 {
+		switch lower[0] {
+		case "im":
+			switch {
+			case (lower[1] == "chat" || lower[1] == "chats") && lower[2] == "list":
+				return replace(3, "+chat-list")
+			case lower[1] == "chat" && lower[2] == "create":
+				return replace(3, "+chat-create")
+			case (lower[1] == "message" || lower[1] == "messages") && lower[2] == "send":
+				return replace(3, "+messages-send")
+			case (lower[1] == "message" || lower[1] == "messages") && lower[2] == "search":
+				return replace(3, "+messages-search")
+			case (lower[1] == "message" || lower[1] == "messages") && lower[2] == "reply":
+				return replace(3, "+messages-reply")
+			}
+		case "calendar":
+			switch {
+			case lower[1] == "agenda":
+				return replace(2, "+agenda")
+			case lower[1] == "create":
+				return replace(2, "+create")
+			}
+		case "docs":
+			switch {
+			case lower[1] == "create":
+				return replace(2, "+create")
+			case lower[1] == "fetch":
+				return replace(2, "+fetch")
+			}
+		}
+	}
+	if len(out) >= 2 {
+		switch lower[0] {
+		case "calendar":
+			if lower[1] == "agenda" || lower[1] == "create" {
+				return replace(2, "+"+lower[1])
+			}
+		case "docs":
+			if lower[1] == "create" || lower[1] == "fetch" {
+				return replace(2, "+"+lower[1])
+			}
+		}
+	}
+	return out
 }
 
 func containsAsFlag(argv []string) bool {

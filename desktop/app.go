@@ -210,6 +210,9 @@ func (a *App) startup(ctx context.Context) {
 	a.bootStartedAt = time.Now()
 	a.logBootMilestone("startup:begin")
 	a.cfg, a.bridgeCfg = loadDesktopConfig()
+	if path, err := customMCPConfigFilePath(); err == nil {
+		feishu.SetCustomMCPConfigPath(path)
+	}
 	a.logBootMilestone("startup:config-loaded")
 	a.bridge = feishu.NewManager(feishu.ManagerOptions{
 		ProxyURL: func() string {
@@ -658,13 +661,44 @@ func (a *App) StartProxy() error {
 		if bridge == nil || !bridgeCfg.Enabled || !bridgeCfg.AutoStart {
 			return
 		}
-		bridge.SetConfig(bridgeCfg)
-		if err := bridge.Start(context.Background()); err != nil {
-			a.emitLog("warn", fmt.Sprintf("Feishu bridge auto-start failed: %v", err))
-		}
+		a.autoStartFeishuBridge(bridge, bridgeCfg)
 	}()
 
 	return nil
+}
+
+func (a *App) autoStartFeishuBridge(bridge *feishu.Manager, bridgeCfg feishu.Config) {
+	delays := []time.Duration{0, 3 * time.Second, 8 * time.Second}
+	for attempt, delay := range delays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		bridge.SetConfig(bridgeCfg)
+		err := bridge.Start(context.Background())
+		if err == nil {
+			if attempt > 0 {
+				a.emitLog("info", "Feishu bridge auto-started after environment retry")
+			}
+			return
+		}
+		if attempt == len(delays)-1 || !shouldRetryFeishuAutoStart(err) {
+			a.emitLog("warn", fmt.Sprintf("Feishu bridge auto-start failed: %v", err))
+			return
+		}
+		a.emitLog("info", fmt.Sprintf("Feishu bridge auto-start waiting for environment (%d/%d): %v", attempt+1, len(delays)-1, err))
+	}
+}
+
+func shouldRetryFeishuAutoStart(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Node/npm/npx 未就绪") ||
+		strings.Contains(msg, "lark-cli 未安装") ||
+		strings.Contains(msg, "skills 未安装完整") ||
+		strings.Contains(msg, "飞书 CLI 尚未完成应用初始化") ||
+		strings.Contains(msg, "飞书 CLI 尚未完成用户授权")
 }
 
 // GetLogSummaries returns recent logs with truncated messages for lightweight list rendering.

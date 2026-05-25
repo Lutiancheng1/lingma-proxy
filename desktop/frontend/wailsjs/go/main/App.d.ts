@@ -22,6 +22,8 @@ export function GetDetectionInfo():Promise<main.DetectionInfo>;
 
 export function GetFeishuBridgeConfig():Promise<feishu.Config>;
 
+export function GetFeishuBridgeMCPJSON():Promise<main.MCPJSONFile>;
+
 export function GetFeishuBridgeStatus():Promise<feishu.Status>;
 
 export function GetLogDetail(arg1:string):Promise<main.AppLog>;
@@ -52,7 +54,11 @@ export function RefreshFeishuBridgeStatus():Promise<feishu.Status>;
 
 export function RefreshModels():Promise<Array<main.ModelInfo>>;
 
+export function ReinstallFeishuSkills():Promise<void>;
+
 export function RequestQuitShortcut():Promise<void>;
+
+export function SaveFeishuBridgeMCPJSON(arg1:string):Promise<main.MCPJSONFile>;
 
 export function SelectModel(arg1:string):Promise<main.ProxyStatus>;
 

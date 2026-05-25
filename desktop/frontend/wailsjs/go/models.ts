@@ -1,5 +1,5 @@
 export namespace feishu {
-	
+
 	export class AuthStatus {
 	    authorized: boolean;
 	    verified: boolean;
@@ -10,11 +10,11 @@ export namespace feishu {
 	    refreshExpiresAt?: string;
 	    tokenStatus?: string;
 	    message?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AuthStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.authorized = source["authorized"];
@@ -33,11 +33,11 @@ export namespace feishu {
 	    version?: string;
 	    path?: string;
 	    hint?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new BinaryStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.found = source["found"];
@@ -46,25 +46,75 @@ export namespace feishu {
 	        this.hint = source["hint"];
 	    }
 	}
+	export class MCPServerConfig {
+	    name: string;
+	    source?: string;
+	    sourceClient?: string;
+	    command: string;
+	    args?: string[];
+	    env?: Record<string, string>;
+	    enabled: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new MCPServerConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.source = source["source"];
+	        this.sourceClient = source["sourceClient"];
+	        this.command = source["command"];
+	        this.args = source["args"];
+	        this.env = source["env"];
+	        this.enabled = source["enabled"];
+	    }
+	}
 	export class Config {
 	    enabled: boolean;
 	    autoStart: boolean;
 	    brand: string;
 	    model: string;
+	    botIdentity: string;
+	    mcpEnabled: boolean;
+	    mcpServers?: MCPServerConfig[];
 	    maxToolRounds: number;
-	
+	    groupOnlyAtBot: boolean;
+
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
 	        this.autoStart = source["autoStart"];
 	        this.brand = source["brand"];
 	        this.model = source["model"];
+	        this.botIdentity = source["botIdentity"];
+	        this.mcpEnabled = source["mcpEnabled"];
+	        this.mcpServers = this.convertValues(source["mcpServers"], MCPServerConfig);
 	        this.maxToolRounds = source["maxToolRounds"];
+	        this.groupOnlyAtBot = source["groupOnlyAtBot"];
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ConfigStatus {
 	    configured: boolean;
@@ -72,11 +122,11 @@ export namespace feishu {
 	    brand?: string;
 	    path?: string;
 	    message?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ConfigStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.configured = source["configured"];
@@ -86,16 +136,82 @@ export namespace feishu {
 	        this.message = source["message"];
 	    }
 	}
+
+	export class MCPToolStatus {
+	    name: string;
+	    function?: string;
+	    description?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MCPToolStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.function = source["function"];
+	        this.description = source["description"];
+	    }
+	}
+	export class MCPServerStatus {
+	    name: string;
+	    source?: string;
+	    sourceClient?: string;
+	    command?: string;
+	    args?: string[];
+	    enabled: boolean;
+	    available: boolean;
+	    toolCount: number;
+	    tools?: MCPToolStatus[];
+	    message?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MCPServerStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.source = source["source"];
+	        this.sourceClient = source["sourceClient"];
+	        this.command = source["command"];
+	        this.args = source["args"];
+	        this.enabled = source["enabled"];
+	        this.available = source["available"];
+	        this.toolCount = source["toolCount"];
+	        this.tools = this.convertValues(source["tools"], MCPToolStatus);
+	        this.message = source["message"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
 	export class SkillStatus {
 	    name: string;
 	    found: boolean;
 	    path?: string;
 	    message?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SkillStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -113,6 +229,7 @@ export namespace feishu {
 	    cli: BinaryStatus;
 	    skills: SkillStatus[];
 	    skillsReady: boolean;
+	    mcpServers?: MCPServerStatus[];
 	    config: ConfigStatus;
 	    auth: AuthStatus;
 	    running: boolean;
@@ -127,11 +244,11 @@ export namespace feishu {
 	    lastStartedAt?: string;
 	    currentModel?: string;
 	    requiredSkills?: string[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Status(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.platform = source["platform"];
@@ -142,6 +259,7 @@ export namespace feishu {
 	        this.cli = this.convertValues(source["cli"], BinaryStatus);
 	        this.skills = this.convertValues(source["skills"], SkillStatus);
 	        this.skillsReady = source["skillsReady"];
+	        this.mcpServers = this.convertValues(source["mcpServers"], MCPServerStatus);
 	        this.config = this.convertValues(source["config"], ConfigStatus);
 	        this.auth = this.convertValues(source["auth"], AuthStatus);
 	        this.running = source["running"];
@@ -157,7 +275,7 @@ export namespace feishu {
 	        this.currentModel = source["currentModel"];
 	        this.requiredSkills = source["requiredSkills"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -180,7 +298,7 @@ export namespace feishu {
 }
 
 export namespace main {
-	
+
 	export class AppLog {
 	    createdAt?: string;
 	    time: string;
@@ -190,11 +308,11 @@ export namespace main {
 	    messageId?: string;
 	    level: string;
 	    message: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AppLog(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.createdAt = source["createdAt"];
@@ -227,11 +345,11 @@ export namespace main {
 	    remoteTokenExpireAt?: string;
 	    remoteTokenExpired: boolean;
 	    remoteCredentialError?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new DetectionInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.listenUrl = source["listenUrl"];
@@ -266,11 +384,11 @@ export namespace main {
 	    includeDetectionInfo: boolean;
 	    issueDescription?: string;
 	    savePath?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FeedbackExportOptions(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.rangePreset = source["rangePreset"];
@@ -293,11 +411,11 @@ export namespace main {
 	    exportedAt: string;
 	    appLogCount: number;
 	    requestCount: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FeedbackExportResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.zipPath = source["zipPath"];
@@ -309,14 +427,30 @@ export namespace main {
 	        this.requestCount = source["requestCount"];
 	    }
 	}
+	export class MCPJSONFile {
+	    path: string;
+	    content: string;
+	    serverCount: number;
+
+	    static createFrom(source: any = {}) {
+	        return new MCPJSONFile(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.content = source["content"];
+	        this.serverCount = source["serverCount"];
+	    }
+	}
 	export class ModelInfo {
 	    id: string;
 	    name: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModelInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -330,11 +464,11 @@ export namespace main {
 	    models: number;
 	    model?: string;
 	    startedAt?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ProxyStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.running = source["running"];
@@ -362,11 +496,11 @@ export namespace main {
 	    totalTokens?: number;
 	    reqBody?: string;
 	    respBody?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RequestRecord(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -396,11 +530,11 @@ export namespace main {
 	    byModel?: Record<string, number>;
 	    lastModel?: string;
 	    lastUpdated?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TokenStats(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.totalRequests = source["totalRequests"];
@@ -417,7 +551,7 @@ export namespace main {
 }
 
 export namespace service {
-	
+
 	export class Config {
 	    Host: string;
 	    Port: number;
@@ -439,11 +573,11 @@ export namespace service {
 	    WarmupTimeout: number;
 	    RemoteFallbackEnabled: boolean;
 	    RemoteFallbackModels: string[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.Host = source["Host"];

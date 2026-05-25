@@ -24,7 +24,7 @@ func TestHandleEventCallsLLMAndRepliesToMessage(t *testing.T) {
 	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
 		return []SkillStatus{{Name: "lark-im", Found: true}}, nil
 	}
-	callLLMForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool) (*llmResponse, error) {
+	callLLMForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool, tools []map[string]any) (*llmResponse, error) {
 		if proxyURL != "http://127.0.0.1:8095/v1/chat/completions" {
 			t.Fatalf("unexpected proxy URL: %s", proxyURL)
 		}
@@ -60,7 +60,7 @@ func TestHandleEventCallsLLMAndRepliesToMessage(t *testing.T) {
 		MessageType: "text",
 	})
 
-	got := strings.TrimSpace(string(mustReadFileContainingEventually(t, replyLog, "--markdown 收到，我可以正常回复。")))
+	got := strings.TrimSpace(string(mustReadFileContainingEventually(t, replyLog, "收到，我可以正常回复。")))
 	if !strings.Contains(got, "im reactions create") {
 		t.Fatalf("typing reaction create was not called, got: %s", got)
 	}
@@ -73,8 +73,8 @@ func TestHandleEventCallsLLMAndRepliesToMessage(t *testing.T) {
 	if !strings.Contains(got, "--message-id om_test_message") {
 		t.Fatalf("reply command did not include message id, got: %s", got)
 	}
-	if !strings.Contains(got, "--markdown 收到，我可以正常回复。") {
-		t.Fatalf("reply command did not include LLM reply, got: %s", got)
+	if !strings.Contains(got, "收到，我可以正常回复。") {
+		t.Fatalf("reply did not include LLM reply text, got: %s", got)
 	}
 	state := manager.getConversationState("oc_test_chat")
 	if len(state.History) == 0 {
@@ -93,7 +93,7 @@ func TestHandleEventSynthesizesFinalReplyAfterToolRounds(t *testing.T) {
 	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
 		return []SkillStatus{{Name: "lark-drive", Found: true}}, nil
 	}
-	callLLMForConversation = func(context.Context, string, string, []map[string]any, bool) (*llmResponse, error) {
+	callLLMForConversation = func(context.Context, string, string, []map[string]any, bool, []map[string]any) (*llmResponse, error) {
 		var resp llmResponse
 		resp.Choices = append(resp.Choices, struct {
 			Message struct {
@@ -136,6 +136,279 @@ func TestHandleEventSynthesizesFinalReplyAfterToolRounds(t *testing.T) {
 	}
 }
 
+func TestHandleEventGuidesThenStopsOnRepeatedIdenticalToolFailure(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	oldDiscover := discoverSkillsForPrompt
+	oldCallLLM := callLLMForConversation
+	t.Cleanup(func() {
+		discoverSkillsForPrompt = oldDiscover
+		callLLMForConversation = oldCallLLM
+	})
+	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
+		return []SkillStatus{{Name: "lark-im", Found: true}}, nil
+	}
+	calls := 0
+	callLLMForConversation = func(context.Context, string, string, []map[string]any, bool, []map[string]any) (*llmResponse, error) {
+		calls++
+		var resp llmResponse
+		resp.Choices = append(resp.Choices, struct {
+			Message struct {
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls"`
+			} `json:"message"`
+		}{})
+		var tc ToolCall
+		tc.ID = "call_bad"
+		tc.Type = "function"
+		tc.Function.Name = "lark_cli_exec"
+		tc.Function.Arguments = `{"argv":["unknown","bad"]}`
+		resp.Choices[0].Message.ToolCalls = []ToolCall{tc}
+		return &resp, nil
+	}
+
+	manager := NewManager(ManagerOptions{
+		ProxyURL: func() string { return "http://127.0.0.1:8095/v1/chat/completions" },
+	})
+	manager.SetConfig(Config{Model: "kmodel", MaxToolRounds: 24})
+	manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_repeat_fail_chat",
+		ChatType:    "p2p",
+		Content:     "查一下内容",
+		CreateTime:  "2",
+		EventID:     "evt_repeat_fail_1",
+		MessageID:   "om_repeat_fail_message",
+		SenderID:    "ou_test_user",
+		MessageType: "text",
+	})
+
+	got := string(mustReadFileContainingEventually(t, replyLog, "同一个工具调用连续失败 4 次"))
+	if calls != 4 {
+		t.Fatalf("repeated identical failure should stop after four LLM tool attempts, got calls=%d log=%s", calls, got)
+	}
+	state := manager.getConversationState("oc_repeat_fail_chat")
+	foundGuidance := false
+	for _, msg := range state.History {
+		content, _ := msg["content"].(string)
+		if strings.Contains(content, "lark-cli unknown --help") && strings.Contains(content, "不要原样重复") {
+			foundGuidance = true
+			break
+		}
+	}
+	if !foundGuidance {
+		t.Fatalf("expected tool result guidance to run help before stopping, history=%#v", state.History)
+	}
+}
+
+func TestRemovedConversationPreferenceCommandsAreNotHandled(t *testing.T) {
+	manager := NewManager(ManagerOptions{})
+	for _, command := range []string{"/think off", "/lang en", "/at off", "/skills", "/whoami"} {
+		if reply, handled := manager.handleConversationCommand(context.Background(), "oc_removed_commands", "http://127.0.0.1:8095/v1/chat/completions", "kmodel", command, LogMeta{}); handled {
+			t.Fatalf("%s should not be handled, got reply %q", command, reply)
+		}
+	}
+}
+
+func TestHandleEventMergesBurstMessagesPerConversation(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	oldDiscover := discoverSkillsForPrompt
+	oldCallLLM := callLLMForConversation
+	t.Cleanup(func() {
+		discoverSkillsForPrompt = oldDiscover
+		callLLMForConversation = oldCallLLM
+	})
+	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
+		return []SkillStatus{{Name: "lark-im", Found: true}}, nil
+	}
+	var calls int
+	callLLMForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool, tools []map[string]any) (*llmResponse, error) {
+		calls++
+		last := messages[len(messages)-1]["content"].(string)
+		if !strings.Contains(last, "第一句") || !strings.Contains(last, "第二句") {
+			t.Fatalf("merged prompt missing burst messages: %q", last)
+		}
+		var resp llmResponse
+		resp.Choices = append(resp.Choices, struct {
+			Message struct {
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls"`
+			} `json:"message"`
+		}{})
+		resp.Choices[0].Message.Content = "已合并处理。"
+		return &resp, nil
+	}
+
+	manager := NewManager(ManagerOptions{
+		ProxyURL: func() string { return "http://127.0.0.1:8095/v1/chat/completions" },
+	})
+	manager.SetConfig(Config{Model: "kmodel", MaxToolRounds: 5})
+	go manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_burst_chat",
+		ChatType:    "p2p",
+		Content:     "第一句",
+		CreateTime:  "1",
+		EventID:     "evt_burst_1",
+		MessageID:   "om_burst_1",
+		SenderID:    "ou_test_user",
+		MessageType: "text",
+	})
+	time.Sleep(100 * time.Millisecond)
+	manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_burst_chat",
+		ChatType:    "p2p",
+		Content:     "第二句",
+		CreateTime:  "2",
+		EventID:     "evt_burst_2",
+		MessageID:   "om_burst_2",
+		SenderID:    "ou_test_user",
+		MessageType: "text",
+	})
+
+	got := string(mustReadFileContainingEventually(t, replyLog, "已合并处理。"))
+	if calls != 1 {
+		t.Fatalf("expected one merged LLM call, got %d; log=%s", calls, got)
+	}
+	if !strings.Contains(got, "--message-id om_burst_2") {
+		t.Fatalf("merged reply should target the latest message, got: %s", got)
+	}
+}
+
+func TestHandleStopCancelsRunningConversation(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	oldDiscover := discoverSkillsForPrompt
+	oldCallLLM := callLLMForConversation
+	t.Cleanup(func() {
+		discoverSkillsForPrompt = oldDiscover
+		callLLMForConversation = oldCallLLM
+	})
+	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
+		return []SkillStatus{{Name: "lark-im", Found: true}}, nil
+	}
+	callLLMForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool, tools []map[string]any) (*llmResponse, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	manager := NewManager(ManagerOptions{
+		ProxyURL: func() string { return "http://127.0.0.1:8095/v1/chat/completions" },
+	})
+	manager.SetConfig(Config{Model: "kmodel", MaxToolRounds: 5})
+	go manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_stop_chat",
+		ChatType:    "p2p",
+		Content:     "跑一个长任务",
+		CreateTime:  "1",
+		EventID:     "evt_stop_1",
+		MessageID:   "om_stop_1",
+		SenderID:    "ou_test_user",
+		MessageType: "text",
+	})
+	time.Sleep(conversationDebounceDelay + 150*time.Millisecond)
+	manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_stop_chat",
+		ChatType:    "p2p",
+		Content:     "/stop",
+		CreateTime:  "2",
+		EventID:     "evt_stop_2",
+		MessageID:   "om_stop_2",
+		SenderID:    "ou_test_user",
+		MessageType: "text",
+	})
+
+	got := string(mustReadFileContainingEventually(t, replyLog, "已请求停止当前 Feishu Bridge 任务。"))
+	if !strings.Contains(got, "--message-id om_stop_2") {
+		t.Fatalf("/stop reply should target stop command message, got: %s", got)
+	}
+	_ = mustReadFileContainingEventually(t, replyLog, "当前任务已停止。")
+}
+
+func TestHandleEventInjectsQuotedMessage(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	oldDiscover := discoverSkillsForPrompt
+	oldCallLLM := callLLMForConversation
+	t.Cleanup(func() {
+		discoverSkillsForPrompt = oldDiscover
+		callLLMForConversation = oldCallLLM
+	})
+	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
+		return []SkillStatus{{Name: "lark-im", Found: true}}, nil
+	}
+	callLLMForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool, tools []map[string]any) (*llmResponse, error) {
+		last := messages[len(messages)-1]["content"].(string)
+		if !strings.Contains(last, "<quoted_message id=\"om_quoted\"") || !strings.Contains(last, "这是一条被引用的消息") {
+			t.Fatalf("quoted message was not injected: %q", last)
+		}
+		var resp llmResponse
+		resp.Choices = append(resp.Choices, struct {
+			Message struct {
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls"`
+			} `json:"message"`
+		}{})
+		resp.Choices[0].Message.Content = "已读取引用。"
+		return &resp, nil
+	}
+
+	manager := NewManager(ManagerOptions{
+		ProxyURL: func() string { return "http://127.0.0.1:8095/v1/chat/completions" },
+	})
+	manager.SetConfig(Config{Model: "kmodel", MaxToolRounds: 5})
+	manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:           "oc_quote_chat",
+		ChatType:         "p2p",
+		Content:          "总结这条",
+		CreateTime:       "1",
+		EventID:          "evt_quote_1",
+		MessageID:        "om_quote_1",
+		ReplyToMessageID: "om_quoted",
+		SenderID:         "ou_test_user",
+		MessageType:      "text",
+	})
+
+	_ = mustReadFileContainingEventually(t, replyLog, "已读取引用。")
+}
+
+func TestCardWriterFallsBackToLegacyWhenCardKitCreateFails(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	t.Setenv("FEISHU_FAIL_CARDKIT_CREATE", "1")
+
+	manager := NewManager(ManagerOptions{})
+	card := newCardWriter(manager, "om_cardkit_root", "kmodel", LogMeta{MessageID: "om_cardkit_root"})
+	card.SetReply("CardKit 不可用时走 legacy 卡片。")
+
+	got := string(mustReadFileContainingEventually(t, replyLog, "--msg-type interactive"))
+	if !strings.Contains(got, "--message-id om_cardkit_root") {
+		t.Fatalf("legacy card reply should target root message, got: %s", got)
+	}
+	if strings.Contains(got, "/open-apis/cardkit/v1/cards//elements/") {
+		t.Fatalf("should not stream update an empty CardKit entity id after create failure, got: %s", got)
+	}
+	if card.IsBroken() {
+		t.Fatal("CardKit create failure should degrade to legacy card, not mark writer broken")
+	}
+}
+
+func TestShouldIgnoreGroupMessageTreatsAnyMentionAsTrigger(t *testing.T) {
+	manager := NewManager(ManagerOptions{})
+	manager.SetConfig(Config{Model: "kmodel", GroupOnlyAtBot: true})
+	manager.mu.Lock()
+	manager.status.Auth.UserOpenID = "ou_logged_in_user_not_bot"
+	manager.mu.Unlock()
+
+	if manager.shouldIgnoreGroupMessage(incomingEvent{
+		ChatID:         "oc_group",
+		ChatType:       "group",
+		MentionOpenIDs: []string{"ou_actual_bot"},
+	}) {
+		t.Fatal("group mention should trigger even when auth user open_id differs from mentioned bot id")
+	}
+	if !manager.shouldIgnoreGroupMessage(incomingEvent{
+		ChatID:   "oc_group",
+		ChatType: "group",
+	}) {
+		t.Fatal("unmentioned group message should be ignored by default")
+	}
+}
+
 func TestFakeLarkCLIExecutesThroughCommandEnv(t *testing.T) {
 	replyLog := installFakeLarkCLI(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -166,6 +439,10 @@ if "%1"=="im" goto im
 if "%1"=="drive" goto drive
 goto unexpected
 :im
+if "%2"=="messages" if "%3"=="get" (
+  echo {"content":"这是一条被引用的消息"}
+  exit /b 0
+)
 echo {"reaction_id":"re_typing"}
 exit /b 0
 :drive
@@ -201,6 +478,31 @@ if [ "$1" = "im" ] && [ "$2" = "reactions" ] && [ "$3" = "delete" ]; then
 fi
 if [ "$1" = "im" ] && [ "$2" = "+messages-reply" ]; then
   printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  printf '{"message_id":"om_fake_reply_%s"}\n' "$(date +%s)"
+  exit 0
+fi
+if [ "$1" = "im" ] && [ "$2" = "messages" ] && [ "$3" = "get" ]; then
+  printf '{"content":"这是一条被引用的消息"}\n'
+  exit 0
+fi
+# CardKit API: create card entity
+if [ "$1" = "api" ] && [ "$2" = "POST" ] && [ "$3" = "/open-apis/cardkit/v1/cards" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  if [ "$FEISHU_FAIL_CARDKIT_CREATE" = "1" ]; then
+    printf 'cardkit create denied\n' >&2
+    exit 1
+  fi
+  printf '{"card_id":"card_fake_%s"}\n' "$(date +%s)"
+  exit 0
+fi
+# CardKit API: stream update element content
+if [ "$1" = "api" ] && [ "$2" = "PUT" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  exit 0
+fi
+# CardKit API: PATCH im message
+if [ "$1" = "api" ] && [ "$2" = "PATCH" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
   exit 0
 fi
 if [ "$1" = "drive" ]; then
@@ -228,7 +530,7 @@ exit 1
 
 func mustReadFileEventually(t *testing.T, path string) []byte {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		data, err := os.ReadFile(path)
 		if err == nil {
@@ -243,7 +545,7 @@ func mustReadFileEventually(t *testing.T, path string) []byte {
 
 func mustReadFileContainingEventually(t *testing.T, path string, needle string) []byte {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	var last []byte
 	var lastErr error
 	for {

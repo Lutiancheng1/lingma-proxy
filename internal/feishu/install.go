@@ -435,9 +435,15 @@ func installSkills(ctx context.Context, onLine func(string)) error {
 }
 
 func skillsInstallCommands() [][]string {
+	// Use the official well-known endpoint from
+	// https://open.feishu.cn/document/no_class/mcp-archive/feishu-cli-installation-guide.md
+	// so we install whatever the manifest currently lists (26 skills today,
+	// growing). The legacy `larksuite/cli` alias stays as a fallback for older
+	// skills CLIs that don't accept a URL source.
 	return [][]string{
-		{"npx", "-y", "skills@1.5.6", "add", "larksuite/cli", "-y", "-g"},
-		{"npx", "-y", "skills@1.5.5", "add", "larksuite/cli", "-y", "-g"},
+		{"npx", "-y", "skills@1.5.6", "add", "https://open.feishu.cn", "--skill", "-y", "-g"},
+		{"npx", "-y", "skills@1.5.5", "add", "https://open.feishu.cn", "--skill", "-y", "-g"},
+		{"npx", "-y", "skills", "add", "https://open.feishu.cn", "--skill", "-y", "-g"},
 		{"npx", "-y", "skills", "add", "larksuite/cli", "-y", "-g"},
 	}
 }

@@ -159,7 +159,7 @@ jobs:
       - name: Build app
         run: |
           cd desktop
-          wails build -platform darwin/arm64 -clean
+          wails build -platform darwin/arm64 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
 
       - name: Package app
         run: |
@@ -217,7 +217,7 @@ jobs:
         shell: pwsh
         run: |
           Push-Location desktop
-          wails build -platform windows/amd64 -clean
+          wails build -platform windows/amd64 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
           Pop-Location
 
       - name: Package app
@@ -278,7 +278,7 @@ jobs:
       - name: Build app
         run: |
           cd desktop
-          wails build -platform linux/${{ matrix.arch }} -tags webkit2_41 -clean
+          wails build -platform linux/${{ matrix.arch }} -tags webkit2_41 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
           test -x build/bin/LingmaProxy
 
       - name: Package app

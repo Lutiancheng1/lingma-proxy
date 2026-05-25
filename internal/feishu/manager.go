@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	goruntime "runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,11 +18,15 @@ const (
 	replyWindowTTL                   = 30 * time.Minute
 	replyWindowCleanupInterval       = 5 * time.Minute
 	persistedConversationRecentLimit = 8
+	conversationDebounceDelay        = 600 * time.Millisecond
+	autoCompactTokenThreshold        = 60000
 )
 
 var (
-	discoverSkillsForPrompt = discoverSkills
-	callLLMForConversation  = callLLM
+	discoverSkillsForPrompt      = discoverSkills
+	callLLMForConversation       = callLLM
+	callLLMStreamForConversation = callLLMStream
+	callLLMPlainStreamForFinal   = callLLMPlainStream
 )
 
 type ManagerOptions struct {
@@ -37,14 +43,67 @@ type LogMeta struct {
 }
 
 type conversationState struct {
-	History     []map[string]any
-	Summary     string
-	Summarizing bool
+	History          []map[string]any
+	CompactBoundary  int // index into History; history[:CompactBoundary] is folded into Summary
+	Summary          string
+	Summarizing      bool
+	ModelOverride    string
+	Language         string // "" | "zh" | "en"
+	ShowThinking     *bool  // nil => default true
+	PromptTokens     int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
+	Turns            int
+	UsageByModel     map[string]*conversationUsage
 }
 
+type conversationUsage struct {
+	Prompt     int
+	Output     int
+	CacheRead  int
+	CacheWrite int
+	Calls      int
+}
+
+type conversationRunState struct {
+	Queue      []incomingEvent
+	Processing bool
+	Preempted  bool
+	Cancel     context.CancelCauseFunc
+}
+
+// Sentinel cancel causes — distinguish between user /stop, automatic preempt
+// by a newer message, and other reasons. Used with context.WithCancelCause so
+// callers can branch on context.Cause(ctx) instead of guessing.
+var (
+	errCancelStopped   = errors.New("feishu: stopped by user")
+	errCancelPreempted = errors.New("feishu: preempted by new message")
+)
+
 type ConversationSnapshot struct {
-	History []map[string]any `json:"history,omitempty"`
-	Summary string           `json:"summary,omitempty"`
+	History          []map[string]any              `json:"history,omitempty"`
+	CompactBoundary  int                           `json:"compact_boundary,omitempty"`
+	Summary          string                        `json:"summary,omitempty"`
+	ModelOverride    string                        `json:"model_override,omitempty"`
+	Language         string                        `json:"language,omitempty"`
+	ShowThinking     *bool                         `json:"show_thinking,omitempty"`
+	PromptTokens     int                           `json:"prompt_tokens,omitempty"`
+	OutputTokens     int                           `json:"output_tokens,omitempty"`
+	CacheReadTokens  int                           `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int                           `json:"cache_write_tokens,omitempty"`
+	Turns            int                           `json:"turns,omitempty"`
+	UsageByModel     map[string]*conversationUsage `json:"usage_by_model,omitempty"`
+}
+
+func (u conversationUsage) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Prompt     int `json:"prompt"`
+		Output     int `json:"output"`
+		CacheRead  int `json:"cache_read"`
+		CacheWrite int `json:"cache_write"`
+		Calls      int `json:"calls"`
+	}{u.Prompt, u.Output, u.CacheRead, u.CacheWrite, u.Calls})
 }
 
 type Manager struct {
@@ -61,6 +120,13 @@ type Manager struct {
 	loginCancel context.CancelFunc
 
 	conversations map[string]conversationState
+	runs          map[string]*conversationRunState
+	mcp           *MCPRuntime
+
+	// refreshGuard ensures only one refreshStatus runs at a time. The desktop
+	// polls every ~2.5s; without serialization, a slow `npx skills ls` causes
+	// queued probes to pile up and saturate npm's cache lock.
+	refreshGuard sync.Mutex
 }
 
 func NewManager(opts ManagerOptions) *Manager {
@@ -69,11 +135,13 @@ func NewManager(opts ManagerOptions) *Manager {
 		status: Status{
 			Platform:       goruntime.GOOS,
 			Arch:           goruntime.GOARCH,
-			RequiredSkills: append([]string(nil), requiredSkillNames...),
+			RequiredSkills: append([]string(nil), fallbackRequiredSkillNames...),
 			CurrentModel:   DefaultModel,
 		},
 		opts:          opts,
 		conversations: make(map[string]conversationState),
+		runs:          make(map[string]*conversationRunState),
+		mcp:           NewMCPRuntime(),
 	}
 }
 
@@ -97,20 +165,42 @@ func (m *Manager) Status() Status {
 }
 
 func (m *Manager) Probe(ctx context.Context) Status {
-	m.refreshStatus(ctx)
+	m.tryRefreshStatus(ctx)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.status
 }
 
+// tryRefreshStatus runs refreshStatus only if no other refresh is in flight.
+// Used by the desktop's ~2.5s status poll. Without this guard, a slow
+// `npx skills ls` (cold npm cache) plus repeat polls causes processes to
+// pile up and saturate npm's cache lock.
+func (m *Manager) tryRefreshStatus(ctx context.Context) {
+	if !m.refreshGuard.TryLock() {
+		return
+	}
+	defer m.refreshGuard.Unlock()
+	m.doRefreshStatus(ctx)
+}
+
+// refreshStatus blocks until any in-flight refresh finishes, then probes.
+// Used by install/login flows where the caller needs the status to reflect
+// the post-action reality before clearing InstallRunning/LoginRunning.
 func (m *Manager) refreshStatus(ctx context.Context) {
+	m.refreshGuard.Lock()
+	defer m.refreshGuard.Unlock()
+	m.doRefreshStatus(ctx)
+}
+
+func (m *Manager) doRefreshStatus(ctx context.Context) {
 	node, npm, npx := detectNodeAndNPM()
 	cli := detectBinary("lark-cli", "--version")
 	configStatus := readCLIConfigStatus()
 	authStatus := AuthStatus{Message: "未授权"}
-	skills := []SkillStatus{}
+	var skills []SkillStatus
+	skillsProbeErr := errors.New("lark-cli not found")
 	if cli.Found {
-		skills, _ = discoverSkills(ctx)
+		skills, skillsProbeErr = discoverSkills(ctx)
 		authStatus = readAuthStatus(ctx)
 	} else {
 		authStatus.Message = "lark-cli 未安装，暂不检测授权状态"
@@ -123,8 +213,21 @@ func (m *Manager) refreshStatus(ctx context.Context) {
 	m.status.NPM = npm
 	m.status.NPX = npx
 	m.status.CLI = cli
-	m.status.Skills = skills
-	m.status.SkillsReady = skillsReady(skills)
+	if skillsProbeErr == nil {
+		m.status.Skills = skills
+		m.status.SkillsReady = skillsReady(skills)
+		if len(skills) > 0 {
+			names := make([]string, 0, len(skills))
+			for _, s := range skills {
+				names = append(names, s.Name)
+			}
+			m.status.RequiredSkills = names
+		}
+	} else if !cli.Found {
+		m.status.Skills = nil
+		m.status.SkillsReady = false
+	}
+	m.status.MCPServers = m.mcp.Sync(ctx, m.cfg)
 	m.status.Config = configStatus
 	m.status.Auth = authStatus
 	if authStatus.Authorized && !m.status.LoginRunning {
@@ -200,6 +303,53 @@ func (m *Manager) InstallCLI(ctx context.Context) error {
 		return err
 	}
 	m.logf("info", "飞书 CLI 安装完成")
+	return nil
+}
+
+// ReinstallSkills re-runs only the skills installation step, without touching
+// Node.js or @larksuite/cli. Used by the "重新安装 Skills" UI affordance when
+// the discovery step reports a gap (e.g. a single skill missing because the
+// initial install raced or the upstream manifest grew). Reuses the same status
+// machinery as InstallCLI so the progress UI stays consistent.
+func (m *Manager) ReinstallSkills(ctx context.Context) error {
+	m.mu.Lock()
+	m.status.InstallRunning = true
+	m.status.LastError = ""
+	m.status.LastOutput = "重新安装飞书 Skills..."
+	status := m.status
+	m.mu.Unlock()
+	m.emit(status)
+
+	err := installSkills(ctx, func(line string) {
+		line = formatOutputLine(line)
+		if line == "" {
+			return
+		}
+		m.mu.Lock()
+		m.status.LastOutput = line
+		status := m.status
+		m.mu.Unlock()
+		m.emit(status)
+		if shouldLogCLIProgress(line) {
+			m.logf("info", "飞书 Skills 安装进度："+line)
+		}
+	})
+	m.refreshStatus(ctx)
+
+	m.mu.Lock()
+	m.status.InstallRunning = false
+	if err != nil {
+		m.status.LastError = "Skills 重新安装失败：请查看日志或重试。"
+	}
+	status = m.status
+	m.mu.Unlock()
+	m.emit(status)
+
+	if err != nil {
+		m.logf("error", "飞书 Skills 重新安装失败："+err.Error())
+		return err
+	}
+	m.logf("info", "飞书 Skills 重新安装完成")
 	return nil
 }
 
@@ -417,7 +567,11 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("lark-cli 未安装")
 	}
 	if !m.status.SkillsReady {
+		missing := missingSkillNames(m.status.Skills, 8)
 		m.mu.Unlock()
+		if len(missing) > 0 {
+			return fmt.Errorf("必需的 lark-* skills 未安装完整：缺少 %s", strings.Join(missing, ", "))
+		}
 		return fmt.Errorf("必需的 lark-* skills 未安装完整")
 	}
 	if !m.status.Config.Configured {
@@ -431,6 +585,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	m.cancelFunc = cancel
 	m.status.LastError = ""
+	m.status.MCPServers = m.mcp.Sync(runCtx, m.cfg)
 	status := m.status
 	m.mu.Unlock()
 	m.emit(status)
@@ -467,8 +622,10 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	go m.readEvents(runCtx, stdout)
 	go m.readEventStderr(runCtx, stderr)
+	go m.runMCPHealthChecks(runCtx)
 	go func() {
 		err := cmd.Wait()
+		m.mcp.Stop()
 		m.mu.Lock()
 		m.cancelFunc = nil
 		m.stdin = nil
@@ -501,19 +658,42 @@ func (m *Manager) Stop() error {
 	if cancel != nil {
 		cancel()
 	}
+	m.mcp.Stop()
 	m.emit(status)
 	return nil
 }
 
+func (m *Manager) runMCPHealthChecks(ctx context.Context) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cfg := m.Config()
+			statuses := m.mcp.Sync(ctx, cfg)
+			m.mu.Lock()
+			m.status.MCPServers = statuses
+			status := m.status
+			m.mu.Unlock()
+			m.emit(status)
+		}
+	}
+}
+
 type incomingEvent struct {
-	ChatID      string `json:"chat_id"`
-	ChatType    string `json:"chat_type"`
-	Content     string `json:"content"`
-	CreateTime  string `json:"create_time"`
-	EventID     string `json:"event_id"`
-	MessageID   string `json:"message_id"`
-	SenderID    string `json:"sender_id"`
-	MessageType string `json:"message_type"`
+	ChatID           string   `json:"chat_id"`
+	ChatType         string   `json:"chat_type"`
+	Content          string   `json:"content"`
+	CreateTime       string   `json:"create_time"`
+	EventID          string   `json:"event_id"`
+	MessageID        string   `json:"message_id"`
+	SenderID         string   `json:"sender_id"`
+	MessageType      string   `json:"message_type"`
+	ReplyToMessageID string   `json:"reply_to_message_id"`
+	MentionOpenIDs   []string `json:"-"`
+	MentionUserIDs   []string `json:"-"`
 }
 
 func (m *Manager) readEvents(ctx context.Context, stdout io.ReadCloser) {
@@ -528,6 +708,14 @@ func (m *Manager) readEvents(ctx context.Context, stdout io.ReadCloser) {
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			continue
 		}
+		event.ReplyToMessageID = firstNonEmptyString(
+			event.ReplyToMessageID,
+			firstJSONStringField([]byte(line), "reply_to_message_id"),
+			firstJSONStringField([]byte(line), "parent_message_id"),
+			firstJSONStringField([]byte(line), "root_message_id"),
+			firstJSONStringField([]byte(line), "reply_message_id"),
+		)
+		event.MentionOpenIDs, event.MentionUserIDs = extractMentionIDs([]byte(line))
 		go m.handleEvent(ctx, event)
 	}
 }
@@ -584,6 +772,7 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 	if _, loaded := replyWindow.LoadOrStore(dedupeKey, time.Now()); loaded {
 		return
 	}
+	conversationKey := conversationKeyForEvent(event)
 	logMeta := LogMeta{
 		SessionID: dedupeKey,
 		ChatID:    strings.TrimSpace(event.ChatID),
@@ -594,6 +783,173 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 		valueOrFallback(strings.TrimSpace(event.MessageType), "unknown"),
 		summarizeText(event.Content, 120),
 	), logMeta)
+	if m.shouldIgnoreGroupMessage(event) {
+		m.logf("info", "Feishu bridge 群聊消息未 @机器人，忽略", logMeta)
+		return
+	}
+	if m.handleImmediateConversationCommand(ctx, conversationKey, event, logMeta) {
+		return
+	}
+	m.enqueueConversationEvent(ctx, conversationKey, event, logMeta)
+}
+
+func (m *Manager) handleImmediateConversationCommand(ctx context.Context, conversationKey string, event incomingEvent, meta LogMeta) bool {
+	command := strings.ToLower(strings.TrimSpace(normalizeConversationText(event.Content)))
+	if command != "/stop" {
+		return false
+	}
+	interrupted := m.stopConversationRun(conversationKey)
+	reply := "当前没有正在处理的 Feishu Bridge 任务。"
+	if interrupted {
+		reply = "已请求停止当前 Feishu Bridge 任务。"
+	}
+	if err := m.replyToMessage(ctx, event.MessageID, reply); err != nil {
+		m.logf("warn", "Feishu bridge /stop 回复失败："+err.Error(), meta)
+	}
+	m.logf("info", fmt.Sprintf("Feishu bridge 会话命令: /stop interrupted=%t", interrupted), meta)
+	return true
+}
+
+func (m *Manager) enqueueConversationEvent(ctx context.Context, conversationKey string, event incomingEvent, meta LogMeta) {
+	if strings.TrimSpace(conversationKey) == "" {
+		m.logf("warn", "Feishu bridge 收到消息，但无法解析会话 ID", meta)
+		return
+	}
+	m.mu.Lock()
+	run := m.runs[conversationKey]
+	if run == nil {
+		run = &conversationRunState{}
+		m.runs[conversationKey] = run
+	}
+	run.Queue = append(run.Queue, event)
+	queueSize := len(run.Queue)
+	if run.Processing {
+		cancel := run.Cancel
+		if cancel != nil {
+			run.Preempted = true
+			run.Cancel = nil
+		}
+		m.mu.Unlock()
+		if cancel != nil {
+			cancel(errCancelPreempted)
+			m.logf("info", fmt.Sprintf("Feishu bridge 抢占当前任务，队列将合并处理: queue=%d", queueSize), meta)
+		} else {
+			m.logf("info", fmt.Sprintf("Feishu bridge 消息已排队: queue=%d", queueSize), meta)
+		}
+		return
+	}
+	run.Processing = true
+	m.mu.Unlock()
+	m.logf("info", "Feishu bridge 会话调度已启动", meta)
+	m.processConversationQueue(ctx, conversationKey)
+}
+
+func (m *Manager) processConversationQueue(parent context.Context, conversationKey string) {
+	for {
+		timer := time.NewTimer(conversationDebounceDelay)
+		select {
+		case <-parent.Done():
+			timer.Stop()
+			m.clearConversationRun(conversationKey)
+			return
+		case <-timer.C:
+		}
+
+		m.mu.Lock()
+		run := m.runs[conversationKey]
+		if run == nil || len(run.Queue) == 0 {
+			if run != nil {
+				run.Processing = false
+				run.Cancel = nil
+			}
+			m.mu.Unlock()
+			return
+		}
+		batch := append([]incomingEvent(nil), run.Queue...)
+		run.Queue = nil
+		runCtx, cancel := context.WithCancelCause(parent)
+		run.Cancel = cancel
+		m.mu.Unlock()
+
+		m.processConversationBatch(runCtx, conversationKey, batch)
+
+		cancel(nil)
+		m.mu.Lock()
+		run = m.runs[conversationKey]
+		if run == nil {
+			m.mu.Unlock()
+			return
+		}
+		run.Cancel = nil
+		run.Preempted = false
+		if len(run.Queue) == 0 {
+			run.Processing = false
+			m.mu.Unlock()
+			return
+		}
+		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) clearConversationRun(conversationKey string) {
+	m.mu.Lock()
+	delete(m.runs, conversationKey)
+	m.mu.Unlock()
+}
+
+func (m *Manager) wasConversationPreempted(conversationKey string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	run := m.runs[conversationKey]
+	return run != nil && run.Preempted
+}
+
+// cancelOutcome decides how to surface a context cancellation: a manual /stop
+// becomes "stopped"; a preemption by the next user message becomes "preempted"
+// so the user sees that we're already working on the new request. Inspects
+// context.Cause(ctx) first (richer signal), then falls back to the legacy
+// Preempted flag for any path that did not flow through cancel-with-cause.
+func (m *Manager) cancelOutcome(ctx context.Context, conversationKey string, baseLog string) (reply string, status string, label string, logMsg string) {
+	cause := context.Cause(ctx)
+	if errors.Is(cause, errCancelPreempted) || (cause == nil && m.wasConversationPreempted(conversationKey)) {
+		return "收到新的消息，已中止上一轮处理，正在处理最新内容。",
+			"preempted", "已被新消息抢占",
+			baseLog + "（被新消息抢占）"
+	}
+	return "当前任务已停止。", "stopped", "已停止", baseLog
+}
+
+func (m *Manager) stopConversationRun(conversationKey string) bool {
+	m.mu.Lock()
+	run := m.runs[conversationKey]
+	if run == nil {
+		m.mu.Unlock()
+		return false
+	}
+	cancel := run.Cancel
+	run.Queue = nil
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel(errCancelStopped)
+		return true
+	}
+	return run.Processing
+}
+
+func (m *Manager) processConversationBatch(ctx context.Context, conversationKey string, batch []incomingEvent) {
+	if len(batch) == 0 {
+		return
+	}
+	event := mergeConversationBatch(batch)
+	dedupeKey := strings.TrimSpace(event.EventID)
+	if dedupeKey == "" {
+		dedupeKey = event.MessageID + ":" + event.CreateTime
+	}
+	logMeta := LogMeta{
+		SessionID: dedupeKey,
+		ChatID:    strings.TrimSpace(event.ChatID),
+		MessageID: strings.TrimSpace(event.MessageID),
+	}
 	proxyURL := ""
 	if m.opts.ProxyURL != nil {
 		proxyURL = strings.TrimSpace(m.opts.ProxyURL())
@@ -609,9 +965,11 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 	if model == "" {
 		model = DefaultModel
 	}
-	skills, _ := discoverSkillsForPrompt(context.Background())
-	conversationKey := conversationKeyForEvent(event)
-	normalizedContent := normalizeConversationText(event.Content)
+	if override := m.sessionModelOverride(conversationKey); override != "" {
+		model = override
+	}
+	skills, _ := discoverSkillsForPrompt(ctx)
+	normalizedContent := m.buildConversationInput(ctx, event)
 	commandReply, handled := m.handleConversationCommand(ctx, conversationKey, proxyURL, model, normalizedContent, logMeta)
 	if handled {
 		if err := m.replyToMessage(ctx, event.MessageID, commandReply); err != nil {
@@ -622,7 +980,15 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 		return
 	}
 
-	messages := []map[string]any{{"role": "system", "content": buildSystemPrompt(skills)}}
+	if cfg.MCPEnabled {
+		statuses := m.mcp.Sync(ctx, cfg)
+		m.mu.Lock()
+		m.status.MCPServers = statuses
+		m.mu.Unlock()
+	}
+	mcpTools := m.mcp.Tools()
+	toolDefs := toolDefinitionsWithMCP(mcpTools)
+	messages := []map[string]any{{"role": "system", "content": buildSystemPrompt(skills, cfg.BotIdentity, buildMCPPromptSection(mcpTools))}}
 	state := m.getConversationState(conversationKey)
 	if strings.TrimSpace(state.Summary) != "" {
 		messages = append(messages, map[string]any{
@@ -630,32 +996,80 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 			"content": "当前飞书会话压缩摘要：\n" + strings.TrimSpace(state.Summary),
 		})
 	}
-	rawHistory := cloneMessages(state.History)
+	rawHistory := cloneMessages(state.activeHistory())
 	messages = append(messages, cloneMessages(rawHistory)...)
 	userMessage := map[string]any{"role": "user", "content": normalizedContent}
 	messages = append(messages, userMessage)
 	rawHistory = append(rawHistory, cloneMessage(userMessage))
+	consecutiveToolFailures := 0
+	const maxConsecutiveToolFailures = 8
+	const maxRepeatedToolFailures = 4
 	forceToolUse := shouldForceToolUse(event.Content)
 	rounds := cfg.MaxToolRounds
 	if rounds <= 0 {
 		rounds = DefaultMaxToolRounds
 	}
+	if rounds > DefaultMaxToolRounds {
+		rounds = DefaultMaxToolRounds
+	}
 	m.logf("info", fmt.Sprintf("Feishu bridge 开始处理: model=%s forceToolUse=%t rounds=%d", model, forceToolUse, rounds), logMeta)
+	card := newCardWriter(m, event.MessageID, model, logMeta)
+	card.SetStatus("thinking", "正在思考")
 	replyText := ""
 	lastToolOutput := ""
 	toolCallsExecuted := false
+	failureFingerprints := map[string]int{}
 conversation:
 	for i := 0; i < rounds; i++ {
-		resp, err := callLLMForConversation(ctx, proxyURL, model, messages, forceToolUse)
+		if ctx.Err() != nil {
+			text, status, label, log := m.cancelOutcome(ctx, conversationKey, "Feishu bridge 处理已停止")
+			replyText = text
+			card.SetStatus(status, label)
+			m.logf("info", log, logMeta)
+			break
+		}
+		// Stream the assistant turn so the card replies typewriter-style.
+		// We accumulate text deltas locally and push the running prefix to
+		// the cardWriter, whose existing throttle keeps feishu patch_message
+		// QPS well within budget. If streaming fails before any data is
+		// received, fall back to the non-streaming path so a misbehaving
+		// proxy doesn't break replies entirely.
+		var streamingReply strings.Builder
+		streamHadText := false
+		resp, err := callLLMStreamForConversation(ctx, proxyURL, model, microcompactToolResults(messages), forceToolUse, toolDefs, streamingDelta{
+			onText: func(chunk string) {
+				if chunk == "" {
+					return
+				}
+				streamingReply.WriteString(chunk)
+				streamHadText = true
+				card.SetReply(streamingReply.String())
+			},
+		})
+		if err != nil && !streamHadText {
+			m.logf("info", "Feishu bridge 流式调用失败，回退非流式："+err.Error(), logMeta)
+			resp, err = callLLMForConversation(ctx, proxyURL, model, microcompactToolResults(messages), forceToolUse, toolDefs)
+		}
 		if err != nil {
+			if ctx.Err() != nil {
+				text, status, label, log := m.cancelOutcome(ctx, conversationKey, "Feishu bridge 处理已停止")
+				replyText = text
+				card.SetStatus(status, label)
+				m.logf("info", log, logMeta)
+				break
+			}
 			replyText = "抱歉，LLM 服务暂时不可用，请稍后再试。"
+			card.SetStatus("error", "调用代理失败")
+			card.AppendStep(cardStep{Kind: "error", Title: "调用代理失败", Body: err.Error()})
 			m.logf("warn", "Feishu bridge 调用代理失败："+err.Error(), logMeta)
 			break
 		}
 		if len(resp.Choices) == 0 {
 			replyText = "抱歉，我暂时没有拿到可用回复。"
+			card.SetStatus("error", "无可用回复")
 			break
 		}
+		m.accumulateUsage(conversationKey, model, usageFromResponse(resp))
 		msg := resp.Choices[0].Message
 		assistant := map[string]any{
 			"role":    "assistant",
@@ -668,14 +1082,38 @@ conversation:
 		rawHistory = append(rawHistory, cloneMessage(assistant))
 		if len(msg.ToolCalls) == 0 {
 			replyText = strings.TrimSpace(msg.Content)
+			card.SetStatus("done", "完成")
 			m.logf("info", "Feishu bridge 生成直接回复（无工具调用）", logMeta)
 			break
 		}
+		if thought := strings.TrimSpace(msg.Content); thought != "" {
+			card.AppendStep(cardStep{Kind: "thought", Title: "思考", Body: summarizeText(thought, 240)})
+		}
+		// We streamed the assistant's interim text into the reply slot; now
+		// that we know this turn ends in tool_calls, clear the reply area
+		// so the user doesn't see the thought text twice (once as a
+		// "思考" step, once as a partial reply).
+		card.SetReply("")
 		for _, tc := range msg.ToolCalls {
+			if ctx.Err() != nil {
+				text, status, label, log := m.cancelOutcome(ctx, conversationKey, "Feishu bridge 工具调用前已停止")
+				replyText = text
+				card.SetStatus(status, label)
+				m.logf("info", log, logMeta)
+				break conversation
+			}
 			var args map[string]any
 			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
-			m.logf("info", fmt.Sprintf("Feishu bridge tool call: %s %s", tc.Function.Name, compactJSON(args)), logMeta)
-			result := executeTool(tc.Function.Name, args)
+			argsSummary := compactJSON(args)
+			m.logf("info", fmt.Sprintf("Feishu bridge tool call: %s %s", tc.Function.Name, argsSummary), logMeta)
+			card.SetStatus("tool", "调用工具")
+			card.AppendStep(cardStep{
+				Kind:  "tool",
+				Title: tc.Function.Name,
+				Tool:  tc.Function.Name,
+				Body:  "参数：`" + summarizeText(argsSummary, 200) + "`",
+			})
+			result := executeToolContextWithRuntime(ctx, cfg, m.mcp, tc.Function.Name, args)
 			toolCallsExecuted = true
 			content := result.Output
 			if len(result.MissingScopes) > 0 {
@@ -685,10 +1123,20 @@ conversation:
 				if authErr != nil {
 					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已尝试为你发起授权，但这次没有成功。请到 Lingma Proxy 的 Feishu Bridge 设置页重新点击“登录授权”，完成后再让我继续。", scopeLabel)
 					content = replyText
+					card.UpdateLastStep(func(step *cardStep) {
+						step.Kind = "error"
+						step.Done = true
+						step.Body = "缺少权限：" + scopeLabel + "（自动授权失败）"
+					})
 					m.logf("warn", "Feishu bridge 自动发起 scope 授权失败："+authErr.Error(), logMeta)
 				} else {
 					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已经为你发起授权流程，请先在浏览器完成授权。如果 Lingma Proxy 已打开，请直接到 Feishu Bridge 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。%s", scopeLabel, loginHint(loginURL))
 					content = replyText
+					card.UpdateLastStep(func(step *cardStep) {
+						step.Kind = "error"
+						step.Done = true
+						step.Body = "需要授权 " + scopeLabel + "（已自动发起）"
+					})
 					m.logf("info", "Feishu bridge 检测到缺少权限，已自动发起授权："+scopeLabel, logMeta)
 				}
 				messages = append(messages, map[string]any{
@@ -701,48 +1149,142 @@ conversation:
 					"tool_call_id": tc.ID,
 					"content":      content,
 				})
+				card.SetStatus("error", "缺少权限")
 				break conversation
 			}
 			lastToolOutput = content
 			m.logf("info", fmt.Sprintf("Feishu bridge tool result: %s %s", tc.Function.Name, summarizeText(result.Output, 160)), logMeta)
-			messages = append(messages, map[string]any{
+			card.UpdateLastStep(func(step *cardStep) {
+				step.Done = true
+				step.Body = step.Body + "\n结果：" + summarizeText(result.Output, 1200)
+			})
+			toolMsg := map[string]any{
 				"role":         "tool",
 				"tool_call_id": tc.ID,
 				"content":      content,
-			})
-			rawHistory = append(rawHistory, map[string]any{
-				"role":         "tool",
-				"tool_call_id": tc.ID,
-				"content":      content,
-			})
+			}
+			if result.IsError {
+				toolMsg["is_error"] = true
+				consecutiveToolFailures++
+				fp := toolFailureFingerprint(tc.Function.Name, args, content)
+				failureFingerprints[fp]++
+				if failureFingerprints[fp] >= maxRepeatedToolFailures {
+					replyText = fmt.Sprintf("同一个工具调用连续失败 %d 次，已停止继续重试。失败工具：%s。最后一次错误：%s", failureFingerprints[fp], tc.Function.Name, summarizeText(content, 220))
+					card.SetStatus("error", "重复工具失败")
+					card.AppendStep(cardStep{Kind: "error", Title: "重复失败，已终止", Body: replyText})
+					m.logf("warn", "Feishu bridge 重复工具失败已终止", logMeta)
+					break conversation
+				}
+				if failureFingerprints[fp] >= 2 {
+					guidance := toolRetryGuidance(tc.Function.Name, args, failureFingerprints[fp])
+					if guidance != "" {
+						content = content + "\n\n" + guidance
+						toolMsg["content"] = content
+					}
+				}
+			} else {
+				consecutiveToolFailures = 0
+			}
+			messages = append(messages, toolMsg)
+			rawHistory = append(rawHistory, cloneMessage(toolMsg))
+			if consecutiveToolFailures >= maxConsecutiveToolFailures {
+				replyText = fmt.Sprintf("连续 %d 次工具调用失败，已停止以避免循环。最后一次错误：%s", consecutiveToolFailures, summarizeText(content, 200))
+				card.SetStatus("error", "工具连续失败")
+				card.AppendStep(cardStep{Kind: "error", Title: "已终止", Body: replyText})
+				m.logf("warn", "Feishu bridge 连续工具调用失败已终止", logMeta)
+				break conversation
+			}
 		}
 	}
 	if strings.TrimSpace(replyText) == "" && toolCallsExecuted {
-		replyText = m.synthesizeToolFinalReply(ctx, proxyURL, model, messages, lastToolOutput, logMeta)
+		card.SetStatus("thinking", "整合工具结果")
+		replyText = m.synthesizeToolFinalReply(ctx, proxyURL, model, messages, lastToolOutput, logMeta, card)
 	}
 	if strings.TrimSpace(replyText) == "" {
 		replyText = "抱歉，我执行了处理但没有拿到可用结果。请换个更具体的关键词或文档范围再试。"
+	}
+	var orphanIDs []string
+	messages, rawHistory, orphanIDs = sealOrphanToolCalls(messages, rawHistory, "[interrupted: tool call did not complete]")
+	if len(orphanIDs) > 0 {
+		m.logf("info", fmt.Sprintf("Feishu bridge 为未完成的工具调用补占位 tool_result: %s", strings.Join(orphanIDs, ",")), logMeta)
 	}
 	if !endsWithAssistantReply(rawHistory, replyText) {
 		rawHistory = append(rawHistory, map[string]any{"role": "assistant", "content": replyText})
 	}
 	m.storeConversation(conversationKey, rawHistory)
 	m.logf("info", "Feishu bridge 准备回复: "+summarizeText(replyText, 160), logMeta)
-	if err := m.replyToMessage(ctx, event.MessageID, replyText); err != nil {
-		m.logf("warn", "Feishu bridge 回复消息失败："+err.Error(), logMeta)
-	} else {
-		m.logf("info", "Feishu bridge 回复已发送: message="+trimmedID(event.MessageID), logMeta)
+	if card.IsBroken() {
+		replyCtx := ctx
+		if ctx.Err() != nil {
+			replyCtx = context.Background()
+		}
+		if err := m.replyToMessage(replyCtx, event.MessageID, replyText); err != nil {
+			m.logf("warn", "Feishu bridge 回复消息失败："+err.Error(), logMeta)
+		} else {
+			m.logf("info", "Feishu bridge 回复已发送: message="+trimmedID(event.MessageID), logMeta)
+		}
+		return
 	}
+	if card.Status() != "done" && card.Status() != "stopped" && card.Status() != "error" {
+		card.SetStatus("done", "完成")
+	}
+	card.Finalize(replyText, "")
+	m.logf("info", "Feishu bridge 卡片回复已完成: message="+trimmedID(event.MessageID), logMeta)
 }
 
-func (m *Manager) synthesizeToolFinalReply(ctx context.Context, proxyURL string, model string, messages []map[string]any, lastToolOutput string, meta LogMeta) string {
+func toolFailureFingerprint(toolName string, args map[string]any, output string) string {
+	argsJSON := compactJSON(args)
+	if len(argsJSON) > 600 {
+		argsJSON = argsJSON[:600]
+	}
+	return strings.TrimSpace(toolName) + "|" + argsJSON + "|" + summarizeText(output, 240)
+}
+
+func toolRetryGuidance(toolName string, args map[string]any, repeated int) string {
+	if strings.TrimSpace(toolName) != "lark_cli_exec" {
+		return fmt.Sprintf("[retry guidance] 同一工具调用已失败 %d 次。下一轮请先检查参数是否缺失，必要时换一个工具或缩小任务范围，不要原样重复。", repeated)
+	}
+	argv := stringListArg(args, "argv")
+	if len(argv) > 0 && strings.EqualFold(argv[0], "lark-cli") {
+		argv = argv[1:]
+	}
+	domain := ""
+	if len(argv) > 0 {
+		domain = strings.TrimSpace(argv[0])
+	}
+	helpCmd := "lark-cli --help"
+	if domain != "" {
+		helpCmd = "lark-cli " + domain + " --help"
+	}
+	return fmt.Sprintf("[retry guidance] 同一个 lark-cli 调用已失败 %d 次。不要原样重复。下一轮请先调用 lark_cli_exec 执行 `%s` 查看真实用法，再根据 help 输出重试。skill 快捷命令通常需要 + 前缀，例如 `im +chat-list`、`im +messages-search`、`calendar +agenda`、`docs +fetch`。", repeated, helpCmd)
+}
+
+func (m *Manager) synthesizeToolFinalReply(ctx context.Context, proxyURL string, model string, messages []map[string]any, lastToolOutput string, meta LogMeta, card *cardWriter) string {
 	m.logf("info", "Feishu bridge 工具轮次结束，尝试生成最终答复", meta)
 	finalMessages := cloneMessages(messages)
 	finalMessages = append(finalMessages, map[string]any{
 		"role":    "system",
 		"content": "工具调用阶段已经结束。请只基于上面的工具结果，用中文直接回答用户的问题；不要再要求用户自己执行命令；如果结果为空或不足，请明确说明没有查到，并给出下一步建议。",
 	})
-	resp, err := callLLMPlain(ctx, proxyURL, model, finalMessages)
+	var streamingReply strings.Builder
+	streamHadText := false
+	deltas := streamingDelta{
+		onText: func(chunk string) {
+			if chunk == "" {
+				return
+			}
+			streamingReply.WriteString(chunk)
+			streamHadText = true
+			if card != nil {
+				card.SetReply(streamingReply.String())
+			}
+		},
+	}
+	resp, err := callLLMPlainStreamForFinal(ctx, proxyURL, model, finalMessages, deltas)
+	if err != nil && !streamHadText {
+		m.logf("info", "Feishu bridge 最终答复流式失败，回退非流式："+err.Error(), meta)
+		resp, err = callLLMPlain(ctx, proxyURL, model, finalMessages)
+	}
 	if err != nil {
 		m.logf("warn", "Feishu bridge 最终答复生成失败："+err.Error(), meta)
 		return fallbackToolResultReply(lastToolOutput)
@@ -767,13 +1309,19 @@ func fallbackToolResultReply(output string) string {
 	return "我已经执行了查询，但模型没有生成最终总结。以下是最后一次工具结果摘要：\n\n" + truncatePreserveLines(output, 2800)
 }
 
-func (m *Manager) storeConversation(chatID string, history []map[string]any) {
+func (m *Manager) storeConversation(chatID string, activeTail []map[string]any) {
 	if chatID == "" {
 		return
 	}
 	m.mu.Lock()
 	state := m.conversations[chatID]
-	state.History = cloneMessages(history)
+	boundary := state.CompactBoundary
+	if boundary < 0 || boundary > len(state.History) {
+		boundary = len(state.History)
+	}
+	preserved := cloneMessages(state.History[:boundary])
+	state.History = append(preserved, cloneMessages(activeTail)...)
+	state.CompactBoundary = boundary
 	m.conversations[chatID] = state
 	m.mu.Unlock()
 	m.notifyConversationChanged()
@@ -791,9 +1339,30 @@ func (m *Manager) getConversationState(chatID string) conversationState {
 		return conversationState{}
 	}
 	return conversationState{
-		History: cloneMessages(state.History),
-		Summary: state.Summary,
+		History:         cloneMessages(state.History),
+		CompactBoundary: state.CompactBoundary,
+		Summary:         state.Summary,
+		ModelOverride:   state.ModelOverride,
+		Language:        state.Language,
+		ShowThinking:    state.ShowThinking,
+		PromptTokens:    state.PromptTokens,
+		OutputTokens:    state.OutputTokens,
+		Turns:           state.Turns,
 	}
+}
+
+// activeHistory returns the slice of state.History after the compact boundary
+// — the messages that should be sent to the LLM verbatim. Anything before the
+// boundary has been folded into Summary but kept in state.History so /undo,
+// /rewind, /resume can step back across compactions.
+func (s conversationState) activeHistory() []map[string]any {
+	if s.CompactBoundary <= 0 || s.CompactBoundary >= len(s.History) {
+		if s.CompactBoundary >= len(s.History) {
+			return nil
+		}
+		return s.History
+	}
+	return s.History[s.CompactBoundary:]
 }
 
 func cloneMessages(history []map[string]any) []map[string]any {
@@ -822,6 +1391,207 @@ func endsWithAssistantReply(messages []map[string]any, reply string) bool {
 	return role == "assistant" && strings.TrimSpace(content) == strings.TrimSpace(reply)
 }
 
+// microcompactToolResults returns a shallow-cloned message slice where the
+// content of older tool_result messages is truncated to a short stub. The most
+// recent N tool results are kept verbatim so the model still has full output to
+// reason over, while distant ones are replaced with a one-line summary of the
+// original — schema and tool_call_id are preserved so the API call still
+// validates. Mirrors the "microcompact" pass in free-code: cheap context
+// pressure relief without losing turn structure.
+func microcompactToolResults(messages []map[string]any) []map[string]any {
+	const keepRecent = 3
+	const stubLimit = 200
+	toolIdx := make([]int, 0, len(messages))
+	for i, msg := range messages {
+		role, _ := msg["role"].(string)
+		if role == "tool" {
+			toolIdx = append(toolIdx, i)
+		}
+	}
+	if len(toolIdx) <= keepRecent {
+		return messages
+	}
+	cutoff := toolIdx[len(toolIdx)-keepRecent]
+	out := make([]map[string]any, len(messages))
+	for i, msg := range messages {
+		if i < cutoff {
+			role, _ := msg["role"].(string)
+			if role == "tool" {
+				cloned := cloneMessage(msg)
+				if content, ok := cloned["content"].(string); ok && len(content) > stubLimit {
+					cloned["content"] = summarizeText(content, stubLimit) + "\n[已压缩，仅保留摘要]"
+				}
+				out[i] = cloned
+				continue
+			}
+		}
+		out[i] = msg
+	}
+	return out
+}
+
+// assistant.tool_calls and synthesises a placeholder tool_result for any
+// tool_call_id that has not been answered. Required after preempt/cancel/error
+// breaks, otherwise the next API call rejects the unpaired tool_use.
+func sealOrphanToolCalls(messages, rawHistory []map[string]any, placeholder string) ([]map[string]any, []map[string]any, []string) {
+	assistantIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		role, _ := messages[i]["role"].(string)
+		if role == "assistant" {
+			if _, ok := messages[i]["tool_calls"]; ok {
+				assistantIdx = i
+			}
+			break
+		}
+		if role == "tool" {
+			continue
+		}
+		break
+	}
+	if assistantIdx < 0 {
+		return messages, rawHistory, nil
+	}
+	calls := extractToolCallIDs(messages[assistantIdx])
+	if len(calls) == 0 {
+		return messages, rawHistory, nil
+	}
+	answered := make(map[string]struct{}, len(calls))
+	for i := assistantIdx + 1; i < len(messages); i++ {
+		role, _ := messages[i]["role"].(string)
+		if role != "tool" {
+			break
+		}
+		if id, _ := messages[i]["tool_call_id"].(string); id != "" {
+			answered[id] = struct{}{}
+		}
+	}
+	missing := make([]string, 0, len(calls))
+	for _, id := range calls {
+		if _, ok := answered[id]; ok {
+			continue
+		}
+		missing = append(missing, id)
+		entry := map[string]any{
+			"role":         "tool",
+			"tool_call_id": id,
+			"content":      placeholder,
+			"is_error":     true,
+		}
+		messages = append(messages, entry)
+		rawHistory = append(rawHistory, cloneMessage(entry))
+	}
+	return messages, rawHistory, missing
+}
+
+func extractToolCallIDs(message map[string]any) []string {
+	raw, ok := message["tool_calls"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []ToolCall:
+		ids := make([]string, 0, len(v))
+		for _, tc := range v {
+			if id := strings.TrimSpace(tc.ID); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	case []map[string]any:
+		ids := make([]string, 0, len(v))
+		for _, item := range v {
+			if id, _ := item["id"].(string); strings.TrimSpace(id) != "" {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	case []any:
+		ids := make([]string, 0, len(v))
+		for _, item := range v {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if id, _ := m["id"].(string); strings.TrimSpace(id) != "" {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	}
+	return nil
+}
+
+func mergeConversationBatch(batch []incomingEvent) incomingEvent {
+	if len(batch) == 0 {
+		return incomingEvent{}
+	}
+	if len(batch) == 1 {
+		return batch[0]
+	}
+	merged := batch[len(batch)-1]
+	parts := make([]string, 0, len(batch))
+	eventIDs := make([]string, 0, len(batch))
+	for _, item := range batch {
+		text := normalizeConversationText(item.Content)
+		if text != "" {
+			parts = append(parts, text)
+		}
+		if strings.TrimSpace(item.EventID) != "" {
+			eventIDs = append(eventIDs, strings.TrimSpace(item.EventID))
+		}
+	}
+	if len(parts) > 0 {
+		merged.Content = strings.Join(parts, "\n\n")
+	}
+	if len(eventIDs) > 0 {
+		merged.EventID = strings.Join(eventIDs, "+")
+	}
+	return merged
+}
+
+func (m *Manager) buildConversationInput(ctx context.Context, event incomingEvent) string {
+	text := normalizeConversationText(event.Content)
+	quoteID := strings.TrimSpace(event.ReplyToMessageID)
+	if quoteID == "" || quoteID == strings.TrimSpace(event.MessageID) {
+		return text
+	}
+	quote, err := m.fetchQuotedMessage(ctx, quoteID)
+	if err != nil {
+		m.logf("warn", "Feishu bridge 引用消息读取失败："+err.Error(), LogMeta{
+			ChatID:    event.ChatID,
+			MessageID: event.MessageID,
+		})
+		return text
+	}
+	quote = strings.TrimSpace(quote)
+	if quote == "" {
+		return text
+	}
+	return fmt.Sprintf("<quoted_message id=\"%s\">\n%s\n</quoted_message>\n\n%s", quoteID, quote, text)
+}
+
+func (m *Manager) fetchQuotedMessage(ctx context.Context, messageID string) (string, error) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return "", nil
+	}
+	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "messages", "get", "--as", "bot", "--message-id", messageID)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	text := firstNonEmptyString(
+		firstJSONStringField(output, "text"),
+		firstJSONStringField(output, "content"),
+		firstJSONStringField(output, "plain_text"),
+		firstJSONStringField(output, "markdown"),
+	)
+	if text != "" {
+		return text, nil
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 func normalizeConversationText(text string) string {
 	text = strings.TrimSpace(text)
 	text = strings.TrimPrefix(text, "- ")
@@ -842,17 +1612,37 @@ func conversationKeyForEvent(event incomingEvent) string {
 }
 
 func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, proxyURL string, model string, text string, meta LogMeta) (string, bool) {
-	command := strings.ToLower(strings.TrimSpace(text))
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
+		return "", false
+	}
+	parts := strings.Fields(trimmed)
+	command := strings.ToLower(parts[0])
+	args := parts[1:]
 	switch command {
 	case "/help":
 		m.logf("info", "Feishu bridge 会话命令: /help", meta)
-		return "可用会话命令：\n- /help：查看命令帮助\n- /compact：手动压缩当前会话上下文\n- /summary：查看当前会话摘要\n- /reset：清空当前飞书会话上下文\n\n默认可以直接自然语言使用我；只有在你想手动管理上下文时，再使用这些命令。", true
-	case "/reset":
+		return "可用会话命令（仅对当前会话生效）：\n" +
+			"- /help：查看命令帮助\n" +
+			"- /init：让我自我介绍当前能力（model、skills、群聊行为）\n" +
+			"- /status：查看本会话运行状态\n" +
+			"- /mcp：查看已启用 MCP server 与具体工具列表\n" +
+			"- /models：列出代理可用模型\n" +
+			"- /model <name>：切换本会话模型；/model 不带参数查看；/model default 恢复全局默认\n" +
+			"- /cost：查看本会话累计 tokens 估算\n" +
+			"- /retry：用最近一条用户消息重新跑一次（先自动 /undo）\n" +
+			"- /undo：撤回最近一轮（assistant + 关联 tool 消息）\n" +
+			"- /summary：查看本会话摘要\n" +
+			"- /compact：手动压缩本会话上下文\n" +
+			"- /reset、/clear、/new：清空本会话上下文\n" +
+			"- /stop：停止当前正在处理的任务\n\n" +
+			"默认可以直接自然语言使用我；只有在你想手动管理上下文时再使用这些命令。", true
+	case "/reset", "/clear", "/new":
 		m.mu.Lock()
 		delete(m.conversations, chatID)
 		m.mu.Unlock()
 		m.notifyConversationChanged()
-		m.logf("info", "Feishu bridge 会话命令: /reset", meta)
+		m.logf("info", "Feishu bridge 会话命令: "+command, meta)
 		return "当前飞书会话上下文已清空。接下来我会把后续消息当成一个新的任务重新开始。", true
 	case "/summary":
 		m.logf("info", "Feishu bridge 会话命令: /summary", meta)
@@ -874,9 +1664,470 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 			return "当前会话内容较少，暂时没有需要压缩的上下文。", true
 		}
 		return "当前飞书会话已压缩完成。后续我会基于这段摘要继续处理：\n" + summary, true
+	case "/status":
+		m.logf("info", "Feishu bridge 会话命令: /status", meta)
+		return m.conversationStatusText(chatID), true
+	case "/mcp":
+		m.logf("info", "Feishu bridge 会话命令: /mcp", meta)
+		return m.commandMCPText(ctx), true
+	case "/init":
+		m.logf("info", "Feishu bridge 会话命令: /init", meta)
+		return m.commandInitText(chatID, model), true
+	case "/cost":
+		m.logf("info", "Feishu bridge 会话命令: /cost", meta)
+		return m.commandCostText(chatID), true
+	case "/undo":
+		removed := m.undoLastTurn(chatID)
+		if removed == 0 {
+			return "本会话还没有可撤回的消息。", true
+		}
+		m.logf("info", fmt.Sprintf("Feishu bridge 会话命令: /undo removed=%d", removed), meta)
+		return fmt.Sprintf("已撤回最近一轮，共回退 %d 条消息。", removed), true
+	case "/retry":
+		lastUser := m.popLastUserForRetry(chatID)
+		if strings.TrimSpace(lastUser) == "" {
+			return "本会话没有可重试的用户消息。", true
+		}
+		m.logf("info", "Feishu bridge 会话命令: /retry", meta)
+		return "已撤回最近一轮。请把刚才那条消息再发一次（已为你保留原文）：\n\n```\n" + summarizeText(lastUser, 800) + "\n```", true
+	case "/models":
+		m.logf("info", "Feishu bridge 会话命令: /models", meta)
+		ids, err := listProxyModels(ctx, proxyURL, 32)
+		if err != nil {
+			return "拉取模型列表失败：" + err.Error(), true
+		}
+		if len(ids) == 0 {
+			return "代理目前没有返回可用模型。", true
+		}
+		current := m.resolveSessionModel(chatID, model)
+		lines := []string{"代理当前可用模型："}
+		for _, id := range ids {
+			marker := "- "
+			if id == current {
+				marker = "- ✅ "
+			}
+			lines = append(lines, marker+id)
+		}
+		lines = append(lines, "", "使用 `/model <名称>` 可以切换本会话的模型；`/model` 不带参数会显示当前会话使用的模型。")
+		return strings.Join(lines, "\n"), true
+	case "/model":
+		if len(args) == 0 {
+			current := m.resolveSessionModel(chatID, model)
+			global := strings.TrimSpace(m.Config().Model)
+			if global == "" {
+				global = DefaultModel
+			}
+			override := m.sessionModelOverride(chatID)
+			line := "本会话当前模型：`" + current + "`"
+			if override != "" {
+				line += "（会话覆盖）\n全局默认：`" + global + "`\n如要恢复使用全局默认，发送 `/model default`。"
+			} else {
+				line += "（来自全局默认）\n如要切换，请发送 `/model <名称>`。"
+			}
+			return line, true
+		}
+		target := strings.TrimSpace(args[0])
+		if target == "" {
+			return "用法：/model <名称>，或 /model default 恢复全局默认。", true
+		}
+		if strings.EqualFold(target, "default") || strings.EqualFold(target, "reset") {
+			m.setSessionModelOverride(chatID, "")
+			global := strings.TrimSpace(m.Config().Model)
+			if global == "" {
+				global = DefaultModel
+			}
+			m.logf("info", "Feishu bridge 会话命令: /model default", meta)
+			return "已恢复使用全局默认模型 `" + global + "`。", true
+		}
+		ids, err := listProxyModels(ctx, proxyURL, 64)
+		if err == nil && len(ids) > 0 {
+			matched := ""
+			for _, id := range ids {
+				if id == target {
+					matched = id
+					break
+				}
+			}
+			if matched == "" {
+				for _, id := range ids {
+					if strings.EqualFold(id, target) {
+						matched = id
+						break
+					}
+				}
+			}
+			if matched == "" {
+				return "代理可用模型里没有找到 `" + target + "`。可以先用 /models 查看完整列表。", true
+			}
+			target = matched
+		}
+		m.setSessionModelOverride(chatID, target)
+		m.logf("info", "Feishu bridge 会话命令: /model "+target, meta)
+		return "已将本会话模型切换为 `" + target + "`。当前更改仅对本会话生效；如要恢复使用全局默认，发送 `/model default`。", true
 	default:
 		return "", false
 	}
+}
+
+func (m *Manager) sessionModelOverride(chatID string) string {
+	if chatID == "" {
+		return ""
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	state, ok := m.conversations[chatID]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(state.ModelOverride)
+}
+
+func (m *Manager) setSessionModelOverride(chatID string, model string) {
+	if chatID == "" {
+		return
+	}
+	m.mu.Lock()
+	state := m.conversations[chatID]
+	state.ModelOverride = strings.TrimSpace(model)
+	m.conversations[chatID] = state
+	m.mu.Unlock()
+	m.notifyConversationChanged()
+}
+
+func (m *Manager) resolveSessionModel(chatID string, fallback string) string {
+	override := m.sessionModelOverride(chatID)
+	if override != "" {
+		return override
+	}
+	if strings.TrimSpace(fallback) != "" {
+		return fallback
+	}
+	cfg := m.Config()
+	if strings.TrimSpace(cfg.Model) != "" {
+		return cfg.Model
+	}
+	return DefaultModel
+}
+
+func (m *Manager) accumulateUsage(chatID, model string, usage callUsage) {
+	if chatID == "" {
+		return
+	}
+	m.mu.Lock()
+	state := m.conversations[chatID]
+	state.PromptTokens += usage.Prompt
+	state.OutputTokens += usage.Completion
+	state.CacheReadTokens += usage.CacheRead
+	state.CacheWriteTokens += usage.CacheWrite
+	state.Turns++
+	if state.UsageByModel == nil {
+		state.UsageByModel = map[string]*conversationUsage{}
+	}
+	key := strings.TrimSpace(model)
+	if key == "" {
+		key = "(unknown)"
+	}
+	bucket := state.UsageByModel[key]
+	if bucket == nil {
+		bucket = &conversationUsage{}
+		state.UsageByModel[key] = bucket
+	}
+	bucket.Prompt += usage.Prompt
+	bucket.Output += usage.Completion
+	bucket.CacheRead += usage.CacheRead
+	bucket.CacheWrite += usage.CacheWrite
+	bucket.Calls++
+	m.conversations[chatID] = state
+	m.mu.Unlock()
+}
+
+type callUsage struct {
+	Prompt     int
+	Completion int
+	CacheRead  int
+	CacheWrite int
+}
+
+func usageFromResponse(resp *llmResponse) callUsage {
+	if resp == nil {
+		return callUsage{}
+	}
+	cacheRead := resp.Usage.CacheReadInputTokens
+	if cacheRead == 0 {
+		cacheRead = resp.Usage.PromptTokensDetails.CachedTokens
+	}
+	return callUsage{
+		Prompt:     resp.Usage.PromptTokens,
+		Completion: resp.Usage.CompletionTokens,
+		CacheRead:  cacheRead,
+		CacheWrite: resp.Usage.CacheCreationTokens,
+	}
+}
+
+func (m *Manager) commandInitText(chatID string, fallbackModel string) string {
+	model := m.resolveSessionModel(chatID, fallbackModel)
+	cfg := m.Config()
+	groupRule := "群聊默认仅在 @我时响应"
+	if !cfg.GroupOnlyAtBot {
+		groupRule = "群聊会响应所有消息"
+	}
+	skills := m.skillSummaryLine()
+	return strings.Join([]string{
+		"嗨，我是 Lingma · 飞书 Bridge。我可以帮你在飞书内调用 Lingma 代理 + lark CLI 完成对话、文档、日程、知识库等操作。",
+		"",
+		"- 当前模型：`" + model + "`",
+		"- " + groupRule,
+		"- " + skills,
+		"- " + m.mcpSummaryLine(),
+		"",
+		"发送 /help 查看完整命令列表。",
+	}, "\n")
+}
+
+func (m *Manager) skillSummaryLine() string {
+	m.mu.RLock()
+	skills := m.status.Skills
+	ready := m.status.SkillsReady
+	m.mu.RUnlock()
+	total := len(skills)
+	if total == 0 {
+		return "Skills：未检测到（请先安装 lark skills）"
+	}
+	hits := 0
+	for _, s := range skills {
+		if s.Found {
+			hits++
+		}
+	}
+	state := "缺失"
+	if ready {
+		state = "就绪"
+	}
+	return fmt.Sprintf("Skills：%d/%d %s", hits, total, state)
+}
+
+func (m *Manager) commandMCPText(ctx context.Context) string {
+	cfg := m.Config()
+	statuses := m.mcp.Sync(ctx, cfg)
+	m.mu.Lock()
+	m.status.MCPServers = statuses
+	m.mu.Unlock()
+	if !cfg.MCPEnabled {
+		discovered := len(statuses)
+		if discovered == 0 {
+			return "MCP：未启用，且暂未扫描到本机 MCP 配置。可在 Lingma Proxy 设置页 → Feishu Bridge → 高级设置中扫描和启用。"
+		}
+		return fmt.Sprintf("MCP：未启用。已扫描到 %d 个本机 MCP server，可在 Lingma Proxy 设置页 → Feishu Bridge → 高级设置中逐个启用。", discovered)
+	}
+	enabled := 0
+	available := 0
+	lines := []string{"MCP 已启用："}
+	for _, server := range statuses {
+		if !server.Enabled {
+			continue
+		}
+		enabled++
+		state := "不可用"
+		if server.Available {
+			available++
+			state = fmt.Sprintf("可用，%d tools", server.ToolCount)
+		} else if strings.TrimSpace(server.Message) != "" {
+			state = "不可用：" + summarizeText(server.Message, 120)
+		}
+		source := strings.TrimSpace(server.SourceClient)
+		if source == "" {
+			source = "本机配置"
+		}
+		lines = append(lines, fmt.Sprintf("- `%s`（%s）：%s", server.Name, source, state))
+		if server.Available && len(server.Tools) > 0 {
+			limit := len(server.Tools)
+			if limit > 20 {
+				limit = 20
+			}
+			for i := 0; i < limit; i++ {
+				tool := server.Tools[i]
+				label := strings.TrimSpace(tool.Function)
+				if label == "" {
+					label = tool.Name
+				}
+				desc := strings.TrimSpace(tool.Description)
+				if desc != "" {
+					lines = append(lines, fmt.Sprintf("  - `%s`：%s", label, summarizeText(desc, 80)))
+				} else {
+					lines = append(lines, fmt.Sprintf("  - `%s`", label))
+				}
+			}
+			if len(server.Tools) > limit {
+				lines = append(lines, fmt.Sprintf("  - ... 另有 %d 个工具", len(server.Tools)-limit))
+			}
+		}
+	}
+	if enabled == 0 {
+		return "MCP：总开关已开启，但还没有启用任何 server。请到 Lingma Proxy 设置页 → Feishu Bridge → 高级设置中选择 server。"
+	}
+	lines = append(lines, "", fmt.Sprintf("汇总：%d/%d 个已启用 server 当前可用。", available, enabled))
+	return strings.Join(lines, "\n")
+}
+
+func (m *Manager) mcpSummaryLine() string {
+	cfg := m.Config()
+	if !cfg.MCPEnabled {
+		return "MCP：未启用"
+	}
+	m.mu.RLock()
+	statuses := m.status.MCPServers
+	m.mu.RUnlock()
+	enabled := 0
+	available := 0
+	tools := 0
+	for _, server := range statuses {
+		if !server.Enabled {
+			continue
+		}
+		enabled++
+		if server.Available {
+			available++
+			tools += server.ToolCount
+		}
+	}
+	return fmt.Sprintf("MCP：%d/%d server 可用，%d tools", available, enabled, tools)
+}
+
+func (m *Manager) commandCostText(chatID string) string {
+	if chatID == "" {
+		return "当前会话尚无统计。"
+	}
+	m.mu.RLock()
+	state, ok := m.conversations[chatID]
+	m.mu.RUnlock()
+	if !ok || (state.PromptTokens == 0 && state.OutputTokens == 0 && state.Turns == 0) {
+		return "本会话尚未累计 token 使用，发起一次对话后再试。"
+	}
+	freshPrompt := state.PromptTokens - state.CacheReadTokens
+	if freshPrompt < 0 {
+		freshPrompt = 0
+	}
+	total := state.PromptTokens + state.OutputTokens
+	var b strings.Builder
+	fmt.Fprintf(&b, "本会话累计：\n- 轮次：%d\n- prompt tokens：%d（其中缓存命中 %d，新计费 %d）\n- cache write：%d\n- completion tokens：%d\n- 合计：%d",
+		state.Turns, state.PromptTokens, state.CacheReadTokens, freshPrompt,
+		state.CacheWriteTokens, state.OutputTokens, total)
+	if len(state.UsageByModel) > 0 {
+		keys := make([]string, 0, len(state.UsageByModel))
+		for k := range state.UsageByModel {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("\n\n按模型拆分：")
+		for _, k := range keys {
+			u := state.UsageByModel[k]
+			if u == nil {
+				continue
+			}
+			fresh := u.Prompt - u.CacheRead
+			if fresh < 0 {
+				fresh = 0
+			}
+			fmt.Fprintf(&b, "\n- %s × %d：prompt %d（缓存 %d / 新 %d），completion %d",
+				k, u.Calls, u.Prompt, u.CacheRead, fresh, u.Output)
+		}
+	}
+	b.WriteString("\n\n注：数值来自代理 usage 字段，仅供参考；具体计费请以平台账单为准。")
+	return b.String()
+}
+
+// undoLastTurn drops the trailing assistant reply and any tool messages that
+// belong to it. Returns the number of messages removed. Operates only within
+// the active region (after CompactBoundary) to avoid corrupting the folded
+// summary.
+func (m *Manager) undoLastTurn(chatID string) int {
+	if chatID == "" {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.conversations[chatID]
+	if !ok || len(state.History) == 0 {
+		return 0
+	}
+	floor := state.CompactBoundary
+	if floor < 0 {
+		floor = 0
+	}
+	idx := len(state.History) - 1
+	for idx >= floor {
+		role, _ := state.History[idx]["role"].(string)
+		if role == "user" {
+			break
+		}
+		idx--
+	}
+	if idx < floor {
+		removed := len(state.History) - floor
+		state.History = cloneMessages(state.History[:floor])
+		m.conversations[chatID] = state
+		return removed
+	}
+	removed := len(state.History) - idx - 1
+	if removed <= 0 {
+		return 0
+	}
+	state.History = cloneMessages(state.History[:idx+1])
+	m.conversations[chatID] = state
+	return removed
+}
+
+// popLastUserForRetry removes the trailing assistant/tool messages plus the
+// last user message, returning the user message text so the caller can ask the
+// human to resend it (or feed it back automatically).
+func (m *Manager) popLastUserForRetry(chatID string) string {
+	if chatID == "" {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.conversations[chatID]
+	if !ok || len(state.History) == 0 {
+		return ""
+	}
+	floor := state.CompactBoundary
+	if floor < 0 {
+		floor = 0
+	}
+	idx := len(state.History) - 1
+	for idx >= floor {
+		role, _ := state.History[idx]["role"].(string)
+		if role == "user" {
+			break
+		}
+		idx--
+	}
+	if idx < floor {
+		return ""
+	}
+	content, _ := state.History[idx]["content"].(string)
+	state.History = cloneMessages(state.History[:idx])
+	m.conversations[chatID] = state
+	return content
+}
+
+func (m *Manager) conversationStatusText(chatID string) string {
+	m.mu.RLock()
+	state := m.conversations[chatID]
+	run := m.runs[chatID]
+	m.mu.RUnlock()
+	running := run != nil && run.Processing
+	queued := 0
+	if run != nil {
+		queued = len(run.Queue)
+	}
+	summaryState := "无"
+	if strings.TrimSpace(state.Summary) != "" {
+		summaryState = "已有"
+	}
+	active := len(state.activeHistory())
+	folded := len(state.History) - active
+	return fmt.Sprintf("Feishu Bridge 当前会话状态：\n- 运行中：%t\n- 排队消息：%d\n- 活跃消息：%d（已压缩 %d）\n- 摘要：%s", running, queued, active, folded, summaryState)
 }
 
 func (m *Manager) ensureConversationSummary(ctx context.Context, chatID string, proxyURL string, model string, compact bool) (string, error) {
@@ -900,7 +2151,14 @@ func (m *Manager) ensureConversationSummary(ctx context.Context, chatID string, 
 	next := m.conversations[chatID]
 	next.Summary = summary
 	if compact {
-		next.History = keepRecentConversation(next.History, 6)
+		// Set boundary to keep recent N messages active; older ones stay in
+		// History but are folded into Summary so /undo can rewind across.
+		const keepActive = 6
+		if len(next.History) > keepActive {
+			next.CompactBoundary = len(next.History) - keepActive
+		} else {
+			next.CompactBoundary = 0
+		}
 	}
 	m.conversations[chatID] = next
 	m.mu.Unlock()
@@ -928,19 +2186,34 @@ func (m *Manager) scheduleConversationSummary(chatID string) {
 
 	m.mu.Lock()
 	state, ok := m.conversations[chatID]
-	if !ok || state.Summarizing || strings.TrimSpace(state.Summary) != "" || len(state.History) <= persistedConversationRecentLimit {
+	if !ok || state.Summarizing {
+		m.mu.Unlock()
+		return
+	}
+	hasSummary := strings.TrimSpace(state.Summary) != ""
+	overMessages := len(state.History) > persistedConversationRecentLimit
+	// Token-driven autocompact: if the running prompt budget is approaching the
+	// model context, fold the older history into a summary even if we already
+	// have one — this is the second-pass "compact existing summary + new turns".
+	overTokens := state.PromptTokens >= autoCompactTokenThreshold && len(state.History) > persistedConversationRecentLimit
+	if hasSummary && !overTokens {
+		m.mu.Unlock()
+		return
+	}
+	if !hasSummary && !overMessages {
 		m.mu.Unlock()
 		return
 	}
 	state.Summarizing = true
 	history := cloneMessages(state.History)
+	existingSummary := state.Summary
 	m.conversations[chatID] = state
 	m.mu.Unlock()
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		summary, err := summarizeConversation(ctx, proxyURL, model, "", history)
+		summary, err := summarizeConversation(ctx, proxyURL, model, existingSummary, history)
 
 		m.mu.Lock()
 		state, ok := m.conversations[chatID]
@@ -949,8 +2222,25 @@ func (m *Manager) scheduleConversationSummary(chatID string) {
 			return
 		}
 		state.Summarizing = false
-		if err == nil && strings.TrimSpace(summary) != "" && strings.TrimSpace(state.Summary) == "" {
-			state.Summary = strings.TrimSpace(summary)
+		if err == nil && strings.TrimSpace(summary) != "" {
+			trimmed := strings.TrimSpace(summary)
+			// First-pass summary: only adopt if no existing one (避免覆盖手动 /summary).
+			// Token-driven recompact: always adopt and physically trim history so
+			// subsequent prompts shrink back below the threshold.
+			if strings.TrimSpace(state.Summary) == "" {
+				state.Summary = trimmed
+			} else if state.PromptTokens >= autoCompactTokenThreshold {
+				state.Summary = trimmed
+				if len(state.History) > persistedConversationRecentLimit {
+					state.CompactBoundary = len(state.History) - persistedConversationRecentLimit
+				} else {
+					state.CompactBoundary = 0
+				}
+				// Reset the running prompt counter; subsequent calls will re-fill it
+				// against the now-shorter active window. Keep cumulative cache/output
+				// for /cost reporting.
+				state.PromptTokens = 0
+			}
 		}
 		m.conversations[chatID] = state
 		m.mu.Unlock()
@@ -1032,15 +2322,48 @@ func (m *Manager) ConversationSnapshot() map[string]ConversationSnapshot {
 	for chatID, state := range m.conversations {
 		history := cloneMessages(state.History)
 		summary := strings.TrimSpace(state.Summary)
-		if len(history) > persistedConversationRecentLimit {
+		boundary := state.CompactBoundary
+		if boundary < 0 || boundary > len(history) {
+			boundary = 0
+		}
+		// Persisted summary fallback — only when we still don't have one.
+		active := history
+		if boundary > 0 {
+			active = history[boundary:]
+		}
+		if len(active) > persistedConversationRecentLimit {
+			extra := len(active) - persistedConversationRecentLimit
 			if summary == "" {
-				summary = buildPersistedConversationSummary(history[:len(history)-persistedConversationRecentLimit])
+				summary = buildPersistedConversationSummary(history[:boundary+extra])
 			}
-			history = keepRecentConversation(history, persistedConversationRecentLimit)
+			boundary += extra
+		}
+		usageCopy := make(map[string]*conversationUsage, len(state.UsageByModel))
+		for k, v := range state.UsageByModel {
+			if v == nil {
+				continue
+			}
+			cp := *v
+			usageCopy[k] = &cp
+		}
+		var thinking *bool
+		if state.ShowThinking != nil {
+			val := *state.ShowThinking
+			thinking = &val
 		}
 		out[chatID] = ConversationSnapshot{
-			History: history,
-			Summary: summary,
+			History:          history,
+			CompactBoundary:  boundary,
+			Summary:          summary,
+			ModelOverride:    strings.TrimSpace(state.ModelOverride),
+			Language:         strings.TrimSpace(state.Language),
+			ShowThinking:     thinking,
+			PromptTokens:     state.PromptTokens,
+			OutputTokens:     state.OutputTokens,
+			CacheReadTokens:  state.CacheReadTokens,
+			CacheWriteTokens: state.CacheWriteTokens,
+			Turns:            state.Turns,
+			UsageByModel:     usageCopy,
 		}
 	}
 	return out
@@ -1055,9 +2378,40 @@ func (m *Manager) LoadConversationSnapshot(snapshot map[string]ConversationSnaps
 		if chatID == "" {
 			continue
 		}
+		history := cloneMessages(state.History)
+		boundary := state.CompactBoundary
+		if boundary < 0 {
+			boundary = 0
+		}
+		if boundary > len(history) {
+			boundary = len(history)
+		}
+		var thinking *bool
+		if state.ShowThinking != nil {
+			val := *state.ShowThinking
+			thinking = &val
+		}
+		usageCopy := make(map[string]*conversationUsage, len(state.UsageByModel))
+		for k, v := range state.UsageByModel {
+			if v == nil {
+				continue
+			}
+			cp := *v
+			usageCopy[k] = &cp
+		}
 		m.conversations[chatID] = conversationState{
-			History: cloneMessages(state.History),
-			Summary: strings.TrimSpace(state.Summary),
+			History:          history,
+			CompactBoundary:  boundary,
+			Summary:          strings.TrimSpace(state.Summary),
+			ModelOverride:    strings.TrimSpace(state.ModelOverride),
+			Language:         strings.TrimSpace(state.Language),
+			ShowThinking:     thinking,
+			PromptTokens:     state.PromptTokens,
+			OutputTokens:     state.OutputTokens,
+			CacheReadTokens:  state.CacheReadTokens,
+			CacheWriteTokens: state.CacheWriteTokens,
+			Turns:            state.Turns,
+			UsageByModel:     usageCopy,
 		}
 	}
 }
@@ -1115,6 +2469,15 @@ func valueOrFallback(value string, fallback string) string {
 	return value
 }
 
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 type typingReactionState struct {
 	MessageID  string
 	ReactionID string
@@ -1131,7 +2494,7 @@ func (m *Manager) addTypingReaction(messageID string, meta LogMeta) typingReacti
 	data, _ := json.Marshal(map[string]any{
 		"reaction_type": map[string]string{"emoji_type": "Typing"},
 	})
-	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "reactions", "create", "--as", "bot", "--format", "json", "--params", string(params), "--data", string(data))
+	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "reactions", "create", "--as", "bot", "--params", string(params), "--data", string(data))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		m.logf("warn", "Feishu bridge 添加输入状态失败："+formatCommandFailure(err, output), meta)
@@ -1156,7 +2519,7 @@ func (m *Manager) removeTypingReaction(state typingReactionState, meta LogMeta) 
 		"message_id":  state.MessageID,
 		"reaction_id": state.ReactionID,
 	})
-	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "reactions", "delete", "--as", "bot", "--format", "json", "--params", string(params))
+	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "reactions", "delete", "--as", "bot", "--params", string(params))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		m.logf("warn", "Feishu bridge 清理输入状态失败："+formatCommandFailure(err, output), meta)
@@ -1209,4 +2572,244 @@ func (m *Manager) replyToMessage(ctx context.Context, messageID string, reply st
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+// sendCardReply posts an interactive (schema v1) card as a reply to rootMessageID
+// and returns the new card message id. cardJSON is the full {config,header,elements}
+// card payload, already encoded.
+func (m *Manager) sendCardReply(ctx context.Context, rootMessageID string, cardJSON string) (string, error) {
+	rootMessageID = strings.TrimSpace(rootMessageID)
+	if rootMessageID == "" {
+		return "", fmt.Errorf("send card reply: empty root message id")
+	}
+	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "+messages-reply",
+		"--as", "bot",
+		"--message-id", rootMessageID,
+		"--msg-type", "interactive",
+		"--content", cardJSON,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	id := strings.TrimSpace(firstJSONStringField(output, "message_id"))
+	if id == "" {
+		// Fallback: some lark-cli builds nest under data.message_id but
+		// firstJSONStringField walks recursively; if still empty we treat the
+		// command as failed to keep the caller's fallback path honest.
+		return "", fmt.Errorf("send card reply: no message_id in response: %s", strings.TrimSpace(string(output)))
+	}
+	return id, nil
+}
+
+// patchCardMessage updates an existing card message (cardMessageID) with a new
+// interactive card payload. Uses the lark-cli pass-through `api` command since
+// lark-cli has no native `card patch` verb.
+func (m *Manager) patchCardMessage(ctx context.Context, cardMessageID string, cardJSON string) error {
+	cardMessageID = strings.TrimSpace(cardMessageID)
+	if cardMessageID == "" {
+		return fmt.Errorf("patch card: empty message id")
+	}
+	body, err := json.Marshal(map[string]any{"content": cardJSON})
+	if err != nil {
+		return fmt.Errorf("patch card: marshal body: %w", err)
+	}
+	endpoint := "/open-apis/im/v1/messages/" + cardMessageID
+	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
+		"PATCH", endpoint,
+		"--as", "bot",
+		"--data", string(body),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// createAndSendStreamingCard creates a CardKit card entity with streaming_mode
+// enabled, then sends it as a reply to rootMessageID. Returns the card entity
+// ID and the im message ID.
+func (m *Manager) createAndSendStreamingCard(ctx context.Context, rootMessageID string, state cardState) (entityID, msgID string, err error) {
+	cardJSON, renderErr := renderStreamingCardV2(state)
+	if renderErr != nil {
+		return "", "", renderErr
+	}
+	// Step 1: Create card entity
+	entityID, err = m.createCardEntity(ctx, cardJSON)
+	if err != nil {
+		return "", "", fmt.Errorf("create card entity: %w", err)
+	}
+	// Step 2: Send card entity as a reply message
+	msgID, err = m.sendCardEntityMessage(ctx, rootMessageID, entityID)
+	if err != nil {
+		return "", "", fmt.Errorf("send card entity message: %w", err)
+	}
+	return entityID, msgID, nil
+}
+
+// createCardEntity calls POST /open-apis/cardkit/v1/cards to create a card
+// entity and returns its card_id.
+func (m *Manager) createCardEntity(ctx context.Context, cardJSON string) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"type": "card_json",
+		"data": cardJSON,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal create card body: %w", err)
+	}
+	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
+		"POST", "/open-apis/cardkit/v1/cards",
+		"--as", "bot",
+		"--data", string(body),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	id := strings.TrimSpace(firstJSONStringField(output, "card_id"))
+	if id == "" {
+		return "", fmt.Errorf("create card entity: no card_id in response: %s", strings.TrimSpace(string(output)))
+	}
+	return id, nil
+}
+
+// sendCardEntityMessage sends an interactive message referencing an existing
+// card entity. Returns the new message_id.
+func (m *Manager) sendCardEntityMessage(ctx context.Context, rootMessageID string, cardEntityID string) (string, error) {
+	content, err := json.Marshal(map[string]any{
+		"type": "card",
+		"data": map[string]any{"card_id": cardEntityID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal card entity content: %w", err)
+	}
+	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "+messages-reply",
+		"--as", "bot",
+		"--message-id", rootMessageID,
+		"--msg-type", "interactive",
+		"--content", string(content),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	id := strings.TrimSpace(firstJSONStringField(output, "message_id"))
+	if id == "" {
+		return "", fmt.Errorf("send card entity message: no message_id in response: %s", strings.TrimSpace(string(output)))
+	}
+	return id, nil
+}
+
+// streamUpdateCardContent calls PUT /open-apis/cardkit/v1/cards/:card_id/elements/:element_id/content
+// to stream-update a single element's text content. This is the fast path for
+// typewriter-style streaming — only the reply element is updated, not the whole card.
+func (m *Manager) streamUpdateCardContent(ctx context.Context, cardEntityID string, elementID string, content string, sequence int) error {
+	body, err := json.Marshal(map[string]any{
+		"content":  content,
+		"sequence": sequence,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal stream update body: %w", err)
+	}
+	endpoint := fmt.Sprintf("/open-apis/cardkit/v1/cards/%s/elements/%s/content", cardEntityID, elementID)
+	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
+		"PUT", endpoint,
+		"--as", "bot",
+		"--data", string(body),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// updateCardEntity calls PUT /open-apis/cardkit/v1/cards/:card_id to do a
+// full card update (used for final state when streaming ends).
+func (m *Manager) updateCardEntity(ctx context.Context, cardEntityID string, cardJSON string, sequence int) error {
+	body, err := json.Marshal(map[string]any{
+		"card": map[string]any{
+			"type": "card_json",
+			"data": cardJSON,
+		},
+		"sequence": sequence,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal update card body: %w", err)
+	}
+	endpoint := "/open-apis/cardkit/v1/cards/" + cardEntityID
+	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
+		"PUT", endpoint,
+		"--as", "bot",
+		"--data", string(body),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// shouldIgnoreGroupMessage returns true when GroupOnlyAtBot is enabled and the
+// incoming message comes from a group chat without an @-mention of the bot
+// itself. p2p chats are never ignored.
+func (m *Manager) shouldIgnoreGroupMessage(event incomingEvent) bool {
+	chatType := strings.ToLower(strings.TrimSpace(event.ChatType))
+	if chatType == "" || chatType == "p2p" {
+		return false
+	}
+	cfg := m.Config()
+	if !cfg.GroupOnlyAtBot {
+		return false
+	}
+	// lark-cli auth status reports the logged-in user open_id, not necessarily
+	// the bot open_id mentioned in a group chat. Until we have a reliable bot
+	// id source, treat any mention as a trigger and ignore only unmentioned
+	// group messages. This preserves the safe default without dropping real
+	// "@bot" messages.
+	return len(event.MentionOpenIDs) == 0 && len(event.MentionUserIDs) == 0
+}
+
+// extractMentionIDs walks a raw lark-cli event JSON line and returns the
+// open_id and user_id values found inside any "mentions[].id" array, anywhere
+// in the payload. lark-cli currently surfaces mentions inside event.message.
+func extractMentionIDs(raw []byte) ([]string, []string) {
+	var root any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return nil, nil
+	}
+	openIDs := []string{}
+	userIDs := []string{}
+	var walk func(v any)
+	walk = func(v any) {
+		switch typed := v.(type) {
+		case map[string]any:
+			if mentions, ok := typed["mentions"].([]any); ok {
+				for _, m := range mentions {
+					entry, ok := m.(map[string]any)
+					if !ok {
+						continue
+					}
+					if id, ok := entry["id"].(map[string]any); ok {
+						if oid, ok := id["open_id"].(string); ok && strings.TrimSpace(oid) != "" {
+							openIDs = append(openIDs, strings.TrimSpace(oid))
+						}
+						if uid, ok := id["user_id"].(string); ok && strings.TrimSpace(uid) != "" {
+							userIDs = append(userIDs, strings.TrimSpace(uid))
+						}
+					}
+				}
+			}
+			for _, child := range typed {
+				walk(child)
+			}
+		case []any:
+			for _, child := range typed {
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	return uniqueNonEmpty(openIDs), uniqueNonEmpty(userIDs)
 }

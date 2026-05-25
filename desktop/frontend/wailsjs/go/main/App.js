@@ -38,6 +38,10 @@ export function GetFeishuBridgeConfig() {
   return window['go']['main']['App']['GetFeishuBridgeConfig']();
 }
 
+export function GetFeishuBridgeMCPJSON() {
+  return window['go']['main']['App']['GetFeishuBridgeMCPJSON']();
+}
+
 export function GetFeishuBridgeStatus() {
   return window['go']['main']['App']['GetFeishuBridgeStatus']();
 }
@@ -98,8 +102,16 @@ export function RefreshModels() {
   return window['go']['main']['App']['RefreshModels']();
 }
 
+export function ReinstallFeishuSkills() {
+  return window['go']['main']['App']['ReinstallFeishuSkills']();
+}
+
 export function RequestQuitShortcut() {
   return window['go']['main']['App']['RequestQuitShortcut']();
+}
+
+export function SaveFeishuBridgeMCPJSON(arg1) {
+  return window['go']['main']['App']['SaveFeishuBridgeMCPJSON'](arg1);
 }
 
 export function SelectModel(arg1) {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"lingma-ipc-proxy/internal/feishu"
 	"strings"
 	"testing"
 	"time"
@@ -95,5 +97,80 @@ func TestBackfillRequestCreatedAtAcrossDays(t *testing.T) {
 	}
 	if got, want := requests[0].CreatedAt[:10], "2026-05-12"; got != want {
 		t.Fatalf("oldest request date = %s, want %s", got, want)
+	}
+}
+
+func TestParseDesktopConfigMigratesMissingGroupOnlyAtBotDefault(t *testing.T) {
+	baseProxy := defaultConfig()
+	baseBridge := feishu.DefaultConfig()
+	data := []byte(`{
+		"proxyConfig": {
+			"host": "127.0.0.1",
+			"port": "8095"
+		},
+		"feishuBridge": {
+			"enabled": true,
+			"brand": "feishu",
+			"model": "kmodel",
+			"maxToolRounds": 5
+		}
+	}`)
+
+	_, bridgeCfg, ok := parseDesktopConfig(data, baseProxy, baseBridge)
+	if !ok {
+		t.Fatal("parseDesktopConfig returned ok=false")
+	}
+	if !bridgeCfg.GroupOnlyAtBot {
+		t.Fatal("missing groupOnlyAtBot in old config should inherit the safe default true")
+	}
+	if bridgeCfg.MaxToolRounds != feishu.DefaultMaxToolRounds {
+		t.Fatalf("legacy maxToolRounds should migrate to default, got %d", bridgeCfg.MaxToolRounds)
+	}
+}
+
+func TestParseDesktopConfigPreservesExplicitGroupOnlyAtBotFalse(t *testing.T) {
+	baseProxy := defaultConfig()
+	baseBridge := feishu.DefaultConfig()
+	data := []byte(`{
+		"proxyConfig": {
+			"host": "127.0.0.1",
+			"port": "8095"
+		},
+		"feishuBridge": {
+			"enabled": true,
+			"brand": "feishu",
+			"model": "kmodel",
+			"groupOnlyAtBot": false,
+			"maxToolRounds": 12
+		}
+	}`)
+
+	_, bridgeCfg, ok := parseDesktopConfig(data, baseProxy, baseBridge)
+	if !ok {
+		t.Fatal("parseDesktopConfig returned ok=false")
+	}
+	if bridgeCfg.GroupOnlyAtBot {
+		t.Fatal("explicit groupOnlyAtBot=false should be preserved")
+	}
+	if bridgeCfg.MaxToolRounds != 12 {
+		t.Fatalf("explicit maxToolRounds should be preserved, got %d", bridgeCfg.MaxToolRounds)
+	}
+}
+
+func TestShouldRetryFeishuAutoStartForTransientProbeFailures(t *testing.T) {
+	retryable := []string{
+		"Node/npm/npx 未就绪",
+		"lark-cli 未安装",
+		"必需的 lark-* skills 未安装完整：缺少 lark-im",
+		"飞书 CLI 尚未完成应用初始化",
+		"飞书 CLI 尚未完成用户授权",
+	}
+	for _, msg := range retryable {
+		if !shouldRetryFeishuAutoStart(errors.New(msg)) {
+			t.Fatalf("should retry transient startup error %q", msg)
+		}
+	}
+	if shouldRetryFeishuAutoStart(errors.New("event consume failed")) {
+		t.Fatal("should not retry non-prerequisite bridge errors")
 	}
 }
