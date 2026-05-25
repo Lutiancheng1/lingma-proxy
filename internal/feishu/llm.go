@@ -31,6 +31,8 @@ type llmResponse struct {
 	} `json:"usage"`
 }
 
+const defaultLLMStreamTimeout = 180 * time.Second
+
 // listProxyModels calls the proxy's /v1/models endpoint to enumerate available
 // model ids. proxyURL is the chat/completions URL — the helper derives the
 // /v1/models sibling endpoint from it. Returns at most `limit` ids.
@@ -245,6 +247,11 @@ func callLLMPlainStream(ctx context.Context, proxyURL string, model string, mess
 }
 
 func runStreamingRequest(ctx context.Context, proxyURL string, body map[string]any, deltas streamingDelta) (*llmResponse, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultLLMStreamTimeout)
+		defer cancel()
+	}
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -255,8 +262,9 @@ func runStreamingRequest(ctx context.Context, proxyURL string, body map[string]a
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	// No client-level timeout: a streaming response can legitimately take
-	// minutes; we rely on ctx for cancellation.
+	// Streaming can legitimately take longer than a normal request, but it
+	// must not be unbounded. The context timeout above prevents Bridge cards
+	// from staying in "thinking" forever when the proxy/model stalls.
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {

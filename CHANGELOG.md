@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased (target: v1.6.5)
+## Unreleased (target: v1.6.6)
+
+## v1.6.6 - 2026-05-25
+
+- Feishu Bridge branch only; no GitHub Release assets are published from this branch.
+- Synced the mainline `v1.6.6` desktop inspector and IPC image fixes: packaged desktop builds keep the right-click `Inspect Element` menu, QoderCN IPC image turns use `qodercn:///agent/file?path=...`, and legacy Lingma runtimes keep `lingma:///agent/file?path=...`.
+- Added Feishu image-message handling for Bridge conversations: image attachments are downloaded, converted into OpenAI image content blocks, and routed through a bounded plain-vision path when no tool use is required.
+- Added stream timeouts for Feishu model calls so stalled visual or final-answer requests stop with a clear card error instead of leaving the Bridge card in "thinking" indefinitely.
+- Improved Feishu Bridge card titles/status text so the visible card header follows the configured bot display name and uses concise "正在思考" / "完成" status copy.
+- 仅 Feishu Bridge 分支使用；本分支不发布 GitHub Release assets。
+- 同步主线 `v1.6.6` 桌面调试和 IPC 图片修复：正式桌面包保留右键 `Inspect Element`，QoderCN IPC 图片轮次使用 `qodercn:///agent/file?path=...`，旧 Lingma 运行时继续使用 `lingma:///agent/file?path=...`。
+- 新增飞书图片消息处理：Bridge 会下载图片附件，转换为 OpenAI 图片内容块；当本轮不需要工具调用时，走有超时保护的纯视觉请求路径。
+- 飞书模型调用增加流式超时保护，视觉请求或最终答复卡住时会停止并给出明确卡片错误，不再无限停留在“正在思考”。
+- 优化飞书 Bridge 卡片标题和状态文案：卡片头部跟随配置的 bot 展示名，状态使用更简洁的“正在思考” / “完成”。
 
 ## v1.6.5 - 2026-05-22
 

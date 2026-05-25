@@ -82,6 +82,74 @@ func TestHandleEventCallsLLMAndRepliesToMessage(t *testing.T) {
 	}
 }
 
+func TestHandleEventPassesFeishuImageToLLM(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	oldDiscover := discoverSkillsForPrompt
+	oldCallLLM := callLLMForConversation
+	oldPlainStream := callLLMPlainStreamForConversation
+	t.Cleanup(func() {
+		discoverSkillsForPrompt = oldDiscover
+		callLLMForConversation = oldCallLLM
+		callLLMPlainStreamForConversation = oldPlainStream
+	})
+	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
+		return []SkillStatus{{Name: "lark-im", Found: true}}, nil
+	}
+	callLLMForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool, tools []map[string]any) (*llmResponse, error) {
+		t.Fatal("plain image question should not include tools")
+		return nil, nil
+	}
+	callLLMPlainStreamForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, deltas streamingDelta) (*llmResponse, error) {
+		parts, ok := messages[len(messages)-1]["content"].([]map[string]any)
+		if !ok {
+			t.Fatalf("expected multimodal content parts, got %#v", messages[len(messages)-1]["content"])
+		}
+		if len(parts) != 2 {
+			t.Fatalf("expected text + image parts, got %#v", parts)
+		}
+		if parts[0]["type"] != "text" || !strings.Contains(parts[0]["text"].(string), "这个图片里有什么内容") || strings.Contains(parts[0]["text"].(string), "[Image:") {
+			t.Fatalf("unexpected text part: %#v", parts[0])
+		}
+		imageURL, _ := parts[1]["image_url"].(map[string]any)
+		url, _ := imageURL["url"].(string)
+		if parts[1]["type"] != "image_url" || !strings.HasPrefix(url, "data:image/png;base64,") {
+			t.Fatalf("unexpected image part: %#v", parts[1])
+		}
+		var resp llmResponse
+		resp.Choices = append(resp.Choices, struct {
+			Message struct {
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls"`
+			} `json:"message"`
+		}{})
+		resp.Choices[0].Message.Content = "看到了图片。"
+		return &resp, nil
+	}
+
+	manager := NewManager(ManagerOptions{
+		ProxyURL: func() string { return "http://127.0.0.1:8095/v1/chat/completions" },
+	})
+	manager.SetConfig(Config{Model: "kmodel", MaxToolRounds: 5})
+	manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_image_chat",
+		ChatType:    "p2p",
+		Content:     "[Image: img_test_image] 这个图片里有什么内容?",
+		CreateTime:  "1",
+		EventID:     "evt_image_1",
+		MessageID:   "om_image_message",
+		SenderID:    "ou_test_user",
+		MessageType: "post",
+	})
+
+	got := strings.TrimSpace(string(mustReadFileContainingEventually(t, replyLog, "看到了图片。")))
+	if !strings.Contains(got, "+messages-resources-download") {
+		t.Fatalf("image resource was not downloaded, got: %s", got)
+	}
+	if !strings.Contains(got, "--file-key img_test_image") {
+		t.Fatalf("image download used wrong file key, got: %s", got)
+	}
+}
+
 func TestHandleEventSynthesizesFinalReplyAfterToolRounds(t *testing.T) {
 	replyLog := installFakeLarkCLI(t)
 	oldDiscover := discoverSkillsForPrompt
@@ -478,6 +546,11 @@ if "%1"=="im" goto im
 if "%1"=="drive" goto drive
 goto unexpected
 :im
+if "%2"=="+messages-resources-download" (
+  echo %*>>%FEISHU_REPLY_LOG%
+  echo fakepng>%CD%\img_test_image.dat
+  exit /b 0
+)
 if "%2"=="messages" if "%3"=="get" (
   echo {"content":"这是一条被引用的消息"}
   exit /b 0
@@ -518,6 +591,20 @@ fi
 if [ "$1" = "im" ] && [ "$2" = "+messages-reply" ]; then
   printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
   printf '{"message_id":"om_fake_reply_%s"}\n' "$(date +%s)"
+  exit 0
+fi
+if [ "$1" = "im" ] && [ "$2" = "+messages-resources-download" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  output="img_test_image.dat"
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--output" ]; then
+      shift
+      output="$1"
+      break
+    fi
+    shift
+  done
+  printf '\211PNG\r\n\032\nfakepng\n' > "$output"
   exit 0
 fi
 if [ "$1" = "im" ] && [ "$2" = "messages" ] && [ "$3" = "get" ]; then

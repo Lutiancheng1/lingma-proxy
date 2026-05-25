@@ -46,7 +46,7 @@ Auto-detection prefers QoderCN runtime files first, then falls back to Lingma ru
 ## Current Version
 
 <!-- VERSION:CURRENT:BEGIN -->
-Current desktop app version: `v1.6.5`.
+Current desktop app version: `v1.6.6`.
 
 The canonical source is [VERSION](./VERSION). Run `./scripts/sync-version.sh` to propagate it into [desktop/wails.json](./desktop/wails.json), the desktop UI, and release-facing docs.
 <!-- VERSION:CURRENT:END -->

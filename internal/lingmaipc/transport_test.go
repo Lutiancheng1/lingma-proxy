@@ -123,6 +123,26 @@ func TestDefaultSharedClientInfoPathsPreferQoderCNBeforeLingma(t *testing.T) {
 	}
 }
 
+func TestDefaultImageURISchemeUsesQoderCNForQoderPaths(t *testing.T) {
+	if got := DefaultImageURIScheme(filepath.Join("QoderCN", "SharedClientCache", "qodercn.sock"), ""); got != "qodercn" {
+		t.Fatalf("unexpected scheme for QoderCN path: %q", got)
+	}
+}
+
+func TestDefaultImageURISchemeFallsBackToLingma(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_SHARED_CLIENT_INFO", "")
+	t.Setenv("LINGMA_IPC_PIPE", "")
+	t.Setenv("LINGMA_IPC_SOCKET", "")
+	t.Setenv("LINGMA_PROXY_WS_URL", "")
+
+	if got := DefaultImageURIScheme("", ""); got != "lingma" {
+		t.Fatalf("unexpected fallback scheme: %q", got)
+	}
+}
+
 func TestNewestExistingPathPrefersNewestSocket(t *testing.T) {
 	dir := t.TempDir()
 	older := filepath.Join(dir, "lingma.sock")

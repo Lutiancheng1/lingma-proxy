@@ -3,10 +3,14 @@ package feishu
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"sort"
 	"strings"
@@ -22,13 +26,18 @@ const (
 	autoCompactTokenThreshold        = 60000
 	feishuMarkdownReplyChunkLimit    = 2800
 	defaultBotDisplayName            = "飞书 Bridge"
+	maxFeishuImageAttachments        = 4
+	maxFeishuImageBytes              = 8 * 1024 * 1024
+	feishuImageDownloadTimeout       = 30 * time.Second
+	feishuVisionResponseTimeout      = 45 * time.Second
 )
 
 var (
-	discoverSkillsForPrompt      = discoverSkills
-	callLLMForConversation       = callLLM
-	callLLMStreamForConversation = callLLMStream
-	callLLMPlainStreamForFinal   = callLLMPlainStream
+	discoverSkillsForPrompt           = discoverSkills
+	callLLMForConversation            = callLLM
+	callLLMStreamForConversation      = callLLMStream
+	callLLMPlainStreamForConversation = callLLMPlainStream
+	callLLMPlainStreamForFinal        = callLLMPlainStream
 )
 
 type ManagerOptions struct {
@@ -73,6 +82,12 @@ type conversationRunState struct {
 	Processing bool
 	Preempted  bool
 	Cancel     context.CancelCauseFunc
+}
+
+type conversationInput struct {
+	Text      string
+	Content   any
+	HasImages bool
 }
 
 // Sentinel cancel causes — distinguish between user /stop, automatic preempt
@@ -799,7 +814,10 @@ func startReplyWindowCleanupLoop() {
 
 func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 	startReplyWindowCleanupLoop()
-	if strings.TrimSpace(event.Content) == "" || strings.TrimSpace(event.MessageID) == "" || strings.TrimSpace(event.ChatID) == "" {
+	if strings.TrimSpace(event.MessageID) == "" || strings.TrimSpace(event.ChatID) == "" {
+		return
+	}
+	if strings.TrimSpace(event.Content) == "" && !eventMayContainImage(event) {
 		return
 	}
 	dedupeKey := strings.TrimSpace(event.EventID)
@@ -1006,8 +1024,8 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 		model = override
 	}
 	skills, _ := discoverSkillsForPrompt(ctx)
-	normalizedContent := m.buildConversationInput(ctx, event)
-	commandReply, handled := m.handleConversationCommand(ctx, conversationKey, proxyURL, model, normalizedContent, logMeta)
+	input := m.buildConversationInput(ctx, event)
+	commandReply, handled := m.handleConversationCommand(ctx, conversationKey, proxyURL, model, input.Text, logMeta)
 	if handled {
 		if err := m.replyToMessage(ctx, event.MessageID, commandReply); err != nil {
 			m.logf("warn", "Feishu bridge 回复消息失败："+err.Error(), logMeta)
@@ -1035,13 +1053,14 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 	}
 	rawHistory := cloneMessages(state.activeHistory())
 	messages = append(messages, cloneMessages(rawHistory)...)
-	userMessage := map[string]any{"role": "user", "content": normalizedContent}
+	userMessage := map[string]any{"role": "user", "content": input.Content}
 	messages = append(messages, userMessage)
 	rawHistory = append(rawHistory, cloneMessage(userMessage))
 	consecutiveToolFailures := 0
 	const maxConsecutiveToolFailures = 8
 	const maxRepeatedToolFailures = 4
-	forceToolUse := shouldForceToolUse(event.Content)
+	forceToolUse := shouldForceToolUse(input.Text)
+	plainVisionTurn := input.HasImages && !forceToolUse
 	rounds := cfg.MaxToolRounds
 	if rounds <= 0 {
 		rounds = DefaultMaxToolRounds
@@ -1049,7 +1068,7 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 	if rounds > DefaultMaxToolRounds {
 		rounds = DefaultMaxToolRounds
 	}
-	m.logf("info", fmt.Sprintf("Feishu bridge 开始处理: model=%s forceToolUse=%t rounds=%d", model, forceToolUse, rounds), logMeta)
+	m.logf("info", fmt.Sprintf("Feishu bridge 开始处理: model=%s forceToolUse=%t plainVision=%t rounds=%d", model, forceToolUse, plainVisionTurn, rounds), logMeta)
 	card := newCardWriter(m, event.MessageID, botDisplayName(cfg), model, logMeta)
 	card.SetStatus("thinking", "正在思考")
 	replyText := ""
@@ -1073,19 +1092,51 @@ conversation:
 		// proxy doesn't break replies entirely.
 		var streamingReply strings.Builder
 		streamHadText := false
-		resp, err := callLLMStreamForConversation(ctx, proxyURL, model, microcompactToolResults(messages), forceToolUse, toolDefs, streamingDelta{
-			onText: func(chunk string) {
-				if chunk == "" {
-					return
-				}
-				streamingReply.WriteString(chunk)
-				streamHadText = true
-				card.SetReply(streamingReply.String())
-			},
-		})
+		var resp *llmResponse
+		var err error
+		requestMessages := microcompactToolResults(messages)
+		if plainVisionTurn {
+			m.logf("info", fmt.Sprintf("Feishu bridge 视觉请求开始: model=%s timeout=%s", model, feishuVisionResponseTimeout), logMeta)
+			visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
+			resp, err = callLLMPlainStreamForConversation(visionCtx, proxyURL, model, requestMessages, streamingDelta{
+				onText: func(chunk string) {
+					if chunk == "" {
+						return
+					}
+					streamingReply.WriteString(chunk)
+					streamHadText = true
+					card.SetReply(streamingReply.String())
+				},
+			})
+			visionCancel()
+		} else {
+			resp, err = callLLMStreamForConversation(ctx, proxyURL, model, requestMessages, forceToolUse, toolDefs, streamingDelta{
+				onText: func(chunk string) {
+					if chunk == "" {
+						return
+					}
+					streamingReply.WriteString(chunk)
+					streamHadText = true
+					card.SetReply(streamingReply.String())
+				},
+			})
+		}
 		if err != nil && !streamHadText {
+			if ctx.Err() == nil && isDeadlineError(err) {
+				replyText = "模型响应超时，Bridge 已停止本轮处理。图片消息可能触发了当前模型或代理端的长时间无响应，请换用支持视觉输入的模型后重试。"
+				card.SetStatus("error", "模型响应超时")
+				card.AppendStep(cardStep{Kind: "error", Title: "模型响应超时", Body: err.Error()})
+				m.logf("warn", "Feishu bridge 流式调用超时："+err.Error(), logMeta)
+				break
+			}
 			m.logf("info", "Feishu bridge 流式调用失败，回退非流式："+err.Error(), logMeta)
-			resp, err = callLLMForConversation(ctx, proxyURL, model, microcompactToolResults(messages), forceToolUse, toolDefs)
+			if plainVisionTurn {
+				visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
+				resp, err = callLLMPlain(visionCtx, proxyURL, model, requestMessages)
+				visionCancel()
+			} else {
+				resp, err = callLLMForConversation(ctx, proxyURL, model, requestMessages, forceToolUse, toolDefs)
+			}
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -1359,6 +1410,10 @@ func (m *Manager) synthesizeToolFinalReply(ctx context.Context, proxyURL string,
 	}
 	resp, err := callLLMPlainStreamForFinal(ctx, proxyURL, model, finalMessages, deltas)
 	if err != nil && !streamHadText {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			m.logf("warn", "Feishu bridge 最终答复流式超时："+err.Error(), meta)
+			return fallbackToolResultReply(lastToolOutput)
+		}
 		m.logf("info", "Feishu bridge 最终答复流式失败，回退非流式："+err.Error(), meta)
 		resp, err = callLLMPlain(ctx, proxyURL, model, finalMessages)
 	}
@@ -1607,18 +1662,22 @@ func mergeConversationBatch(batch []incomingEvent) incomingEvent {
 	}
 	merged := batch[len(batch)-1]
 	parts := make([]string, 0, len(batch))
+	resourceParts := make([]string, 0, len(batch))
 	eventIDs := make([]string, 0, len(batch))
 	for _, item := range batch {
-		text := normalizeConversationText(item.Content)
+		text := normalizeEventConversationText(item)
 		if text != "" {
 			parts = append(parts, text)
+		}
+		if len(extractFeishuImageKeys(item.Content)) > 0 {
+			resourceParts = append(resourceParts, strings.TrimSpace(item.Content))
 		}
 		if strings.TrimSpace(item.EventID) != "" {
 			eventIDs = append(eventIDs, strings.TrimSpace(item.EventID))
 		}
 	}
-	if len(parts) > 0 {
-		merged.Content = strings.Join(parts, "\n\n")
+	if len(parts) > 0 || len(resourceParts) > 0 {
+		merged.Content = strings.Join(append(resourceParts, parts...), "\n\n")
 	}
 	if len(eventIDs) > 0 {
 		merged.EventID = strings.Join(eventIDs, "+")
@@ -1626,25 +1685,21 @@ func mergeConversationBatch(batch []incomingEvent) incomingEvent {
 	return merged
 }
 
-func (m *Manager) buildConversationInput(ctx context.Context, event incomingEvent) string {
-	text := normalizeConversationText(event.Content)
+func (m *Manager) buildConversationInput(ctx context.Context, event incomingEvent) conversationInput {
+	text := normalizeEventConversationText(event)
 	quoteID := strings.TrimSpace(event.ReplyToMessageID)
-	if quoteID == "" || quoteID == strings.TrimSpace(event.MessageID) {
-		return text
+	if quoteID != "" && quoteID != strings.TrimSpace(event.MessageID) {
+		quote, err := m.fetchQuotedMessage(ctx, quoteID)
+		if err != nil {
+			m.logf("warn", "Feishu bridge 引用消息读取失败："+err.Error(), LogMeta{
+				ChatID:    event.ChatID,
+				MessageID: event.MessageID,
+			})
+		} else if quote = strings.TrimSpace(quote); quote != "" {
+			text = fmt.Sprintf("<quoted_message id=\"%s\">\n%s\n</quoted_message>\n\n%s", quoteID, quote, text)
+		}
 	}
-	quote, err := m.fetchQuotedMessage(ctx, quoteID)
-	if err != nil {
-		m.logf("warn", "Feishu bridge 引用消息读取失败："+err.Error(), LogMeta{
-			ChatID:    event.ChatID,
-			MessageID: event.MessageID,
-		})
-		return text
-	}
-	quote = strings.TrimSpace(quote)
-	if quote == "" {
-		return text
-	}
-	return fmt.Sprintf("<quoted_message id=\"%s\">\n%s\n</quoted_message>\n\n%s", quoteID, quote, text)
+	return m.buildMultimodalConversationInput(ctx, event, text)
 }
 
 func (m *Manager) fetchQuotedMessage(ctx context.Context, messageID string) (string, error) {
@@ -1669,10 +1724,203 @@ func (m *Manager) fetchQuotedMessage(ctx context.Context, messageID string) (str
 	return strings.TrimSpace(string(output)), nil
 }
 
+func (m *Manager) buildMultimodalConversationInput(ctx context.Context, event incomingEvent, text string) conversationInput {
+	imageKeys := extractFeishuImageKeys(event.Content)
+	if len(imageKeys) == 0 {
+		if strings.EqualFold(strings.TrimSpace(event.MessageType), "image") && strings.TrimSpace(text) == "" {
+			text = "用户发送了一张图片，但消息事件里没有 image_key，Bridge 无法下载图片内容。"
+		}
+		return conversationInput{Text: text, Content: text}
+	}
+	if len(imageKeys) > maxFeishuImageAttachments {
+		imageKeys = imageKeys[:maxFeishuImageAttachments]
+	}
+	parts := make([]map[string]any, 0, len(imageKeys)+1)
+	promptText := strings.TrimSpace(text)
+	if promptText == "" {
+		promptText = fmt.Sprintf("用户发送了 %d 张图片。请根据图片内容回答。", len(imageKeys))
+	}
+	parts = append(parts, map[string]any{"type": "text", "text": promptText})
+	for _, imageKey := range imageKeys {
+		dataURL, err := m.downloadFeishuImageDataURL(ctx, event.MessageID, imageKey)
+		if err != nil {
+			m.logf("warn", fmt.Sprintf("Feishu bridge 图片下载失败: key=%s err=%s", imageKey, err.Error()), LogMeta{
+				ChatID:    event.ChatID,
+				MessageID: event.MessageID,
+			})
+			parts[0]["text"] = strings.TrimSpace(parts[0]["text"].(string) + fmt.Sprintf("\n\n[图片 %s 下载失败：%s]", imageKey, err.Error()))
+			continue
+		}
+		m.logf("info", fmt.Sprintf("Feishu bridge 图片下载成功: key=%s payload=%d chars", imageKey, len(dataURL)), LogMeta{
+			ChatID:    event.ChatID,
+			MessageID: event.MessageID,
+		})
+		parts = append(parts, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url": dataURL,
+			},
+		})
+	}
+	if len(parts) == 1 {
+		return conversationInput{Text: parts[0]["text"].(string), Content: parts[0]["text"], HasImages: true}
+	}
+	return conversationInput{Text: promptText, Content: parts, HasImages: true}
+}
+
+func eventMayContainImage(event incomingEvent) bool {
+	msgType := strings.ToLower(strings.TrimSpace(event.MessageType))
+	return msgType == "image" || strings.Contains(strings.ToLower(event.Content), "image_key") || strings.Contains(event.Content, "img_")
+}
+
+func extractFeishuImageKeys(content string) []string {
+	seen := map[string]struct{}{}
+	keys := make([]string, 0, 2)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if !strings.HasPrefix(value, "img_") {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		keys = append(keys, value)
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &payload); err == nil {
+		walkJSONStrings(payload, func(key, value string) {
+			if strings.EqualFold(key, "image_key") || strings.HasPrefix(value, "img_") {
+				add(value)
+			}
+		})
+	}
+	for _, field := range strings.FieldsFunc(content, func(r rune) bool {
+		return !(r == '_' || r == '-' || r == '.' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z')
+	}) {
+		add(field)
+	}
+	return keys
+}
+
+func walkJSONStrings(value any, visit func(key, value string)) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, item := range v {
+			if s, ok := item.(string); ok {
+				visit(key, s)
+				continue
+			}
+			walkJSONStrings(item, visit)
+		}
+	case []any:
+		for _, item := range v {
+			walkJSONStrings(item, visit)
+		}
+	}
+}
+
+func (m *Manager) downloadFeishuImageDataURL(ctx context.Context, messageID string, imageKey string) (string, error) {
+	messageID = strings.TrimSpace(messageID)
+	imageKey = safeFeishuResourceName(imageKey)
+	if messageID == "" || imageKey == "" {
+		return "", errors.New("message_id 或 image_key 为空")
+	}
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil || strings.TrimSpace(cacheRoot) == "" {
+		cacheRoot = os.TempDir()
+	}
+	dir := filepath.Join(cacheRoot, "lingma-ipc-proxy", "feishu-images", safeFeishuResourceName(messageID))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	outputName := imageKey + ".dat"
+	downloadCtx, cancel := context.WithTimeout(ctx, feishuImageDownloadTimeout)
+	defer cancel()
+	cmd := commandContextWithEnv(downloadCtx, "lark-cli", "im", "+messages-resources-download",
+		"--as", "bot",
+		"--message-id", messageID,
+		"--file-key", imageKey,
+		"--type", "image",
+		"--output", outputName,
+	)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if errors.Is(downloadCtx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("图片下载超时（%s）", feishuImageDownloadTimeout)
+		}
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	path := filepath.Join(dir, outputName)
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Size() > maxFeishuImageBytes {
+		return "", fmt.Errorf("图片过大（%.1f MB），当前上限 %.1f MB", float64(info.Size())/1024/1024, float64(maxFeishuImageBytes)/1024/1024)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	mimeType := http.DetectContentType(data)
+	if !strings.HasPrefix(mimeType, "image/") {
+		mimeType = "image/png"
+	}
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+func safeFeishuResourceName(value string) string {
+	value = strings.TrimSpace(value)
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func normalizeConversationText(text string) string {
 	text = strings.TrimSpace(text)
 	text = strings.TrimPrefix(text, "- ")
 	return strings.TrimSpace(text)
+}
+
+func normalizeEventConversationText(event incomingEvent) string {
+	text := normalizeConversationText(event.Content)
+	if !eventMayContainImage(event) {
+		return text
+	}
+	content := strings.TrimSpace(event.Content)
+	if content == "" || !strings.HasPrefix(content, "{") {
+		return stripFeishuImagePlaceholders(text)
+	}
+	for _, field := range []string{"text", "plain_text", "markdown"} {
+		if found := firstJSONStringField([]byte(content), field); found != "" {
+			return stripFeishuImagePlaceholders(normalizeConversationText(found))
+		}
+	}
+	if len(extractFeishuImageKeys(content)) > 0 {
+		return ""
+	}
+	return text
+}
+
+func stripFeishuImagePlaceholders(text string) string {
+	for {
+		start := strings.Index(text, "[Image:")
+		if start < 0 {
+			return strings.TrimSpace(text)
+		}
+		end := strings.Index(text[start:], "]")
+		if end < 0 {
+			return strings.TrimSpace(text[:start])
+		}
+		text = text[:start] + text[start+end+1:]
+	}
 }
 
 func conversationKeyForEvent(event incomingEvent) string {
@@ -2626,6 +2874,13 @@ func formatCommandFailure(err error, output []byte) string {
 		return err.Error()
 	}
 	return fmt.Sprintf("%v: %s", err, text)
+}
+
+func isDeadlineError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded")
 }
 
 func firstJSONStringField(data []byte, field string) string {

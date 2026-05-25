@@ -1,8 +1,12 @@
 package feishu
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSSEStreamAccumulatesTextAndToolCalls(t *testing.T) {
@@ -101,5 +105,29 @@ func TestParseSSEStreamMultipleToolCallsByIndex(t *testing.T) {
 	}
 	if calls[0].Function.Arguments != `{"x":1}` || calls[1].Function.Arguments != `{"y":2}` {
 		t.Fatalf("arguments: %q %q", calls[0].Function.Arguments, calls[1].Function.Arguments)
+	}
+}
+
+func TestRunStreamingRequestHonorsContextDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := runStreamingRequest(ctx, server.URL, map[string]any{
+		"model":    "kmodel",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	}, streamingDelta{})
+	if err == nil {
+		t.Fatal("expected deadline error")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("expected deadline error, got %v", err)
 	}
 }

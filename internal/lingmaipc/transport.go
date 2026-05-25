@@ -171,6 +171,40 @@ func hasConfiguredWebSocketURL(explicit string) bool {
 	return strings.TrimSpace(explicit) != "" || strings.TrimSpace(os.Getenv("LINGMA_PROXY_WS_URL")) != ""
 }
 
+func DefaultImageURIScheme(explicitPipe string, explicitWebSocketURL string) string {
+	values := []string{
+		explicitPipe,
+		explicitWebSocketURL,
+		os.Getenv("LINGMA_IPC_PIPE"),
+		os.Getenv("LINGMA_IPC_SOCKET"),
+		os.Getenv("LINGMA_PROXY_WS_URL"),
+		os.Getenv("LINGMA_SHARED_CLIENT_INFO"),
+	}
+	for _, value := range values {
+		if isQoderPath(value) {
+			return "qodercn"
+		}
+	}
+
+	for _, path := range defaultSharedClientInfoPaths() {
+		if _, err := os.Stat(path); err == nil {
+			if isQoderPath(path) {
+				return "qodercn"
+			}
+			break
+		}
+	}
+	if socket := newestExistingPath(defaultUnixSocketPaths()); isQoderPath(socket) {
+		return "qodercn"
+	}
+	return "lingma"
+}
+
+func isQoderPath(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.Contains(value, "qoder") || strings.Contains(value, "qodercn")
+}
+
 func normalizePipePath(pipe string) string {
 	if PipeDir == "" || strings.HasPrefix(pipe, PipeDir) {
 		return pipe
