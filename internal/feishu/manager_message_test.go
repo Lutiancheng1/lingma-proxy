@@ -425,6 +425,45 @@ func TestFakeLarkCLIExecutesThroughCommandEnv(t *testing.T) {
 	}
 }
 
+func TestReplyToMessageSplitsLongMarkdown(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	manager := NewManager(ManagerOptions{})
+	longReply := strings.Repeat("长内容\n", 900)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := manager.replyToMessage(ctx, "om_long_reply", longReply); err != nil {
+		t.Fatal(err)
+	}
+
+	got := string(mustReadFileContainingEventually(t, replyLog, "（2/"))
+	if count := strings.Count(got, "--message-id om_long_reply"); count < 2 {
+		t.Fatalf("expected chunked replies, got %d commands: %s", count, got)
+	}
+	if !strings.Contains(got, "（1/") || !strings.Contains(got, "（2/") {
+		t.Fatalf("chunk labels missing: %s", got)
+	}
+}
+
+func TestAuthLoginToolRequestsBridgeLogin(t *testing.T) {
+	result := executeToolContext(context.Background(), "lark_cli_exec", map[string]any{
+		"argv": []any{"auth", "login"},
+	})
+	if !result.NeedsLogin {
+		t.Fatalf("NeedsLogin = false, output=%s", result.Output)
+	}
+	if !result.IsError {
+		t.Fatal("auth login should be reported as a controlled tool error")
+	}
+}
+
+func TestPermissionRequirementDetectsNeedUserAuthorization(t *testing.T) {
+	perm := parsePermissionRequirement(`{"ok":false,"error":{"message":"API call failed: need_user_authorization (user: )","hint":"current command requires user authorization"}}`)
+	if !perm.NeedsLogin {
+		t.Fatalf("NeedsLogin = false for need_user_authorization")
+	}
+}
+
 func installFakeLarkCLI(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

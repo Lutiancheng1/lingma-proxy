@@ -1,6 +1,9 @@
 package remote
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -530,6 +533,33 @@ func TestCandidateLingmaCacheDirsPrefersQoderCNBeforeLingma(t *testing.T) {
 	}
 }
 
+func TestImportLingmaCacheCredentialSkipsExpiredCandidate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+
+	expiredDir := filepath.Join(home, ".qoder-cn")
+	validDir := filepath.Join(home, ".lingma")
+	if err := writeCacheCredential(expiredDir, "expired-key", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCacheCredential(validDir, "valid-key", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	cred, err := importLingmaCacheCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred.CosyKey != "valid-key" {
+		t.Fatalf("CosyKey = %q, want valid-key", cred.CosyKey)
+	}
+	if !strings.Contains(cred.Source, filepath.Join(".lingma", "cache", "user")) {
+		t.Fatalf("Source = %q, want .lingma cache", cred.Source)
+	}
+}
+
 func TestLoadMachineIDReadsVSCodeSharedClientCacheID(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "cache"), 0755); err != nil {
@@ -545,6 +575,42 @@ func TestLoadMachineIDReadsVSCodeSharedClientCacheID(t *testing.T) {
 	if got != "abcdefghijklmnop1234" {
 		t.Fatalf("machine id = %q", got)
 	}
+}
+
+func writeCacheCredential(dir string, key string, expireAt time.Time) error {
+	machineID := "abcdefghijklmnop1234567890"
+	if err := os.MkdirAll(filepath.Join(dir, "cache"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cache", "id"), []byte(machineID), 0o644); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"key":               key,
+		"encrypt_user_info": "encrypted-user",
+		"uid":               "uid-" + key,
+		"expire_time":       expireAt.UnixMilli(),
+	})
+	if err != nil {
+		return err
+	}
+	block, err := aes.NewCipher([]byte(machineID[:aes.BlockSize]))
+	if err != nil {
+		return err
+	}
+	padded := padPKCS7(payload, aes.BlockSize)
+	encrypted := make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, []byte(machineID[:aes.BlockSize])).CryptBlocks(encrypted, padded)
+	return os.WriteFile(filepath.Join(dir, "cache", "user"), []byte(base64.StdEncoding.EncodeToString(encrypted)), 0o644)
+}
+
+func padPKCS7(data []byte, blockSize int) []byte {
+	padLen := blockSize - len(data)%blockSize
+	out := append([]byte(nil), data...)
+	for i := 0; i < padLen; i++ {
+		out = append(out, byte(padLen))
+	}
+	return out
 }
 
 func TestLoadMachineIDReadsQoderCLIAuthIDFallback(t *testing.T) {

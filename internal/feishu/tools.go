@@ -22,6 +22,7 @@ type ToolCall struct {
 type ToolExecutionResult struct {
 	Output        string
 	MissingScopes []string
+	NeedsLogin    bool
 	ConsoleURL    string
 	Hint          string
 	IsError       bool
@@ -29,6 +30,7 @@ type ToolExecutionResult struct {
 
 type permissionRequirement struct {
 	Scopes     []string
+	NeedsLogin bool
 	ConsoleURL string
 	Hint       string
 }
@@ -41,7 +43,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_cli_exec",
-				"description": "通用飞书 CLI 执行入口。适用于云盘、邮箱、通讯录、妙记、视频会议、幻灯片、白板、审批、考勤、OKR 等当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；如果未显式指定 --as，则会自动追加 --as user。\n\n重要命令格式规则：\n- lark-cli 的子命令分两类：原生子命令（如 drive file list）和 skill 快捷命令（带 + 前缀，如 im +chat-list、im +messages-send）\n- IM 相关操作必须使用 + 前缀快捷命令：im +chat-list（列出群聊）、im +chat-create（创建群聊）、im +messages-send（发消息）、im +messages-search（搜消息）、im +messages-reply（回复消息）\n- 其他 skill 快捷命令：calendar +agenda、calendar +create、docs +create、docs +fetch 等\n- 不存在 im chats list、im chat list、im messages send 这类不带 + 的写法，这些会报错\n- 示例 argv：[\"im\", \"+chat-list\", \"--limit\", \"10\"]、[\"drive\", \"file\", \"list\"]、[\"calendar\", \"+agenda\"]",
+				"description": "通用飞书 CLI 执行入口。适用于云盘、邮箱、通讯录、妙记、视频会议、幻灯片、白板、审批、考勤、OKR 等当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；如果未显式指定 --as，则会自动追加 --as user。\n\n重要命令格式规则：\n- 授权不要通过本工具执行 auth login；遇到 need_user_authorization 时 Bridge 会自动发起登录并返回授权链接\n- lark-cli 的子命令分两类：原生子命令（如 drive file list）和 skill 快捷命令（带 + 前缀，如 im +chat-list、im +messages-send）\n- IM 相关操作必须使用 + 前缀快捷命令：im +chat-list（列出群聊）、im +chat-create（创建群聊）、im +messages-send（发消息）、im +messages-search（搜消息）、im +messages-reply（回复消息）\n- 其他 skill 快捷命令：calendar +agenda、calendar +create、docs +create、docs +fetch 等\n- 不存在 im chats list、im chat list、im messages send 这类不带 + 的写法，这些会报错\n- 示例 argv：[\"im\", \"+chat-list\", \"--limit\", \"10\"]、[\"drive\", \"file\", \"list\"]、[\"calendar\", \"+agenda\"]",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -275,6 +277,9 @@ func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 			return nil, fmt.Errorf("argv 不能为空")
 		}
 		argv = normalizeLarkCLIArgv(argv)
+		if isLarkAuthLoginArgv(argv) {
+			return append([]string{"lark-cli"}, argv...), nil
+		}
 		if !containsAsFlag(argv) {
 			argv = append(argv, "--as", "user")
 		}
@@ -403,6 +408,13 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	if err != nil {
 		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 	}
+	if isLarkAuthLoginCommand(cmdArgs) {
+		return ToolExecutionResult{
+			Output:     "[error] auth login 由 Feishu Bridge 登录流程接管；已请求 Bridge 发起授权并返回授权链接。",
+			NeedsLogin: true,
+			IsError:    true,
+		}
+	}
 	ctx, cancel := context.WithTimeout(parent, toolTimeout())
 	defer cancel()
 	cmd := commandContextWithEnv(ctx, cmdArgs[0], cmdArgs[1:]...)
@@ -424,6 +436,7 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 			return ToolExecutionResult{
 				Output:        fmt.Sprintf("[error] %s (exit=%d)", result, exitErr.ExitCode()),
 				MissingScopes: perm.Scopes,
+				NeedsLogin:    perm.NeedsLogin,
 				ConsoleURL:    perm.ConsoleURL,
 				Hint:          perm.Hint,
 				IsError:       true,
@@ -432,6 +445,7 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 		return ToolExecutionResult{
 			Output:        "[error] " + err.Error(),
 			MissingScopes: perm.Scopes,
+			NeedsLogin:    perm.NeedsLogin,
 			ConsoleURL:    perm.ConsoleURL,
 			Hint:          perm.Hint,
 			IsError:       true,
@@ -668,12 +682,34 @@ func containsAsFlag(argv []string) bool {
 	return false
 }
 
+func isLarkAuthLoginArgv(argv []string) bool {
+	if len(argv) < 2 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(argv[0]), "auth") &&
+		strings.EqualFold(strings.TrimSpace(argv[1]), "login")
+}
+
+func isLarkAuthLoginCommand(cmdArgs []string) bool {
+	if len(cmdArgs) < 3 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(cmdArgs[0]), "lark-cli") &&
+		isLarkAuthLoginArgv(cmdArgs[1:])
+}
+
 func parsePermissionRequirement(text string) permissionRequirement {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return permissionRequirement{}
 	}
 	requirement := permissionRequirement{}
+	lowerText := strings.ToLower(text)
+	if strings.Contains(lowerText, "need_user_authorization") ||
+		strings.Contains(lowerText, "requires user authorization") ||
+		strings.Contains(lowerText, "current command requires user authorization") {
+		requirement.NeedsLogin = true
+	}
 
 	var payload map[string]any
 	if json.Unmarshal([]byte(text), &payload) == nil {
@@ -694,6 +730,10 @@ func parsePermissionRequirement(text string) permissionRequirement {
 			}
 			if value, ok := errValue["message"].(string); ok && len(requirement.Scopes) == 0 {
 				requirement.Scopes = append(requirement.Scopes, extractScopesFromHint(value)...)
+				if strings.Contains(strings.ToLower(value), "need_user_authorization") ||
+					strings.Contains(strings.ToLower(value), "requires user authorization") {
+					requirement.NeedsLogin = true
+				}
 			}
 		}
 	}

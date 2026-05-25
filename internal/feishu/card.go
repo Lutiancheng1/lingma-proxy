@@ -531,7 +531,7 @@ func (c *cardWriter) flush(final bool) {
 	c.dirty = false
 	c.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// If no card entity yet, create one and send the initial card.

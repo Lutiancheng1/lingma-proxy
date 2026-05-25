@@ -20,6 +20,7 @@ const (
 	persistedConversationRecentLimit = 8
 	conversationDebounceDelay        = 600 * time.Millisecond
 	autoCompactTokenThreshold        = 60000
+	feishuMarkdownReplyChunkLimit    = 2800
 )
 
 var (
@@ -494,6 +495,41 @@ func (m *Manager) startScopeLogin(ctx context.Context, scopes ...string) (string
 		m.mu.RUnlock()
 		return strings.TrimSpace(url), nil
 	}
+}
+
+func (m *Manager) startRecommendedLogin(ctx context.Context) (string, error) {
+	m.mu.Lock()
+	if m.status.LoginRunning {
+		url := m.status.LoginURL
+		m.mu.Unlock()
+		return strings.TrimSpace(url), nil
+	}
+	m.mu.Unlock()
+
+	urlCh := make(chan string, 1)
+	if err := m.startLoginWithArgs(ctx, []string{"lark-cli", "auth", "login", "--recommend"}, urlCh); err != nil {
+		return "", err
+	}
+	select {
+	case url := <-urlCh:
+		return strings.TrimSpace(url), nil
+	case <-time.After(3 * time.Second):
+		m.mu.RLock()
+		url := m.status.LoginURL
+		m.mu.RUnlock()
+		return strings.TrimSpace(url), nil
+	}
+}
+
+func cliLocationHint() string {
+	cli := detectBinary("lark-cli", "--version")
+	if !cli.Found {
+		return "本机未检测到 lark-cli，请在 Lingma Proxy 的 Feishu Bridge 设置页点击“安装 CLI 与 Skills”。"
+	}
+	if strings.TrimSpace(cli.Path) == "" {
+		return "本机已检测到 lark-cli，但未能解析到完整路径。"
+	}
+	return "本机 lark-cli 路径：" + cli.Path
 }
 
 func (m *Manager) startLoginWithArgs(ctx context.Context, args []string, urlCh ...chan string) error {
@@ -1116,12 +1152,49 @@ conversation:
 			result := executeToolContextWithRuntime(ctx, cfg, m.mcp, tc.Function.Name, args)
 			toolCallsExecuted = true
 			content := result.Output
+			if result.NeedsLogin {
+				loginURL, authErr := m.startRecommendedLogin(context.Background())
+				if authErr != nil {
+					replyText = "当前操作需要飞书用户授权。我已尝试由 Bridge 自动发起授权，但这次没有成功。请到 Lingma Proxy 的 Feishu Bridge 设置页重新点击“登录授权”，完成后再让我继续。\n\n" + cliLocationHint()
+					content = replyText
+					card.UpdateLastStep(func(step *cardStep) {
+						step.Kind = "error"
+						step.Done = true
+						step.Body = "需要用户授权（自动授权失败）"
+					})
+					m.logf("warn", "Feishu bridge 自动发起用户授权失败："+authErr.Error(), logMeta)
+				} else {
+					replyText = "当前操作需要飞书用户授权。我已经为你发起授权流程，请打开下面的授权链接完成授权；授权完成后再对我说一次，我会继续处理。" + loginHint(loginURL)
+					if strings.TrimSpace(loginURL) == "" {
+						replyText = "当前操作需要飞书用户授权。我已经为你发起授权流程，但暂时没有捕获到完整授权链接。请到 Lingma Proxy 的 Feishu Bridge 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。\n\n" + cliLocationHint()
+					}
+					content = replyText
+					card.UpdateLastStep(func(step *cardStep) {
+						step.Kind = "error"
+						step.Done = true
+						step.Body = "需要用户授权（已自动发起）"
+					})
+					m.logf("info", "Feishu bridge 检测到需要用户授权，已自动发起登录", logMeta)
+				}
+				messages = append(messages, map[string]any{
+					"role":         "tool",
+					"tool_call_id": tc.ID,
+					"content":      content,
+				})
+				rawHistory = append(rawHistory, map[string]any{
+					"role":         "tool",
+					"tool_call_id": tc.ID,
+					"content":      content,
+				})
+				card.SetStatus("error", "需要授权")
+				break conversation
+			}
 			if len(result.MissingScopes) > 0 {
 				scopes := uniqueNonEmpty(result.MissingScopes)
 				scopeLabel := strings.Join(scopes, ", ")
 				loginURL, authErr := m.startScopeLogin(context.Background(), scopes...)
 				if authErr != nil {
-					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已尝试为你发起授权，但这次没有成功。请到 Lingma Proxy 的 Feishu Bridge 设置页重新点击“登录授权”，完成后再让我继续。", scopeLabel)
+					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已尝试由 Bridge 自动发起授权，但这次没有成功。请到 Lingma Proxy 的 Feishu Bridge 设置页重新点击“登录授权”，完成后再让我继续。\n\n%s", scopeLabel, cliLocationHint())
 					content = replyText
 					card.UpdateLastStep(func(step *cardStep) {
 						step.Kind = "error"
@@ -1131,6 +1204,9 @@ conversation:
 					m.logf("warn", "Feishu bridge 自动发起 scope 授权失败："+authErr.Error(), logMeta)
 				} else {
 					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已经为你发起授权流程，请先在浏览器完成授权。如果 Lingma Proxy 已打开，请直接到 Feishu Bridge 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。%s", scopeLabel, loginHint(loginURL))
+					if strings.TrimSpace(loginURL) == "" {
+						replyText = fmt.Sprintf("当前操作缺少权限 %s。我已经为你发起授权流程，但暂时没有捕获到完整授权链接。请到 Lingma Proxy 的 Feishu Bridge 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。\n\n%s", scopeLabel, cliLocationHint())
+					}
 					content = replyText
 					card.UpdateLastStep(func(step *cardStep) {
 						step.Kind = "error"
@@ -2566,12 +2642,76 @@ func findJSONStringField(value any, field string) string {
 }
 
 func (m *Manager) replyToMessage(ctx context.Context, messageID string, reply string) error {
-	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "+messages-reply", "--as", "bot", "--message-id", messageID, "--markdown", reply)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	parts := splitMarkdownReply(reply, feishuMarkdownReplyChunkLimit)
+	if len(parts) == 0 {
+		return nil
+	}
+	for i, part := range parts {
+		if len(parts) > 1 {
+			part = fmt.Sprintf("（%d/%d）\n\n%s", i+1, len(parts), part)
+		}
+		sendCtx := ctx
+		if sendCtx == nil || sendCtx.Err() != nil {
+			sendCtx = context.Background()
+		}
+		cmdCtx, cancel := context.WithTimeout(sendCtx, 15*time.Second)
+		cmd := commandContextWithEnv(cmdCtx, "lark-cli", "im", "+messages-reply", "--as", "bot", "--message-id", messageID, "--markdown", part)
+		output, err := cmd.CombinedOutput()
+		cancel()
+		if err != nil {
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		}
 	}
 	return nil
+}
+
+func splitMarkdownReply(reply string, limit int) []string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return nil
+	}
+	if limit <= 0 || len([]rune(reply)) <= limit {
+		return []string{reply}
+	}
+	var parts []string
+	var current strings.Builder
+	flush := func() {
+		text := strings.TrimSpace(current.String())
+		if text != "" {
+			parts = append(parts, text)
+		}
+		current.Reset()
+	}
+	appendRunes := func(text string) {
+		runes := []rune(text)
+		for len(runes) > 0 {
+			remaining := limit - len([]rune(current.String()))
+			if remaining <= 0 {
+				flush()
+				remaining = limit
+			}
+			if remaining > len(runes) {
+				remaining = len(runes)
+			}
+			current.WriteString(string(runes[:remaining]))
+			runes = runes[remaining:]
+			if len([]rune(current.String())) >= limit {
+				flush()
+			}
+		}
+	}
+	for _, line := range strings.SplitAfter(reply, "\n") {
+		if len([]rune(line)) > limit {
+			appendRunes(line)
+			continue
+		}
+		if current.Len() > 0 && len([]rune(current.String()))+len([]rune(line)) > limit {
+			flush()
+		}
+		current.WriteString(line)
+	}
+	flush()
+	return parts
 }
 
 // sendCardReply posts an interactive (schema v1) card as a reply to rootMessageID

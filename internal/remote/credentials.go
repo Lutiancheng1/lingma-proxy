@@ -37,6 +37,8 @@ type storedCredentialFile struct {
 	} `json:"auth"`
 }
 
+const credentialExpiryProbeMargin = 2 * time.Minute
+
 func LoadCredential(authFile string) (Credential, error) {
 	if path := strings.TrimSpace(authFile); path != "" {
 		return loadCredentialFile(expandHome(path))
@@ -69,6 +71,10 @@ func importLingmaCacheCredential() (Credential, error) {
 	for _, lingmaDir := range candidateLingmaCacheDirs() {
 		cred, err := importLingmaCacheCredentialFromDir(lingmaDir)
 		if err == nil {
+			if IsExpired(cred, credentialExpiryProbeMargin) {
+				attempts = append(attempts, credentialLoadAttempt{Path: lingmaDir, Err: fmt.Errorf("登录缓存已过期: %s", formatCredentialExpireTime(cred.TokenExpireTime))})
+				continue
+			}
 			return cred, nil
 		}
 		attempts = append(attempts, credentialLoadAttempt{Path: lingmaDir, Err: err})
@@ -428,6 +434,13 @@ func parseExpireAny(value any) int64 {
 
 func IsExpired(cred Credential, margin time.Duration) bool {
 	return cred.TokenExpireTime > 0 && time.Now().Add(margin).UnixMilli() > cred.TokenExpireTime
+}
+
+func formatCredentialExpireTime(value int64) string {
+	if value <= 0 {
+		return "unknown"
+	}
+	return time.UnixMilli(value).Format(time.RFC3339)
 }
 
 func MachineOSHeader() string {
