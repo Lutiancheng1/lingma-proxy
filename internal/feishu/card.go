@@ -735,9 +735,7 @@ func (c *cardWriter) fallbackMarkdown(rootMsg string, reply string) {
 	if strings.TrimSpace(reply) == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	if err := c.manager.replyToMessage(ctx, rootMsg, reply); err != nil && c.manager != nil {
+	if err := c.manager.replyToMessage(context.Background(), rootMsg, reply); err != nil && c.manager != nil {
 		c.manager.logf("warn", "Feishu bridge markdown 兜底回复失败："+err.Error(), c.logMeta)
 	}
 }
