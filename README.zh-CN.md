@@ -279,6 +279,7 @@ GitHub Actions 会在 Release 中产出：
 | Anthropic Messages base64 image block | 已验证 | 通过 `/v1/messages` 实测，模型可以正确描述图片内容。 |
 | Claude Code 粘贴图片 | 已验证 | 已用 Claude Code 风格的 Anthropic 请求实测：长上下文、tools、base64 图片块和 Claude image-cache 路径标记同时存在时可用。 |
 | Claude Code 粘贴图片 + tools | 已验证 | 远端模式会先用 IPC 提取最新图片轮次的上下文，再回到 Remote API 原生工具调用。 |
+| QoderCN IPC 图片请求 | 已验证 | 代理会使用 QoderCN 原生的 `qodercn:///agent/file?path=...` 图片 URI，不再误用旧 Lingma URI；已用 `/Users/tiancheng/Pictures/ik2.jpg` 实测。 |
 | Hermes CLI `hermes chat --image` | 已验证 | 使用 `--provider custom --model kmodel --image /Users/tiancheng/Pictures/ik2.jpg` 实测；Hermes 会向 `/v1/chat/completions` 发送 OpenAI `image_url`，模型可以正确描述图片内容。 |
 | OpenClaw `infer image describe --file` | 已验证 | 配置 `lingma-proxy/kmodel` 为 `text+image` 后实测；OpenClaw 会发送 OpenAI `image_url`，模型可以正确描述图片内容。 |
 | OpenClaw `agent` 图片标记 | 部分验证 | 图片文件进入 OpenClaw 每个 session 的 sandbox 后可用；直接引用 `/Users/.../Pictures/ik2.jpg` 会先被 OpenClaw 自己的沙盒拒绝，尚未作为图片请求进入代理。 |
@@ -287,6 +288,7 @@ GitHub Actions 会在 Release 中产出：
 关键限制和行为：
 
 - 远端 API 模式的图片理解仍依赖 Lingma IPC 图片链路，因为直连远端聊天接口不会稳定消费本地 `file://` 和 data URL 图片。
+- IPC 图片 URI 会按运行时区分：QoderCN 使用 `qodercn:///agent/file?path=...`，旧 Lingma 运行时继续使用 `lingma:///agent/file?path=...`。
 - 如果请求同时包含图片和工具，代理会只取“最后一条带图片的用户消息”构造一个紧凑的 IPC 图片理解请求，把得到的图片上下文追加回原请求，再交给 Remote API 原生工具调用。
 - 因此图片请求要求 Lingma App / IDE 插件保持运行；如果 Lingma 被彻底退出，纯文本 Remote API 仍可工作，但图片理解会失败并提示重新打开 Lingma。
 - 请求日志会脱敏大段图片 base64，只保留图片载荷标记，避免日志 UI 被撑爆。

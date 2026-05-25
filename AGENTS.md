@@ -70,7 +70,7 @@ ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 Dev
 
 ## 关键设计
 
-- **图片传输**：通过本地缓存目录生成 `lingma:///agent/file?path=` URI
+- **图片传输**：通过本地缓存目录生成运行时专属 URI；QoderCN 使用 `qodercn:///agent/file?path=`，旧 Lingma 使用 `lingma:///agent/file?path=`
 - **工具调用**：Prompt Injection 方式，模型输出 `{"tool":"NAME","parameters":{...}}` 格式 action block
 - **Session 复用**：首次请求创建 session，后续请求复用以保持对话上下文
 - **流式输出**：SSE 格式，Anthropic 使用 `content_block_start/delta/stop` 事件序列

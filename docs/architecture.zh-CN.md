@@ -188,6 +188,7 @@ OpenAI / Anthropic 兼容层。
 职责：
 
 - 自动探测 WebSocket / pipe 端点，优先使用 QoderCN 运行时文件，再回退 Lingma 运行时文件
+- 提供运行时对应的 IPC 图片 URI scheme：QoderCN 使用 `qodercn:///...`，旧 Lingma 使用 `lingma:///...`
 - 建立连接与重连
 - 发送 RPC：
   - `session/new`
