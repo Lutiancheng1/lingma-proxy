@@ -281,8 +281,10 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 
 打包要求：
 
-- 生产包不自动打开 Inspector / 调试入口
-- 本地开发可通过 `LINGMA_DESKTOP_DEBUG=1` 显式开启
+- 桌面包保留 Wails DevTools，让右键默认菜单可以打开 `Inspect Element`
+- 打包后的 App 默认不自动弹出 Inspector
+- 只有通过 `LINGMA_DESKTOP_DEBUG=1` 启动时才会启动即打开 Inspector
+- 仅本地重建包可用 `ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh` 关闭右键调试菜单
 
 ---
 

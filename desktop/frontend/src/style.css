@@ -73,6 +73,7 @@ body,
 body {
   overflow: hidden;
   background: var(--bg);
+  --default-contextmenu: show;
 }
 
 :root[data-theme='dark'] body {
@@ -1069,7 +1070,7 @@ button {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  height: 295px;
+  height: 310px;
 }
 
 .model-card-list,

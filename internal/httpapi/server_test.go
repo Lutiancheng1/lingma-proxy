@@ -96,6 +96,48 @@ func TestCapabilitiesAdvertiseAgentCompatibility(t *testing.T) {
 	}
 }
 
+func TestDebugAppLogsUsesProviderAndSkipsRecorder(t *testing.T) {
+	server := NewServer("", service.New(service.Config{
+		Model:   "Qwen3-Coder",
+		Timeout: time.Second,
+	}))
+	server.AppLogs = func(limit int, source string) []DebugAppLogRecord {
+		if limit != 7 {
+			t.Fatalf("limit = %d", limit)
+		}
+		if source != "app" {
+			t.Fatalf("source = %q", source)
+		}
+		return []DebugAppLogRecord{{
+			Time:    "12:00:00",
+			Source:  "app",
+			Level:   "info",
+			Message: "hello",
+		}}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/app-logs?limit=7&source=app", nil)
+	rec := httptest.NewRecorder()
+	server.http.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["kind"] != "desktop_app_logs" {
+		t.Fatalf("kind = %#v", body["kind"])
+	}
+	if body["count"].(float64) != 1 {
+		t.Fatalf("count = %#v", body["count"])
+	}
+	if len(server.debugRecords(10)) != 0 {
+		t.Fatalf("debug app log inspection should not be recorded as a request")
+	}
+}
+
 func TestResponsesRequestToChatRequest(t *testing.T) {
 	req := openAIResponsesRequest{
 		Model:        "resp-model",

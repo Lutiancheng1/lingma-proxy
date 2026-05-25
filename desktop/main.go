@@ -16,9 +16,12 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+var devtoolsBuild = "false"
+
 func main() {
 	app := NewApp()
-	enableInspector := os.Getenv("LINGMA_DESKTOP_DEBUG") == "1"
+	openInspectorOnStartup := os.Getenv("LINGMA_DESKTOP_DEBUG") == "1"
+	enableInspector := openInspectorOnStartup || devtoolsBuild == "true"
 
 	err := wails.Run(&options.App{
 		Title:             "Lingma Proxy",
@@ -32,7 +35,7 @@ func main() {
 		},
 		EnableDefaultContextMenu: enableInspector,
 		Debug: options.Debug{
-			OpenInspectorOnStartup: enableInspector,
+			OpenInspectorOnStartup: openInspectorOnStartup,
 		},
 		BackgroundColour: &options.RGBA{R: 238, G: 243, B: 248, A: 255},
 		Menu:             appMenu(app),

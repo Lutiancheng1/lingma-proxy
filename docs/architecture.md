@@ -282,8 +282,10 @@ Persisted local state:
 
 Production packaging rules:
 
-- packaged app should not auto-open inspector
-- local development can opt in with `LINGMA_DESKTOP_DEBUG=1`
+- desktop packages keep Wails DevTools enabled so the right-click default context menu can open `Inspect Element`
+- packaged apps should not auto-open inspector by default
+- launch with `LINGMA_DESKTOP_DEBUG=1` only when the inspector should open immediately on startup
+- local-only rebuilds may opt out with `ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh`
 
 ---
 

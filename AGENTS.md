@@ -16,6 +16,7 @@ go build -o lingma-ipc-proxy ./cmd/lingma-ipc-proxy  # 编译
 nohup ./lingma-ipc-proxy > /tmp/lingma-proxy.log 2>&1 &  # 后台运行
 pkill -f "lingma-ipc-proxy"         # 停止
 ./scripts/rebuild-local-app.sh      # 本地桌面版：打包 -> 制停旧进程 -> 覆盖 /Applications -> 重新打开
+ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 DevTools 右键菜单
 ```
 
 ## 强制规则（必须遵守）
@@ -40,6 +41,7 @@ pkill -f "lingma-ipc-proxy"         # 停止
 - 编译通过后再告知用户测试（`go build` 无错误）
 - 修改后重启代理再测试（`pkill` + `nohup`）
 - 本地桌面版覆盖安装必须使用 `./scripts/rebuild-local-app.sh`，禁止手工执行“退出/复制/打开”零散步骤
+- Release workflow 和默认本地重建都必须保留 Wails `-devtools` + `main.devtoolsBuild=true`，让桌面包右键菜单可打开 Inspect Element；只允许用 `ENABLE_DEVTOOLS=0` 关闭本地调试包
 - 优先用 `search_replace` 修改现有文件，避免创建新文件
 - 不主动创建 README/文档，除非用户明确要求
 - 中文回复用户，代码注释保持英文

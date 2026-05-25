@@ -121,6 +121,7 @@ GitHub Actions 会在 Release 中产出：
 - **设置**：主机、端口、传输方式、超时、WebSocket 地址、Named Pipe、工作目录、当前文件、会话策略等。
 - **日志**：代理启动、模型同步、健康检查、配置保存、错误事件等。
 - **反馈导出**：支持导出脱敏后的反馈压缩包，包含应用日志、请求日志、配置摘要、运行环境与探测信息，便于提交 Issue 或离线反馈。
+- **右键检查元素**：本地包和正式 Release 桌面包都保留 Wails DevTools，可在应用里右键选择 `Inspect Element` 打开 WebView 控制台排查样式和运行时问题。
 
 ### 截图
 
@@ -972,7 +973,7 @@ macOS：
 ```bash
 npm ci --prefix desktop/frontend
 cd desktop
-wails build -platform darwin/arm64 -clean
+wails build -platform darwin/arm64 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
 ```
 
 Windows：
@@ -980,7 +981,7 @@ Windows：
 ```powershell
 npm ci --prefix desktop/frontend
 cd desktop
-wails build -platform windows/amd64 -clean
+wails build -platform windows/amd64 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
 ```
 
 Ubuntu 上构建 Linux 桌面端：
@@ -989,7 +990,7 @@ Ubuntu 上构建 Linux 桌面端：
 sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 npm ci --prefix desktop/frontend
 cd desktop
-wails build -platform linux/amd64 -tags webkit2_41 -clean
+wails build -platform linux/amd64 -tags webkit2_41 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
 ```
 
 桌面端最终 App 名称统一为：
@@ -999,6 +1000,8 @@ Lingma Proxy
 ```
 
 Release 资产文件名仍使用 `lingma-proxy-desktop_<tag>_...` 区分桌面端和 CLI 端。
+
+桌面包会保留 Wails DevTools，以便右键菜单打开 `Inspect Element`。应用不会默认弹出 Inspector；只有通过 `LINGMA_DESKTOP_DEBUG=1` 启动时才会启动即打开控制台。
 
 ## GitHub Actions Release
 
@@ -1072,6 +1075,8 @@ Release workflow 会执行：
 7. macOS 下自动执行 `./scripts/rebuild-local-app.sh`
 
 如果只想跑代码级闸门、不重建已安装桌面端，可以用 `./scripts/release-check.sh --skip-rebuild-local-app`。
+
+`./scripts/rebuild-local-app.sh` 和正式 Release workflow 都会使用 Wails `-devtools` 与 `main.devtoolsBuild=true` 构建桌面包，因此安装后的包保留右键 `Inspect Element` 菜单。本地调试包只有在明确执行 `ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh` 时才关闭该菜单。
 
 版本维护现在由脚本驱动，release 闸门也有脚本和 CI 强校验，但正式发布本身仍然是手动动作：由你决定何时修改 `VERSION`、何时推 release 提交、以及何时推 tag。
 

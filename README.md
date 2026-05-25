@@ -100,6 +100,7 @@ The desktop app wraps the proxy with a native-feeling control panel:
 - Detect Lingma / QoderCN IPC paths automatically on macOS and Windows, with manual fallback settings.
 - Follow system theme automatically, or switch light/dark mode manually.
 - Keep the proxy running when the window is closed; quit explicitly from the app/menu.
+- Open the WebView inspector from the desktop app's right-click menu (`Inspect Element`) in local and release desktop builds.
 
 ### Screenshots
 
@@ -887,7 +888,7 @@ Build macOS:
 ```bash
 npm ci --prefix desktop/frontend
 cd desktop
-wails build -platform darwin/arm64 -clean
+wails build -platform darwin/arm64 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
 ```
 
 Build Windows on Windows:
@@ -895,7 +896,7 @@ Build Windows on Windows:
 ```powershell
 npm ci --prefix desktop/frontend
 cd desktop
-wails build -platform windows/amd64 -clean
+wails build -platform windows/amd64 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
 ```
 
 Build Linux desktop on Ubuntu:
@@ -904,10 +905,12 @@ Build Linux desktop on Ubuntu:
 sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 npm ci --prefix desktop/frontend
 cd desktop
-wails build -platform linux/amd64 -tags webkit2_41 -clean
+wails build -platform linux/amd64 -tags webkit2_41 -clean -devtools -ldflags "-X main.devtoolsBuild=true"
 ```
 
 The desktop bundle name is always `Lingma Proxy`.
+
+Desktop packages intentionally include Wails DevTools so the default right-click menu can open `Inspect Element` for local style and runtime troubleshooting. The app does not auto-open the inspector unless launched with `LINGMA_DESKTOP_DEBUG=1`.
 
 ## Release Plan
 
@@ -966,6 +969,8 @@ Recommended remote release checklist:
 7. `./scripts/rebuild-local-app.sh` on macOS
 
 Use `./scripts/release-check.sh --skip-rebuild-local-app` when you only want the code-level gate without rebuilding the installed desktop app.
+
+`./scripts/rebuild-local-app.sh` and the Release workflow build desktop packages with Wails `-devtools` and `main.devtoolsBuild=true`, so the installed package keeps the right-click `Inspect Element` menu. Set `ENABLE_DEVTOOLS=0` only for local rebuilds where this debug menu should be disabled.
 
 Version maintenance is script-driven, and the release gate is now script-checked, but release publication is still a manual action: you choose when to update `VERSION`, when to push the release commit, and when to push the tag.
 
