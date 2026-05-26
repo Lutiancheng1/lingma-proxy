@@ -185,3 +185,20 @@ func TestEmitLogDedupesRecentNonAdjacentDuplicates(t *testing.T) {
 		t.Fatalf("logs len = %d, want %d: %#v", got, want, app.logs)
 	}
 }
+
+func TestEmitLogDedupesAgainstExistingRecentLogs(t *testing.T) {
+	app := &App{}
+	app.logs = []AppLog{{
+		Source:    "feishu-bridge",
+		Level:     "info",
+		SessionID: "s1",
+		ChatID:    "c1",
+		MessageID: "m1",
+		Message:   "same message",
+	}}
+	app.emitLogWithSourceMeta("feishu-bridge", "info", "same message", "s1", "c1", "m1")
+
+	if got, want := len(app.logs), 1; got != want {
+		t.Fatalf("logs len = %d, want %d: %#v", got, want, app.logs)
+	}
+}

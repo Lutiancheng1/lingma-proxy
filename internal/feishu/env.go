@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 var (
@@ -139,7 +142,7 @@ func npmPrefixFromCommand(npmPath string, baseSegments []string, args ...string)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(decodeCommandOutput(output))
 }
 
 func nodeVersionManagerPATHSegments() []string {
@@ -235,7 +238,7 @@ func nodeVersionAtPath(path string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(decodeCommandOutput(output))
 }
 
 func loginShellPATH() string {
@@ -257,7 +260,7 @@ func loginShellPATH() string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(decodeCommandOutput(output))
 }
 
 func pathSegments(pathValue string) []string {
@@ -401,6 +404,19 @@ func commandContextWithEnv(ctx context.Context, name string, args ...string) *ex
 	return cmd
 }
 
+func decodeCommandOutput(output []byte) string {
+	if len(output) == 0 {
+		return ""
+	}
+	if utf8.Valid(output) {
+		return string(output)
+	}
+	if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil && utf8.Valid(decoded) {
+		return string(decoded)
+	}
+	return string(output)
+}
+
 func windowsShellCommand(executable string, args []string) (string, []string, bool) {
 	if runtime.GOOS != "windows" {
 		return "", nil, false
@@ -409,9 +425,21 @@ func windowsShellCommand(executable string, args []string) (string, []string, bo
 	if ext != ".cmd" && ext != ".bat" {
 		return "", nil, false
 	}
-	shellArgs := []string{"/D", "/C", "call", executable}
-	shellArgs = append(shellArgs, args...)
+	parts := make([]string, 0, len(args)+2)
+	parts = append(parts, "call", windowsCmdQuote(executable))
+	for _, arg := range args {
+		parts = append(parts, windowsCmdQuote(arg))
+	}
+	shellArgs := []string{"/D", "/S", "/C", strings.Join(parts, " ")}
 	return "cmd.exe", shellArgs, true
+}
+
+func windowsCmdQuote(value string) string {
+	if value == "" {
+		return `""`
+	}
+	escaped := strings.ReplaceAll(value, `"`, `\"`)
+	return `"` + escaped + `"`
 }
 
 func resolveCommandName(name string) string {

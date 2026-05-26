@@ -455,6 +455,38 @@ func TestCardWriterFallsBackToLegacyWhenCardKitCreateFails(t *testing.T) {
 	}
 }
 
+func TestSendCardEntityMessageTreatsMessageIDOutputAsSuccessAfterProcessError(t *testing.T) {
+	_ = installFakeLarkCLI(t)
+	t.Setenv("FEISHU_REPLY_ERROR_AFTER_OUTPUT", "1")
+
+	manager := NewManager(ManagerOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := manager.sendCardEntityMessage(ctx, "om_root", "card_id")
+	if err != nil {
+		t.Fatalf("sendCardEntityMessage should accept message_id output despite process error: %v", err)
+	}
+	if got == "" {
+		t.Fatal("message id should be returned")
+	}
+}
+
+func TestCreateCardEntityTreatsCardIDOutputAsSuccessAfterProcessError(t *testing.T) {
+	_ = installFakeLarkCLI(t)
+	t.Setenv("FEISHU_CARD_CREATE_ERROR_AFTER_OUTPUT", "1")
+
+	manager := NewManager(ManagerOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := manager.createCardEntity(ctx, "{}")
+	if err != nil {
+		t.Fatalf("createCardEntity should accept card_id output despite process error: %v", err)
+	}
+	if got == "" {
+		t.Fatal("card id should be returned")
+	}
+}
+
 func TestShouldIgnoreGroupMessageTreatsAnyMentionAsTrigger(t *testing.T) {
 	manager := NewManager(ManagerOptions{})
 	manager.SetConfig(Config{Model: "kmodel", GroupOnlyAtBot: true})
@@ -591,6 +623,9 @@ fi
 if [ "$1" = "im" ] && [ "$2" = "+messages-reply" ]; then
   printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
   printf '{"message_id":"om_fake_reply_%s"}\n' "$(date +%s)"
+  if [ "$FEISHU_REPLY_ERROR_AFTER_OUTPUT" = "1" ]; then
+    exit 137
+  fi
   exit 0
 fi
 if [ "$1" = "im" ] && [ "$2" = "+messages-resources-download" ]; then
@@ -619,6 +654,9 @@ if [ "$1" = "api" ] && [ "$2" = "POST" ] && [ "$3" = "/open-apis/cardkit/v1/card
     exit 1
   fi
   printf '{"card_id":"card_fake_%s"}\n' "$(date +%s)"
+  if [ "$FEISHU_CARD_CREATE_ERROR_AFTER_OUTPUT" = "1" ]; then
+    exit 137
+  fi
   exit 0
 fi
 # CardKit API: stream update element content

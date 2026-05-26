@@ -60,7 +60,7 @@ func readAuthStatus(ctx context.Context) AuthStatus {
 	cmd := commandContextWithEnv(ctx, "lark-cli", "auth", "status", "--verify")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return AuthStatus{Message: strings.TrimSpace(string(output))}
+		return AuthStatus{Message: strings.TrimSpace(decodeCommandOutput(output))}
 	}
 	var payload struct {
 		AppID            string `json:"appId"`

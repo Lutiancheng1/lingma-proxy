@@ -27,7 +27,7 @@ func detectBinary(name string, versionArgs ...string) BinaryStatus {
 	if len(versionArgs) > 0 {
 		cmd := commandWithEnv(path, versionArgs...)
 		if output, err := cmd.CombinedOutput(); err == nil {
-			status.Version = strings.TrimSpace(string(output))
+			status.Version = strings.TrimSpace(decodeCommandOutput(output))
 		}
 	}
 	return status
@@ -203,9 +203,9 @@ func latestCompatibleWindowsNVMVersion(ctx context.Context, nvm string) (string,
 	cmd := commandContextWithEnv(ctx, nvm, "list")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%w output=%s", err, truncateInstallOutput(string(output)))
+		return "", fmt.Errorf("%w output=%s", err, truncateInstallOutput(decodeCommandOutput(output)))
 	}
-	return selectPreferredCompatibleNodeVersion(string(output)), nil
+	return selectPreferredCompatibleNodeVersion(decodeCommandOutput(output)), nil
 }
 
 var nodeVersionPattern = regexp.MustCompile(`v?(\d+\.\d+\.\d+)`)
@@ -513,7 +513,7 @@ func npmConfigDir(args ...string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(decodeCommandOutput(output))
 }
 
 func parseNodeMajor(version string) int {

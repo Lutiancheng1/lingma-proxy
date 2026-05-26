@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"sort"
@@ -192,6 +193,7 @@ type Manager struct {
 	store          *bridgeStore
 	skillService   *BridgeSkillService
 	skillApprovals map[string]map[string]struct{}
+	skillViews     map[string]map[string]struct{}
 
 	// refreshGuard ensures only one refreshStatus runs at a time. The desktop
 	// polls every ~2.5s; without serialization, a slow `npx skills ls` causes
@@ -213,6 +215,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		runs:           make(map[string]*conversationRunState),
 		mcp:            NewMCPRuntime(),
 		skillApprovals: make(map[string]map[string]struct{}),
+		skillViews:     make(map[string]map[string]struct{}),
 	}
 	if strings.TrimSpace(opts.DataDir) != "" {
 		if store, err := newBridgeStore(opts.DataDir); err == nil {
@@ -839,10 +842,10 @@ func (m *Manager) resetEventBus(ctx context.Context) {
 			m.logf("warn", "Feishu bridge 重置事件总线超时，将继续尝试启动监听")
 			return
 		}
-		m.logf("warn", "Feishu bridge 重置事件总线失败，将继续尝试启动监听："+strings.TrimSpace(string(output)))
+		m.logf("warn", "Feishu bridge 重置事件总线失败，将继续尝试启动监听："+strings.TrimSpace(decodeCommandOutput(output)))
 		return
 	}
-	if trimmed := strings.TrimSpace(string(output)); trimmed != "" {
+	if trimmed := strings.TrimSpace(decodeCommandOutput(output)); trimmed != "" {
 		m.logf("info", "Feishu bridge 已重置事件总线："+summarizeText(trimmed, 180))
 	} else {
 		m.logf("info", "Feishu bridge 已重置事件总线")
@@ -1180,7 +1183,7 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 	skills, _ := discoverSkillsForPrompt(ctx)
 	input := m.buildConversationInput(ctx, event)
 	m.setTurnSkillScriptApprovals(conversationKey, input.Text)
-	defer m.clearTurnSkillScriptApprovals(conversationKey)
+	defer m.clearTurnSkillState(conversationKey)
 	commandReply, handled := m.handleConversationCommand(ctx, conversationKey, proxyURL, model, input.Text, logMeta)
 	if handled {
 		if err := m.replyToMessage(ctx, event.MessageID, commandReply); err != nil {
@@ -1204,6 +1207,12 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 		importedSkillListing = m.skillService.PromptListing(40)
 	}
 	messages := []map[string]any{{"role": "system", "content": buildSystemPrompt(skills, cfg.BotIdentity, buildMCPPromptSection(mcpTools), importedSkillListing)}}
+	if larkSkillContext := buildRelevantLarkSkillContext(skills, input.Text); strings.TrimSpace(larkSkillContext) != "" {
+		messages = append(messages, map[string]any{
+			"role":    "system",
+			"content": larkSkillContext,
+		})
+	}
 	state := m.getConversationState(conversationKey)
 	if strings.TrimSpace(state.Summary) != "" {
 		messages = append(messages, map[string]any{
@@ -1948,7 +1957,7 @@ func (m *Manager) fetchQuotedMessage(ctx context.Context, messageID string) (str
 	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "messages", "get", "--as", "bot", "--message-id", messageID)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	text := firstNonEmptyString(
 		firstJSONStringField(output, "text"),
@@ -1959,7 +1968,7 @@ func (m *Manager) fetchQuotedMessage(ctx context.Context, messageID string) (str
 	if text != "" {
 		return text, nil
 	}
-	return strings.TrimSpace(string(output)), nil
+	return strings.TrimSpace(decodeCommandOutput(output)), nil
 }
 
 func (m *Manager) buildMultimodalConversationInput(ctx context.Context, event incomingEvent, text string) conversationInput {
@@ -2088,7 +2097,7 @@ func (m *Manager) downloadFeishuImageDataURL(ctx context.Context, messageID stri
 		if errors.Is(downloadCtx.Err(), context.DeadlineExceeded) {
 			return "", fmt.Errorf("图片下载超时（%s）", feishuImageDownloadTimeout)
 		}
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	path := filepath.Join(dir, outputName)
 	info, err := os.Stat(path)
@@ -2196,7 +2205,7 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 			"- /context：查看本会话上下文预算、压缩水位和 Skill 占用\n" +
 			"- /skills：列出用户导入并启用的 Feishu Bridge Skills\n" +
 			"- /skill <name>：查看某个 Skill 摘要\n" +
-			"- /reload-skills：重新扫描用户导入 Skills\n" +
+			"- /reload-skills：重新扫描用户导入 Skills 和官方 lark-cli Skills\n" +
 			"- /skill-run <skill> <script> confirm：确认执行 Skill scripts/ 下的脚本\n" +
 			"- /retry：用最近一条用户消息重新跑一次（先自动 /undo）\n" +
 			"- /undo：撤回最近一轮（assistant + 关联 tool 消息）\n" +
@@ -2258,16 +2267,26 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 		return m.commandSkillText(strings.Join(args, " ")), true
 	case "/reload-skills":
 		m.logf("info", "Feishu bridge 会话命令: /reload-skills", meta)
+		clearSkillManifestCache()
 		if m.skillService == nil {
-			return "Skill 服务未初始化。", true
+			return "官方 lark-cli Skills 缓存已清理；下一轮请求会重新扫描本机安装状态。用户导入 Skill 服务未初始化。", true
 		}
 		if err := m.skillService.Reload(ctx); err != nil {
 			return "Skills 重新扫描失败：" + err.Error(), true
 		}
+		officialSkills, _ := discoverSkillsForPrompt(ctx)
+		readyOfficial := 0
+		for _, skill := range officialSkills {
+			if skill.Found {
+				readyOfficial++
+			}
+		}
 		m.mu.Lock()
 		m.status.SkillCount = len(m.skillService.List(true))
+		m.status.Skills = officialSkills
+		m.status.SkillsReady = skillsReady(officialSkills)
 		m.mu.Unlock()
-		return "Skills 已重新扫描。当前启用 " + fmt.Sprint(len(m.skillService.List(true))) + " 个。", true
+		return fmt.Sprintf("Skills 已重新扫描。用户导入 Skill 启用 %d 个；官方 lark-cli Skills 就绪 %d/%d 个。", len(m.skillService.List(true)), readyOfficial, len(officialSkills)), true
 	case "/skill-run":
 		m.logf("info", "Feishu bridge 会话命令: /skill-run", meta)
 		if len(args) < 3 || !strings.EqualFold(args[len(args)-1], "confirm") {
@@ -3340,7 +3359,7 @@ func (m *Manager) removeTypingReaction(state typingReactionState, meta LogMeta) 
 }
 
 func formatCommandFailure(err error, output []byte) string {
-	text := strings.TrimSpace(string(output))
+	text := strings.TrimSpace(decodeCommandOutput(output))
 	if text == "" {
 		return err.Error()
 	}
@@ -3401,7 +3420,7 @@ func (m *Manager) replyToMessage(ctx context.Context, messageID string, reply st
 		output, err := cmd.CombinedOutput()
 		cancel()
 		if err != nil {
-			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 		}
 	}
 	return nil
@@ -3472,14 +3491,18 @@ func (m *Manager) sendCardReply(ctx context.Context, rootMessageID string, cardJ
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		if id := strings.TrimSpace(firstJSONStringField(output, "message_id")); id != "" {
+			m.logf("warn", "Feishu bridge send card reply 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{MessageID: rootMessageID})
+			return id, nil
+		}
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	id := strings.TrimSpace(firstJSONStringField(output, "message_id"))
 	if id == "" {
 		// Fallback: some lark-cli builds nest under data.message_id but
 		// firstJSONStringField walks recursively; if still empty we treat the
 		// command as failed to keep the caller's fallback path honest.
-		return "", fmt.Errorf("send card reply: no message_id in response: %s", strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("send card reply: no message_id in response: %s", strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	return id, nil
 }
@@ -3497,14 +3520,14 @@ func (m *Manager) patchCardMessage(ctx context.Context, cardMessageID string, ca
 		return fmt.Errorf("patch card: marshal body: %w", err)
 	}
 	endpoint := "/open-apis/im/v1/messages/" + cardMessageID
-	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
-		"PATCH", endpoint,
-		"--as", "bot",
-		"--data", string(body),
-	)
+	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "PATCH", endpoint, "bot", body)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	return nil
 }
@@ -3540,18 +3563,22 @@ func (m *Manager) createCardEntity(ctx context.Context, cardJSON string) (string
 	if err != nil {
 		return "", fmt.Errorf("marshal create card body: %w", err)
 	}
-	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
-		"POST", "/open-apis/cardkit/v1/cards",
-		"--as", "bot",
-		"--data", string(body),
-	)
+	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "POST", "/open-apis/cardkit/v1/cards", "bot", body)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		if id := strings.TrimSpace(firstJSONStringField(output, "card_id")); id != "" {
+			m.logf("warn", "Feishu bridge create card entity 进程异常但已返回 card_id，按成功处理："+err.Error())
+			return id, nil
+		}
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	id := strings.TrimSpace(firstJSONStringField(output, "card_id"))
 	if id == "" {
-		return "", fmt.Errorf("create card entity: no card_id in response: %s", strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("create card entity: no card_id in response: %s", strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	return id, nil
 }
@@ -3574,11 +3601,15 @@ func (m *Manager) sendCardEntityMessage(ctx context.Context, rootMessageID strin
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		if id := strings.TrimSpace(firstJSONStringField(output, "message_id")); id != "" {
+			m.logf("warn", "Feishu bridge send card entity message 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{MessageID: rootMessageID})
+			return id, nil
+		}
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	id := strings.TrimSpace(firstJSONStringField(output, "message_id"))
 	if id == "" {
-		return "", fmt.Errorf("send card entity message: no message_id in response: %s", strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("send card entity message: no message_id in response: %s", strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	return id, nil
 }
@@ -3595,14 +3626,14 @@ func (m *Manager) streamUpdateCardContent(ctx context.Context, cardEntityID stri
 		return fmt.Errorf("marshal stream update body: %w", err)
 	}
 	endpoint := fmt.Sprintf("/open-apis/cardkit/v1/cards/%s/elements/%s/content", cardEntityID, elementID)
-	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
-		"PUT", endpoint,
-		"--as", "bot",
-		"--data", string(body),
-	)
+	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "PUT", endpoint, "bot", body)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	return nil
 }
@@ -3621,14 +3652,14 @@ func (m *Manager) updateCardEntity(ctx context.Context, cardEntityID string, car
 		return fmt.Errorf("marshal update card body: %w", err)
 	}
 	endpoint := "/open-apis/cardkit/v1/cards/" + cardEntityID
-	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
-		"PUT", endpoint,
-		"--as", "bot",
-		"--data", string(body),
-	)
+	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "PUT", endpoint, "bot", body)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	return nil
 }
@@ -3654,16 +3685,45 @@ func (m *Manager) updateCardSettings(ctx context.Context, cardEntityID string, s
 		return fmt.Errorf("marshal update card settings body: %w", err)
 	}
 	endpoint := "/open-apis/cardkit/v1/cards/" + cardEntityID + "/settings"
-	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
-		"PATCH", endpoint,
-		"--as", "bot",
-		"--data", string(body),
-	)
+	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "PATCH", endpoint, "bot", body)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	return nil
+}
+
+func larkAPICommandWithJSONData(ctx context.Context, method string, endpoint string, as string, body []byte) (*exec.Cmd, func(), error) {
+	dataArg := string(body)
+	cleanup := func() {}
+	if goruntime.GOOS == "windows" || len(dataArg) > 6000 {
+		file, err := os.CreateTemp("", "lingma-feishu-api-*.json")
+		if err != nil {
+			return nil, cleanup, fmt.Errorf("create lark api temp body: %w", err)
+		}
+		path := file.Name()
+		if _, err := file.Write(body); err != nil {
+			_ = file.Close()
+			_ = os.Remove(path)
+			return nil, cleanup, fmt.Errorf("write lark api temp body: %w", err)
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(path)
+			return nil, cleanup, fmt.Errorf("close lark api temp body: %w", err)
+		}
+		dataArg = "@" + path
+		cleanup = func() { _ = os.Remove(path) }
+	}
+	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
+		method, endpoint,
+		"--as", as,
+		"--data", dataArg,
+	)
+	return cmd, cleanup, nil
 }
 
 // shouldIgnoreGroupMessage returns true when GroupOnlyAtBot is enabled and the

@@ -85,13 +85,27 @@ function logEntryKey(entry) {
 
 function pushLogEntry(entry) {
   const key = logEntryKey(entry)
-  if (key && logs.value.slice(0, 80).some((item) => logEntryKey(item) === key)) {
+  if (key && logs.value.some((item) => logEntryKey(item) === key)) {
     return
   }
   logs.value.unshift(entry)
   if (logs.value.length > 500) {
     logs.value = logs.value.slice(0, 500)
   }
+}
+
+function uniqueLogEntries(items) {
+  if (!Array.isArray(items)) return []
+  const seen = new Set()
+  const out = []
+  for (const item of items) {
+    const key = logEntryKey(item)
+    if (key && seen.has(key)) continue
+    if (key) seen.add(key)
+    out.push(item)
+    if (out.length >= 500) break
+  }
+  return out
 }
 
 function showToast(message) {
@@ -340,7 +354,7 @@ onMounted(() => {
     }
   })
   safeEventsOn('logs:updated', (data) => {
-    logs.value = Array.isArray(data) ? data : []
+    logs.value = uniqueLogEntries(data)
   })
   safeEventsOn('quit:confirm', (message) => {
     showToast(message || '再按一次退出快捷键将停止代理并退出应用')
@@ -360,7 +374,7 @@ onMounted(() => {
   })
   primeRequests()
   GetLogSummaries().then((items) => {
-    logs.value = Array.isArray(items) ? items : []
+    logs.value = uniqueLogEntries(items)
   }).catch(() => {})
   requestAnimationFrame(() => {
     markBoot('App.vue:onMounted:first-animation-frame')

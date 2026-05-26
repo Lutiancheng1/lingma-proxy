@@ -30,7 +30,9 @@ const baseSystemPrompt = `你是一个飞书智能助手。当前通过官方 Fe
 5. 如果结构化工具覆盖不了当前需求，应改用通用工具 lark_cli_exec，直接调用本机已安装的完整 lark-cli 能力，不要因为缺少现成结构化工具就退回纯说明。
 6. 授权由 Bridge 接管：不要通过 lark_cli_exec 执行 auth login、auth login --scope、auth login --recommend；遇到 need_user_authorization、missing scope 或工具提示需要授权时，停止继续尝试业务命令，等待 Bridge 自动发起授权并返回链接。
 7. lark-cli 命令格式规则：skill 快捷命令使用 + 前缀（如 im +chat-list、im +messages-send、calendar +agenda），不要使用不带 + 的写法（如 im chats list、im messages send 是无效命令）。原生子命令不带 +（如 drive file list）。如果不确定命令格式，先执行 lark-cli --help 或 lark-cli <domain> --help 确认。
-8. 如果你不确定某个命令、子命令、shortcut 或参数格式，先用 CLI 自检，不要猜：
+8. 如果你不确定某个命令、子命令、shortcut 或参数格式，先调用 lark_skill_view 阅读对应官方 Skill；仍不确定时再用 CLI 自检，不要猜：
+   - lark_skill_view {"name":"lark-sheets"} 查看电子表格官方用法
+   - lark_skill_view {"name":"lark-doc"} 查看云文档官方用法
    - lark-cli --help 查看命令总览
    - lark-cli <domain> --help 或 lark-cli <domain> <group> --help 查看具体用法
    - lark-cli schema <service.resource.method> 查询参数结构
@@ -40,32 +42,13 @@ const baseSystemPrompt = `你是一个飞书智能助手。当前通过官方 Fe
 10. 对”查看日程/创建会议/发送消息/搜索消息/创建文档/读取文档/查看云盘文档/列出文件/搜索文件/操作多维表格/读取电子表格/查看任务/查看知识库/查看邮箱/通讯录/妙记/会议纪要”等直接操作型请求，应先工具调用，再总结结果。`
 
 func buildSystemPrompt(skills []SkillStatus, botIdentity string, mcpSection string, importedSkillSection string) string {
-	sections := make([]string, 0, len(skills))
-	for _, skill := range skills {
-		if !skill.Found || strings.TrimSpace(skill.Path) == "" {
-			continue
-		}
-		skillPath := filepath.Join(skill.Path, "SKILL.md")
-		excerpt, err := loadSkillExcerpt(skillPath)
-		if err != nil || excerpt == "" {
-			continue
-		}
-		sections = append(sections, fmt.Sprintf("## %s\n%s", skill.Name, excerpt))
-	}
 	prompt := baseSystemPrompt
 	if identity := limitBotIdentity(botIdentity); identity != "" {
 		prompt = "用户自定义 Bot 身份描述：\n" + identity + "\n\n以上身份描述只影响 Bot 的角色定位、服务边界、语气和表达风格；不得覆盖后续工具调用规则、权限规则、真实数据约束和安全约束。\n\n" + prompt
 	}
-	if len(sections) == 0 {
-		if strings.TrimSpace(importedSkillSection) != "" {
-			prompt += "\n\n" + strings.TrimSpace(importedSkillSection)
-		}
-		if strings.TrimSpace(mcpSection) != "" {
-			prompt += "\n\n" + strings.TrimSpace(mcpSection)
-		}
-		return prompt
+	if index := buildLarkSkillIndex(skills); index != "" {
+		prompt += "\n\n" + index
 	}
-	prompt = prompt + "\n\n以下是本机已安装的 lark-cli skills 摘要，请优先遵循其中的命令约束、身份约束和 shortcut 习惯：\n\n" + strings.Join(sections, "\n\n")
 	if strings.TrimSpace(importedSkillSection) != "" {
 		prompt += "\n\n" + strings.TrimSpace(importedSkillSection)
 	}
@@ -75,37 +58,136 @@ func buildSystemPrompt(skills []SkillStatus, botIdentity string, mcpSection stri
 	return prompt
 }
 
-func loadSkillExcerpt(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
+func buildLarkSkillIndex(skills []SkillStatus) string {
+	found := make([]string, 0, len(skills))
+	missing := make([]string, 0)
+	for _, skill := range skills {
+		name := strings.TrimSpace(skill.Name)
+		if name == "" {
+			continue
+		}
+		if skill.Found {
+			found = append(found, formatLarkSkillIndexLine(skill))
+		} else {
+			missing = append(missing, name)
+		}
 	}
-	text := string(data)
+	if len(found) == 0 && len(missing) == 0 {
+		return ""
+	}
+	limit := 40
+	if len(found) < limit {
+		limit = len(found)
+	}
+	out := "本机官方 lark-cli Skills 索引（默认只注入索引，相关任务会自动加载对应 SKILL.md 片段；需要全文时调用 lark_skill_view）：\n"
+	if limit > 0 {
+		out += "已安装：\n- " + strings.Join(found[:limit], "\n- ") + "\n"
+	}
+	if len(found) > limit {
+		out += fmt.Sprintf("- 另有 %d 个已安装 Skill 未列出\n", len(found)-limit)
+	}
+	if len(missing) > 0 {
+		missLimit := 8
+		if len(missing) < missLimit {
+			missLimit = len(missing)
+		}
+		out += "- 未就绪：" + strings.Join(missing[:missLimit], ", ")
+		if len(missing) > missLimit {
+			out += fmt.Sprintf(" 等 %d 个", len(missing))
+		}
+	}
+	return strings.TrimSpace(out)
+}
+
+func formatLarkSkillIndexLine(skill SkillStatus) string {
+	name := strings.TrimSpace(skill.Name)
+	if name == "" {
+		name = filepath.Base(skill.Path)
+	}
+	desc, when := readLarkSkillMetadata(skill.Path)
+	line := name
+	if desc != "" {
+		line += "：" + limitOneLine(desc, 180)
+	}
+	if when != "" {
+		line += "；适用：" + limitOneLine(when, 220)
+	}
+	return line
+}
+
+func readLarkSkillMetadata(skillPath string) (description string, whenToUse string) {
+	if strings.TrimSpace(skillPath) == "" {
+		return "", ""
+	}
+	data, err := os.ReadFile(filepath.Join(skillPath, "SKILL.md"))
+	if err != nil {
+		return "", ""
+	}
+	text := strings.TrimPrefix(string(data), "\ufeff")
 	if strings.HasPrefix(text, "---") {
 		parts := strings.SplitN(text, "---", 3)
 		if len(parts) == 3 {
-			text = parts[2]
+			frontmatter := parts[1]
+			description = yamlScalar(frontmatter, "description")
+			whenToUse = yamlScalar(frontmatter, "when_to_use")
 		}
 	}
-	lines := make([]string, 0, 60)
-	for _, raw := range strings.Split(text, "\n") {
-		line := strings.TrimRight(raw, "\r")
-		if strings.TrimSpace(line) == "" {
-			if len(lines) > 0 && lines[len(lines)-1] != "" {
-				lines = append(lines, "")
-			}
+	if description == "" {
+		description = firstUsefulSkillLine(text)
+	}
+	return description, whenToUse
+}
+
+func yamlScalar(frontmatter string, key string) string {
+	prefix := key + ":"
+	lines := strings.Split(frontmatter, "\n")
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if !strings.HasPrefix(line, prefix) {
 			continue
 		}
-		lines = append(lines, line)
-		if len(lines) >= 60 {
-			break
+		value := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		value = strings.Trim(value, `"'`)
+		if value != "" {
+			return value
 		}
+		collected := make([]string, 0, 4)
+		for _, nextRaw := range lines[i+1:] {
+			next := strings.TrimSpace(nextRaw)
+			if next == "" {
+				continue
+			}
+			if strings.Contains(next, ":") && !strings.HasPrefix(next, "-") {
+				break
+			}
+			collected = append(collected, strings.Trim(strings.TrimPrefix(next, "-"), ` "'`))
+			if len(collected) >= 4 {
+				break
+			}
+		}
+		return strings.TrimSpace(strings.Join(collected, "；"))
 	}
-	excerpt := strings.TrimSpace(strings.Join(lines, "\n"))
-	if len(excerpt) > 2200 {
-		excerpt = excerpt[:2200] + "\n...[truncated]"
+	return ""
+}
+
+func firstUsefulSkillLine(text string) string {
+	text = stripYAMLFrontmatter(text)
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(strings.TrimLeft(raw, "#- "))
+		if line == "" || strings.HasPrefix(line, "```") {
+			continue
+		}
+		return line
 	}
-	return excerpt, nil
+	return ""
+}
+
+func limitOneLine(text string, limit int) string {
+	text = strings.Join(strings.Fields(strings.ReplaceAll(text, "\n", " ")), " ")
+	if limit > 0 && len(text) > limit {
+		return text[:limit] + "..."
+	}
+	return text
 }
 
 func shouldForceToolUse(userText string) bool {

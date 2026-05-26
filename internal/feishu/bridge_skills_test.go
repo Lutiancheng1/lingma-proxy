@@ -3,6 +3,7 @@ package feishu
 import (
 	"archive/zip"
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,6 +171,7 @@ func TestExplicitSkillMentionApprovesOneTurnScript(t *testing.T) {
 	}
 
 	manager.setTurnSkillScriptApprovals("oc_test", "使用 aihot 查一下今天 AI 圈有什么")
+	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "aihot"})
 	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_run_script", map[string]any{
 		"skill":  "aihot",
 		"script": "daily.sh",
@@ -179,6 +181,7 @@ func TestExplicitSkillMentionApprovesOneTurnScript(t *testing.T) {
 	}
 
 	manager.clearTurnSkillScriptApprovals("oc_test")
+	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_2", "skill_view", map[string]any{"name": "aihot"})
 	result = manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_2", "skill_run_script", map[string]any{
 		"skill":  "aihot",
 		"script": "daily.sh",
@@ -205,6 +208,7 @@ func TestSkillRunScriptPassesArgs(t *testing.T) {
 	}
 
 	manager.setTurnSkillScriptApprovals("oc_test", "使用 arg-skill 执行脚本")
+	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "arg-skill"})
 	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_run_script", map[string]any{
 		"skill":  "arg-skill",
 		"script": "run.sh",
@@ -221,12 +225,13 @@ func TestSkillHTTPRequestRejectsUnsupportedMethod(t *testing.T) {
 	if err := os.MkdirAll(source, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: api-skill\ndescription: API skill\n---\n# API\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: api-skill\ndescription: API skill\n---\n# API\n\nUse https://example.invalid/items\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.ImportSkillPath(context.Background(), source); err != nil {
 		t.Fatal(err)
 	}
+	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "api-skill"})
 	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
 		"skill":  "api-skill",
 		"method": "TRACE",
@@ -243,7 +248,30 @@ func TestSkillHTTPRequestBlocksLocalhost(t *testing.T) {
 	if err := os.MkdirAll(source, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: api-skill\ndescription: API skill\n---\n# API\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: api-skill\ndescription: API skill\n---\n# API\n\nUse http://127.0.0.1:8080/items\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ImportSkillPath(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "api-skill"})
+
+	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
+		"skill": "api-skill",
+		"url":   "http://127.0.0.1:8080/items",
+	})
+	if !result.IsError || !strings.Contains(result.Output, "内网或本机地址") {
+		t.Fatalf("expected localhost request to be blocked, got %#v", result)
+	}
+}
+
+func TestSkillHTTPRequestRequiresSkillView(t *testing.T) {
+	manager := NewManager(ManagerOptions{DataDir: t.TempDir()})
+	source := filepath.Join(t.TempDir(), "api-skill")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: api-skill\ndescription: API\n---\n# API\n\nUse https://example.com/api/items\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.ImportSkillPath(context.Background(), source); err != nil {
@@ -252,9 +280,39 @@ func TestSkillHTTPRequestBlocksLocalhost(t *testing.T) {
 
 	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
 		"skill": "api-skill",
-		"url":   "http://127.0.0.1:8080/items",
+		"url":   "https://example.com/api/items",
 	})
-	if !result.IsError || !strings.Contains(result.Output, "内网或本机地址") {
-		t.Fatalf("expected localhost request to be blocked, got %#v", result)
+	if !result.IsError || !strings.Contains(result.Output, "必须先调用 skill_view") {
+		t.Fatalf("expected skill_view requirement, got %#v", result)
+	}
+}
+
+func TestSkillHTTPRequestRejectsURLOutsideSkillDocument(t *testing.T) {
+	manager := NewManager(ManagerOptions{DataDir: t.TempDir()})
+	source := filepath.Join(t.TempDir(), "aihot")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: aihot\ndescription: AI HOT\n---\n# AI HOT\n\nBase: https://aihot.virxact.com\n\nUse `https://aihot.virxact.com/api/public/items?mode=selected&take=50`.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ImportSkillPath(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "aihot"})
+
+	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
+		"skill": "aihot",
+		"url":   "https://api.virxact.com/aihot/api/v1/articles?limit=10&offset=0",
+	})
+	if !result.IsError || !strings.Contains(result.Output, "不在 Skill") {
+		t.Fatalf("expected allowlist rejection, got %#v", result)
+	}
+}
+
+func TestSkillHTTPRequestHTMLSuccessIsError(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Content-Type": []string{"text/html; charset=utf-8"}}}
+	if !looksLikeHTMLResponse(resp, "<html><body>login</body></html>") {
+		t.Fatal("expected html response to be rejected")
 	}
 }

@@ -430,7 +430,7 @@ func (a *App) emitLogWithSourceMeta(source string, level string, message string,
 		if a.recentLogFingerprints == nil {
 			a.recentLogFingerprints = make(map[string]time.Time)
 		}
-		const dedupeWindow = 10 * time.Second
+		const dedupeWindow = 5 * time.Minute
 		for key, ts := range a.recentLogFingerprints {
 			if now.Sub(ts) > dedupeWindow {
 				delete(a.recentLogFingerprints, key)
@@ -439,6 +439,14 @@ func (a *App) emitLogWithSourceMeta(source string, level string, message string,
 		if ts, ok := a.recentLogFingerprints[fingerprint]; ok && now.Sub(ts) <= dedupeWindow {
 			a.mu.Unlock()
 			return
+		}
+		for i := len(a.logs) - 1; i >= 0 && i >= len(a.logs)-300; i-- {
+			existing := a.logs[i]
+			if logFingerprint(existing.Source, existing.Level, existing.Message, existing.SessionID, existing.ChatID, existing.MessageID) == fingerprint {
+				a.recentLogFingerprints[fingerprint] = now
+				a.mu.Unlock()
+				return
+			}
 		}
 		a.recentLogFingerprints[fingerprint] = now
 	}

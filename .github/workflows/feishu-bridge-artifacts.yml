@@ -82,7 +82,6 @@ jobs:
           APP_PATH="$(find desktop/build/bin -maxdepth 1 -name '*.app' -print -quit)"
           test -n "$APP_PATH"
           test "$(basename "$APP_PATH")" = "Lingma Proxy.app"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "lingma-proxy-feishu-desktop_${BUILD_LABEL}_darwin_arm64.zip"
           DMG_ROOT="$(mktemp -d)"
           cp -R "$APP_PATH" "$DMG_ROOT/"
           ln -s /Applications "$DMG_ROOT/Applications"
@@ -99,9 +98,7 @@ jobs:
         with:
           name: feishu-desktop-macos
           retention-days: 14
-          path: |
-            lingma-proxy-feishu-desktop_${{ env.BUILD_LABEL }}_darwin_arm64.zip
-            lingma-proxy-feishu-desktop_${{ env.BUILD_LABEL }}_darwin_arm64.dmg
+          path: lingma-proxy-feishu-desktop_${{ env.BUILD_LABEL }}_darwin_arm64.dmg
 
   build-desktop-windows:
     name: Build Feishu Desktop Windows

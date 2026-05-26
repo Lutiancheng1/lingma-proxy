@@ -33,10 +33,10 @@ func (m *Manager) fetchFeishuConversationBackfill(ctx context.Context, chatID st
 			m.logf("warn", "Feishu bridge 历史消息回填超时，跳过本轮回填", meta)
 			return ""
 		}
-		m.logf("info", "Feishu bridge 历史消息回填不可用，跳过："+summarizeText(string(output), 160), meta)
+		m.logf("info", "Feishu bridge 历史消息回填不可用，跳过："+summarizeText(decodeCommandOutput(output), 160), meta)
 		return ""
 	}
-	text := renderFeishuHistoryBackfill(string(output), currentMessageID)
+	text := renderFeishuHistoryBackfill(decodeCommandOutput(output), currentMessageID)
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}

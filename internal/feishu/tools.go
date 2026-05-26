@@ -43,7 +43,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_cli_exec",
-				"description": "通用飞书 CLI 执行入口。适用于云盘、邮箱、通讯录、妙记、视频会议、幻灯片、白板、审批、考勤、OKR 等当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；如果未显式指定 --as，则会自动追加 --as user。\n\n重要命令格式规则：\n- 授权不要通过本工具执行 auth login；遇到 need_user_authorization 时 Bridge 会自动发起登录并返回授权链接\n- lark-cli 的子命令分两类：原生子命令（如 drive file list）和 skill 快捷命令（带 + 前缀，如 im +chat-list、im +messages-send）\n- IM 相关操作必须使用 + 前缀快捷命令：im +chat-list（列出群聊）、im +chat-create（创建群聊）、im +messages-send（发消息）、im +messages-search（搜消息）、im +messages-reply（回复消息）\n- 其他 skill 快捷命令：calendar +agenda、calendar +create、docs +create、docs +fetch 等\n- 不存在 im chats list、im chat list、im messages send 这类不带 + 的写法，这些会报错\n- 示例 argv：[\"im\", \"+chat-list\", \"--limit\", \"10\"]、[\"drive\", \"file\", \"list\"]、[\"calendar\", \"+agenda\"]",
+				"description": "通用飞书 CLI 执行入口。适用于当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；已知飞书业务域命令如果未显式指定 --as，则会自动追加 --as user；auth、--help/-h 和未知根命令不会追加 --as。\n\n强制规则：\n- 如果准备使用某个业务域但不确定命令/参数，先调用 lark_skill_view 阅读对应官方 Skill（如 lark-sheets、lark-doc、lark-drive），再执行本工具；不要凭经验猜 Sheet1/0/1、docs/file/list 等命令\n- 授权不要通过本工具执行 auth login；遇到 need_user_authorization 时 Bridge 会自动发起登录并返回授权链接\n- 查询当前身份优先用 argv：[\"auth\", \"status\"]；查看已登录用户用 argv：[\"auth\", \"list\"]\n- lark-cli 的子命令分两类：原生子命令（如 drive file list）和 skill 快捷命令（带 + 前缀，如 im +chat-list、im +messages-send）\n- IM 相关操作必须使用 + 前缀快捷命令：im +chat-list、im +chat-create、im +messages-send、im +messages-search、im +messages-reply\n- 示例 argv：[\"im\", \"+chat-list\", \"--limit\", \"10\"]、[\"drive\", \"file\", \"list\"]、[\"calendar\", \"+agenda\"]",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -54,6 +54,20 @@ func toolDefinitions() []map[string]any {
 						},
 					},
 					"required": []string{"argv"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "lark_skill_view",
+				"description": "读取本机已安装的官方飞书 lark-cli Skill 文档。用于在执行 lark_cli_exec 前确认真实命令、shortcut、参数和注意事项。支持传入 skill 名称或业务域，例如 lark-sheets/sheets/表格、lark-doc/docs/文档、lark-drive/drive/云盘。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name": map[string]any{"type": "string", "description": "官方 Skill 名称或业务域，例如 lark-sheets、sheets、docs、drive"},
+					},
+					"required": []string{"name"},
 				},
 			},
 		},
@@ -144,14 +158,15 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_docs_create",
-				"description": "创建飞书云文档（docx 格式）。",
+				"description": "创建飞书云文档（docx 格式）。必须提供 markdown 正文；不要在尚未整理好内容时先创建空文档。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"title":        map[string]any{"type": "string", "description": "文档标题"},
+						"markdown":     map[string]any{"type": "string", "description": "Lark-flavored Markdown 正文；创建文档时必填"},
 						"folder_token": map[string]any{"type": "string", "description": "存放文件夹的 token（可选，默认根目录）"},
 					},
-					"required": []string{"title"},
+					"required": []string{"title", "markdown"},
 				},
 			},
 		},
@@ -191,13 +206,28 @@ func toolDefinitions() []map[string]any {
 		{
 			"type": "function",
 			"function": map[string]any{
-				"name":        "lark_sheets_read",
-				"description": "读取飞书电子表格单元格数据。",
+				"name":        "lark_sheets_info",
+				"description": "读取飞书电子表格元数据和工作表 sheet_id。读取单元格前必须先用它确认真实 sheet_id，不要猜 Sheet1、0、1。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"spreadsheet_token": map[string]any{"type": "string", "description": "表格 token"},
-						"range":             map[string]any{"type": "string", "description": "读取范围，如 Sheet1!A1:D10"},
+						"url":               map[string]any{"type": "string", "description": "表格完整 URL（有 URL 时可替代 token）"},
+					},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "lark_sheets_read",
+				"description": "读取飞书电子表格单元格数据。优先先调用 lark_sheets_info 获取真实 sheet_id，再传 sheet_id + A1:D10 这类不带 sheet 前缀的 range；不要猜 Sheet1、0、1。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"spreadsheet_token": map[string]any{"type": "string", "description": "表格 token"},
+						"sheet_id":          map[string]any{"type": "string", "description": "真实 sheet_id，来自 lark_sheets_info"},
+						"range":             map[string]any{"type": "string", "description": "读取范围，如 A1:D10；如果包含 ! 前缀，前缀必须是真实 sheet_id，不是 Sheet1/0/1 这类猜测值"},
 					},
 					"required": []string{"spreadsheet_token", "range"},
 				},
@@ -325,7 +355,7 @@ func skillToolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "skill_http_request",
-				"description": "按已读取的 Skill 文档执行 HTTP API 请求。适用于无 scripts/、但 SKILL.md 要求访问公开 REST API 的 Skill。支持 GET/POST/PUT/PATCH/DELETE，默认超时和响应上限可在高级设置调整；不要用 lark_cli_exec 或 MCP 代替 curl/API 调用。",
+				"description": "按已读取的 Skill 文档执行 HTTP API 请求。适用于无 scripts/、但 SKILL.md 要求访问公开 REST API 的 Skill。调用前必须先在本轮调用 skill_view 阅读对应 SKILL.md；URL 必须来自 skill_view 看到的 SKILL.md，不要自造域名、路径或把站点域名改成 API 子域；支持 GET/POST/PUT/PATCH/DELETE，默认超时和响应上限可在高级设置调整；不要用 lark_cli_exec 或 MCP 代替 curl/API 调用。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -369,10 +399,10 @@ func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 			return nil, fmt.Errorf("argv 不能为空")
 		}
 		argv = normalizeLarkCLIArgv(argv)
-		if isLarkAuthLoginArgv(argv) {
+		if isLarkAuthArgv(argv) || isLarkHelpArgv(argv) {
 			return append([]string{"lark-cli"}, argv...), nil
 		}
-		if !containsAsFlag(argv) {
+		if shouldAutoAppendAs(argv) && !containsAsFlag(argv) {
 			argv = append(argv, "--as", "user")
 		}
 		return append([]string{"lark-cli"}, argv...), nil
@@ -430,6 +460,11 @@ func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 		return cmd, nil
 	case "lark_docs_create":
 		cmd := []string{"lark-cli", "docs", "+create", "--api-version", "v2", "--as", "user", "--title", stringArg(args, "title")}
+		markdown := stringArg(args, "markdown")
+		if strings.TrimSpace(markdown) == "" {
+			return nil, fmt.Errorf("markdown 正文不能为空；请先整理内容，再调用 lark_docs_create")
+		}
+		cmd = append(cmd, "--markdown", markdown)
 		if value := stringArg(args, "folder_token"); value != "" {
 			cmd = append(cmd, "--folder-token", value)
 		}
@@ -459,8 +494,21 @@ func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 			}
 		}
 		return cmd, nil
+	case "lark_sheets_info":
+		cmd := []string{"lark-cli", "sheets", "+info", "--as", "user"}
+		if value := stringArg(args, "spreadsheet_token"); value != "" {
+			cmd = append(cmd, "--spreadsheet-token", value)
+		}
+		if value := stringArg(args, "url"); value != "" {
+			cmd = append(cmd, "--url", value)
+		}
+		return cmd, nil
 	case "lark_sheets_read":
-		return []string{"lark-cli", "sheets", "cell", "read", "--as", "user", "--spreadsheet-token", stringArg(args, "spreadsheet_token"), "--range", stringArg(args, "range")}, nil
+		cmd := []string{"lark-cli", "sheets", "+read", "--as", "user", "--spreadsheet-token", stringArg(args, "spreadsheet_token"), "--range", stringArg(args, "range")}
+		if value := stringArg(args, "sheet_id"); value != "" {
+			cmd = append(cmd, "--sheet-id", value)
+		}
+		return cmd, nil
 	case "lark_task_list":
 		cmd := []string{"lark-cli", "task", "list", "--as", "user"}
 		if boolArg(args, "is_completed") {
@@ -496,6 +544,13 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	if toolName == "mcp_call" {
 		return executeMCPToolContext(parent, cfg, args)
 	}
+	if toolName == "lark_skill_view" {
+		output, err := renderLarkSkillView(stringArg(args, "name"))
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		return ToolExecutionResult{Output: output}
+	}
 	cmdArgs, err := buildToolCommand(toolName, args)
 	if err != nil {
 		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
@@ -511,7 +566,7 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	defer cancel()
 	cmd := commandContextWithEnv(ctx, cmdArgs[0], cmdArgs[1:]...)
 	output, err := cmd.CombinedOutput()
-	result := strings.TrimSpace(string(output))
+	result := strings.TrimSpace(decodeCommandOutput(output))
 	perm := parsePermissionRequirement(result)
 	result = normalizeToolOutput(result)
 	if result == "" && err == nil {
@@ -745,6 +800,13 @@ func normalizeLarkCLIArgv(argv []string) []string {
 			case lower[1] == "fetch":
 				return replace(2, "+fetch")
 			}
+		case "sheets":
+			switch {
+			case lower[1] == "cell" && lower[2] == "read":
+				return replace(3, "+read")
+			case lower[1] == "spreadsheets" && lower[2] == "get":
+				return replace(3, "+info")
+			}
 		}
 	}
 	if len(out) >= 2 {
@@ -755,6 +817,10 @@ func normalizeLarkCLIArgv(argv []string) []string {
 			}
 		case "docs":
 			if lower[1] == "create" || lower[1] == "fetch" {
+				return replace(2, "+"+lower[1])
+			}
+		case "sheets":
+			if lower[1] == "info" || lower[1] == "read" {
 				return replace(2, "+"+lower[1])
 			}
 		}
@@ -774,12 +840,55 @@ func containsAsFlag(argv []string) bool {
 	return false
 }
 
-func isLarkAuthLoginArgv(argv []string) bool {
-	if len(argv) < 2 {
+func shouldAutoAppendAs(argv []string) bool {
+	if len(argv) == 0 || isLarkAuthArgv(argv) || isLarkHelpArgv(argv) {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(argv[0]), "auth") &&
+	switch strings.ToLower(strings.TrimSpace(argv[0])) {
+	case "approval",
+		"attendance",
+		"base",
+		"calendar",
+		"contact",
+		"docs",
+		"drive",
+		"im",
+		"mail",
+		"minutes",
+		"okr",
+		"sheets",
+		"slides",
+		"task",
+		"vc",
+		"whiteboard",
+		"wiki":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLarkAuthArgv(argv []string) bool {
+	if len(argv) < 1 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(argv[0]), "auth")
+}
+
+func isLarkAuthLoginArgv(argv []string) bool {
+	return len(argv) >= 2 &&
+		isLarkAuthArgv(argv) &&
 		strings.EqualFold(strings.TrimSpace(argv[1]), "login")
+}
+
+func isLarkHelpArgv(argv []string) bool {
+	for _, arg := range argv {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "--help" || trimmed == "-h" || trimmed == "help" {
+			return true
+		}
+	}
+	return false
 }
 
 func isLarkAuthLoginCommand(cmdArgs []string) bool {

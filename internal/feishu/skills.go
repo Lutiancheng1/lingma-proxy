@@ -94,6 +94,13 @@ func resolveRequiredSkillNames(ctx context.Context) []string {
 	return names
 }
 
+func clearSkillManifestCache() {
+	manifestCacheMu.Lock()
+	defer manifestCacheMu.Unlock()
+	manifestCacheNames = nil
+	manifestCacheFetched = time.Time{}
+}
+
 func fetchFeishuSkillManifest(ctx context.Context) ([]string, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
 	defer cancel()
@@ -288,4 +295,258 @@ func missingSkillNames(skills []SkillStatus, limit int) []string {
 		missing = append(missing, skill.Name)
 	}
 	return missing
+}
+
+func renderLarkSkillView(name string) (string, error) {
+	status, err := resolveLarkSkillStatus(name, nil)
+	if err != nil {
+		return "", err
+	}
+	text, err := readLarkSkillText(status)
+	if err != nil {
+		return "", err
+	}
+	return formatLarkSkillGuide(status, text, 12000), nil
+}
+
+func buildRelevantLarkSkillContext(skills []SkillStatus, userText string) string {
+	names := inferLarkSkillNames(userText)
+	if len(names) == 0 {
+		return ""
+	}
+	sections := make([]string, 0, len(names))
+	for _, name := range names {
+		status, err := resolveLarkSkillStatus(name, skills)
+		if err != nil || !status.Found {
+			continue
+		}
+		text, err := readLarkSkillText(status)
+		if err != nil {
+			continue
+		}
+		sections = append(sections, formatLarkSkillGuide(status, text, 5200))
+		if len(sections) >= 3 {
+			break
+		}
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+	return "本轮任务已自动加载相关官方 lark-cli Skill。执行飞书工具前必须优先遵循以下文档；如果仍不确定，调用 lark_skill_view 读取完整 Skill，不要猜命令或参数。\n\n" + strings.Join(sections, "\n\n---\n\n")
+}
+
+func resolveLarkSkillStatus(name string, statuses []SkillStatus) (SkillStatus, error) {
+	skillName := normalizeLarkSkillName(name)
+	if skillName == "" {
+		return SkillStatus{}, fmt.Errorf("skill 名称不能为空")
+	}
+	if !strings.HasPrefix(skillName, "lark-") {
+		return SkillStatus{}, fmt.Errorf("不支持的官方飞书 Skill：%s", name)
+	}
+	for _, status := range statuses {
+		if strings.EqualFold(status.Name, skillName) {
+			if status.Found && strings.TrimSpace(status.Path) != "" {
+				return status, nil
+			}
+			break
+		}
+	}
+	if path := findSkillOnDisk(skillName); path != "" {
+		return SkillStatus{Name: skillName, Found: true, Path: path}, nil
+	}
+	return SkillStatus{}, fmt.Errorf("未找到官方飞书 Skill `%s`。请先在 Feishu Bridge 设置页安装 CLI 与 Skills，或执行 /reload-skills 后重试。", skillName)
+}
+
+func normalizeLarkSkillName(name string) string {
+	value := strings.ToLower(strings.TrimSpace(name))
+	value = strings.TrimPrefix(value, "/")
+	value = strings.ReplaceAll(value, "_", "-")
+	value = strings.TrimPrefix(value, "lark-cli ")
+	value = strings.TrimPrefix(value, "lark ")
+	switch value {
+	case "doc", "docs", "document", "documents", "云文档", "文档":
+		return "lark-doc"
+	case "sheet", "sheets", "spreadsheet", "spreadsheets", "电子表格", "表格":
+		return "lark-sheets"
+	case "drive", "file", "files", "folder", "folders", "云盘", "文件", "文件夹":
+		return "lark-drive"
+	case "im", "message", "messages", "chat", "chats", "消息", "群", "群聊":
+		return "lark-im"
+	case "calendar", "cal", "日历", "日程", "会议":
+		return "lark-calendar"
+	case "base", "bitable", "多维表格":
+		return "lark-base"
+	case "wiki", "知识库":
+		return "lark-wiki"
+	case "task", "tasks", "任务", "待办":
+		return "lark-task"
+	case "mail", "email", "邮箱", "邮件":
+		return "lark-mail"
+	case "contact", "contacts", "通讯录", "联系人":
+		return "lark-contact"
+	case "minutes", "妙记", "会议纪要":
+		return "lark-minutes"
+	case "slides", "slide", "幻灯片", "演示文稿":
+		return "lark-slides"
+	case "approval", "审批":
+		return "lark-approval"
+	case "attendance", "考勤":
+		return "lark-attendance"
+	case "okr":
+		return "lark-okr"
+	case "vc", "video", "视频会议":
+		return "lark-vc"
+	case "whiteboard", "白板":
+		return "lark-whiteboard"
+	}
+	if strings.HasPrefix(value, "lark-") {
+		return value
+	}
+	return ""
+}
+
+func inferLarkSkillNames(text string) []string {
+	value := strings.ToLower(strings.TrimSpace(text))
+	if value == "" {
+		return nil
+	}
+	type cue struct {
+		name  string
+		words []string
+	}
+	cues := []cue{
+		{"lark-sheets", []string{"电子表格", "表格", "sheet", "spreadsheet", "单元格", "sheet_id"}},
+		{"lark-doc", []string{"云文档", "文档", "docx", "docs", "doc_token", "读取[飞书云文档"}},
+		{"lark-drive", []string{"云盘", "云空间", "文件", "文件夹", "drive"}},
+		{"lark-im", []string{"消息", "群聊", "群", "im", "chat", "message"}},
+		{"lark-calendar", []string{"日历", "日程", "会议", "calendar", "agenda"}},
+		{"lark-base", []string{"多维表格", "bitable", "base"}},
+		{"lark-wiki", []string{"知识库", "wiki"}},
+		{"lark-task", []string{"任务", "待办", "task"}},
+		{"lark-mail", []string{"邮箱", "邮件", "mail", "email"}},
+		{"lark-contact", []string{"通讯录", "联系人", "contact"}},
+		{"lark-minutes", []string{"妙记", "会议纪要", "minutes"}},
+		{"lark-slides", []string{"幻灯片", "演示文稿", "slides"}},
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 3)
+	for _, item := range cues {
+		for _, word := range item.words {
+			if strings.Contains(value, strings.ToLower(word)) {
+				if _, ok := seen[item.name]; !ok {
+					seen[item.name] = struct{}{}
+					out = append(out, item.name)
+				}
+				break
+			}
+		}
+	}
+	return out
+}
+
+func readLarkSkillText(status SkillStatus) (string, error) {
+	path := filepath.Join(status.Path, "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("读取 %s 失败：%w", path, err)
+	}
+	return string(data), nil
+}
+
+func formatLarkSkillGuide(status SkillStatus, text string, limit int) string {
+	body := stripYAMLFrontmatter(text)
+	body = strings.TrimSpace(body)
+	title := status.Name
+	if title == "" {
+		title = filepath.Base(status.Path)
+	}
+	commands := extractLarkCLICommandHints(body, 14)
+	references := listLarkSkillReferences(status.Path, 12)
+	lines := []string{
+		"## 官方 Skill: " + title,
+		"Path: " + status.Path,
+		"",
+		"关键命令线索：",
+	}
+	if len(commands) == 0 {
+		lines = append(lines, "- 未在 SKILL.md 中提取到 lark-cli 示例；请阅读正文规则。")
+	} else {
+		for _, cmd := range commands {
+			lines = append(lines, "- "+cmd)
+		}
+	}
+	if len(references) > 0 {
+		lines = append(lines, "", "可用 references：")
+		for _, ref := range references {
+			lines = append(lines, "- "+ref)
+		}
+	}
+	lines = append(lines, "", "SKILL.md 正文：", body)
+	out := strings.TrimSpace(strings.Join(lines, "\n"))
+	if limit > 0 && len(out) > limit {
+		out = out[:limit] + "\n...[truncated; 如需完整内容请再次调用 lark_skill_view]"
+	}
+	return out
+}
+
+func stripYAMLFrontmatter(text string) string {
+	text = strings.TrimPrefix(text, "\ufeff")
+	if !strings.HasPrefix(text, "---") {
+		return text
+	}
+	parts := strings.SplitN(text, "---", 3)
+	if len(parts) == 3 {
+		return parts[2]
+	}
+	return text
+}
+
+func extractLarkCLICommandHints(text string, limit int) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, limit)
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		line = strings.TrimPrefix(line, "-")
+		line = strings.TrimSpace(strings.Trim(line, "`"))
+		idx := strings.Index(line, "lark-cli ")
+		if idx < 0 {
+			continue
+		}
+		line = strings.TrimSpace(line[idx:])
+		if len(line) > 220 {
+			line = line[:220] + "..."
+		}
+		if _, ok := seen[line]; ok {
+			continue
+		}
+		seen[line] = struct{}{}
+		out = append(out, line)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func listLarkSkillReferences(skillPath string, limit int) []string {
+	refDir := filepath.Join(skillPath, "references")
+	entries, err := os.ReadDir(refDir)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(strings.ToLower(name), ".md") {
+			names = append(names, "references/"+name)
+		}
+	}
+	sort.Strings(names)
+	if limit > 0 && len(names) > limit {
+		names = names[:limit]
+	}
+	return names
 }

@@ -85,6 +85,9 @@ func TestRenderStreamingCardV2KeepsDoneToolsCollapsed(t *testing.T) {
 	if !strings.Contains(cardJSON, "collapsible_panel") || !strings.Contains(cardJSON, "lark_cli_exec") {
 		t.Fatalf("streaming card should expose completed tools as collapsed panels: %s", cardJSON)
 	}
+	if !strings.Contains(cardJSON, `"content":"","element_id":"steps_md"`) {
+		t.Fatalf("streaming card should leave static steps summary empty for tool-only updates: %s", cardJSON)
+	}
 	if !strings.Contains(cardJSON, `"element_id":"reply_md"`) {
 		t.Fatalf("streaming card should keep reply slot for later deltas: %s", cardJSON)
 	}
@@ -140,8 +143,11 @@ func TestCompactFinalCardStateKeepsCollapsedToolSummary(t *testing.T) {
 	if !strings.Contains(cardJSON, "collapsible_panel") || !strings.Contains(cardJSON, "lark_cli_exec") {
 		t.Fatalf("compact final card should keep collapsed tool panel: %s", cardJSON)
 	}
-	if !strings.Contains(state.Reply, "完整回复已通过分段 Markdown 补发") {
-		t.Fatalf("compact reply missing fallback hint: %q", state.Reply)
+	if strings.Contains(state.Reply, "Markdown 补发") {
+		t.Fatalf("compact reply should not mention markdown fallback: %q", state.Reply)
+	}
+	if !strings.Contains(state.Reply, "卡片中保留摘要") {
+		t.Fatalf("compact reply missing compact hint: %q", state.Reply)
 	}
 	if len([]rune(state.Reply)) > compactFinalReplyLimit+80 {
 		t.Fatalf("compact reply too long: %d runes", len([]rune(state.Reply)))
@@ -158,7 +164,7 @@ func TestShouldUseCompactFinalDeliveryForLongReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !shouldUseCompactFinalDelivery(cardJSON, cardState{Reply: strings.Repeat("长回复", 2000)}) {
-		t.Fatal("long final reply should use compact card plus markdown fallback")
+		t.Fatal("long final reply should use compact card")
 	}
 }
 
@@ -175,8 +181,8 @@ func TestStreamingReplyContentCapsLongPreview(t *testing.T) {
 	if strings.Contains(preview, longReply) {
 		t.Fatal("streaming card should not embed full long reply")
 	}
-	if !strings.Contains(preview, "完整内容将在完成后分段发送") {
-		t.Fatalf("streaming preview should tell users final content will be chunked: %q", preview)
+	if strings.Contains(preview, "分段发送") || !strings.Contains(preview, "卡片中保留摘要") {
+		t.Fatalf("streaming preview should not promise markdown fallback: %q", preview)
 	}
 	if len([]rune(preview)) > streamingReplyPreviewLimit+80 {
 		t.Fatalf("streaming preview too long: %d runes", len([]rune(preview)))
@@ -197,14 +203,14 @@ func TestCardHeaderTitleFallsBackToStatusOnly(t *testing.T) {
 	}
 }
 
-func TestRenderStepsMarkdownOmitsToolBodies(t *testing.T) {
+func TestRenderStepsMarkdownOmitsTools(t *testing.T) {
 	rendered := renderStepsMarkdown([]cardStep{{
 		Kind:  "tool",
 		Title: "mcp__context7__query_docs",
 		Body:  "参数：`{\"query\":\"Vue 3\"}`\n结果：very long tool output",
 		Done:  true,
 	}})
-	if strings.Contains(rendered, "very long tool output") || strings.Contains(rendered, "参数") {
-		t.Fatalf("streaming step summary should omit tool body: %q", rendered)
+	if strings.TrimSpace(rendered) != "" {
+		t.Fatalf("streaming step summary should omit tools entirely: %q", rendered)
 	}
 }

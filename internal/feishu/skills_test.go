@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestFallbackRequiredSkillNamesContainsCoreLark(t *testing.T) {
@@ -48,6 +50,21 @@ func TestSkillsReadyOverrideForFallbackSnapshot(t *testing.T) {
 	statuses = []SkillStatus{{Name: "lark-im", Found: false}}
 	if skillsReady(statuses) {
 		t.Fatal("skillsReady should return false when a required skill is missing")
+	}
+}
+
+func TestClearSkillManifestCache(t *testing.T) {
+	manifestCacheMu.Lock()
+	manifestCacheNames = []string{"lark-im"}
+	manifestCacheFetched = time.Now()
+	manifestCacheMu.Unlock()
+
+	clearSkillManifestCache()
+
+	manifestCacheMu.Lock()
+	defer manifestCacheMu.Unlock()
+	if len(manifestCacheNames) != 0 || !manifestCacheFetched.IsZero() {
+		t.Fatalf("manifest cache should be cleared: names=%#v fetched=%s", manifestCacheNames, manifestCacheFetched)
 	}
 }
 
@@ -171,6 +188,34 @@ func TestDiscoverSkillsDiskOnlyStillFound(t *testing.T) {
 	}
 	if !skillsReady(statuses) {
 		t.Fatalf("expected skillsReady=true with disk-only install, got %+v", statuses)
+	}
+}
+
+func TestRenderLarkSkillViewReadsOfficialSkill(t *testing.T) {
+	_, agentsRoot := withSkillTestEnv(t)
+	dir := writeSkillOnDisk(t, agentsRoot, "lark-sheets")
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: lark-sheets\n---\n# Sheets\n\nUse `lark-cli sheets +info` before `lark-cli sheets +read`.\n"), 0o644); err != nil {
+		t.Fatalf("write skill body: %v", err)
+	}
+	got, err := renderLarkSkillView("sheets")
+	if err != nil {
+		t.Fatalf("renderLarkSkillView: %v", err)
+	}
+	if !strings.Contains(got, "lark-sheets") || !strings.Contains(got, "lark-cli sheets +info") {
+		t.Fatalf("unexpected guide: %s", got)
+	}
+}
+
+func TestBuildRelevantLarkSkillContextInjectsMatchedSkill(t *testing.T) {
+	_, agentsRoot := withSkillTestEnv(t)
+	dir := writeSkillOnDisk(t, agentsRoot, "lark-sheets")
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("# Sheets\n\nUse `lark-cli sheets +info`.\n"), 0o644); err != nil {
+		t.Fatalf("write skill body: %v", err)
+	}
+	statuses := []SkillStatus{{Name: "lark-sheets", Found: true, Path: dir}}
+	got := buildRelevantLarkSkillContext(statuses, "读取这个电子表格")
+	if !strings.Contains(got, "lark-cli sheets +info") {
+		t.Fatalf("expected sheets skill context, got: %s", got)
 	}
 }
 
