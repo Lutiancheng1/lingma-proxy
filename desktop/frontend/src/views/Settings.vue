@@ -6,11 +6,19 @@ import {
   GetDetectionInfo,
   GetFeishuBridgeConfig,
   GetFeishuBridgeMCPJSON,
+  GetFeishuBridgeSkills,
   GetFeishuBridgeStatus,
   GetModels,
+  ChooseFeishuBridgeSkillFolder,
+  ChooseFeishuBridgeSkillZip,
+  DeleteFeishuBridgeSkill,
+  ImportFeishuBridgeSkillPath,
   InstallFeishuCLI,
   RefreshFeishuBridgeStatus,
+  RefreshModels,
   ReinstallFeishuSkills,
+  ReloadFeishuBridgeSkills,
+  SetFeishuBridgeSkillEnabled,
   StartFeishuBridge,
   StartFeishuCLILogin,
   StartFeishuCLISetupNew,
@@ -35,6 +43,14 @@ const bridgeConfig = ref({
   botIdentity: '',
   mcpEnabled: false,
   mcpServers: [],
+  context: {
+    autoCompact: true,
+    compactWatermark: 75,
+    toolResultRetention: 2,
+    contextWindowOverride: 0,
+    skillHttpTimeout: 60,
+    skillHttpMaxBytes: 5242880,
+  },
   maxToolRounds: 0,
 })
 const bridgeStatus = ref(null)
@@ -55,6 +71,17 @@ const bridgeMCPJSONDraft = ref('')
 const bridgeMCPJSONPath = ref('')
 const bridgeMCPJSONError = ref('')
 const bridgeMCPJSONSaving = ref(false)
+const bridgeSkills = ref([])
+const bridgeSkillsLoading = ref(false)
+const bridgeSkillImporting = ref(false)
+const bridgeContextDraft = ref({
+  autoCompact: true,
+  compactWatermark: 75,
+  toolResultRetention: 2,
+  contextWindowOverride: 0,
+  skillHttpTimeout: 60,
+  skillHttpMaxBytes: 5242880,
+})
 const openSelect = ref('')
 const fallbackModelsText = ref('')
 const availableBridgeModels = ref([])
@@ -243,6 +270,17 @@ function chooseBridgeModel(modelID) {
   openSelect.value = ''
 }
 
+async function refreshAvailableBridgeModels({ background = false } = {}) {
+  try {
+    const models = background ? await RefreshModels() : await GetModels()
+    availableBridgeModels.value = Array.isArray(models) ? models : []
+  } catch (e) {
+    if (!background) {
+      emit('log', 'warn', 'Bridge 模型列表读取失败：' + (e.message || String(e)))
+    }
+  }
+}
+
 function formatDateTime(value) {
   if (!value) return ''
   const date = new Date(value)
@@ -262,7 +300,10 @@ onMounted(async () => {
   try {
     config.value = await GetConfig()
     bridgeConfig.value = await GetFeishuBridgeConfig()
-    availableBridgeModels.value = await GetModels()
+    await refreshAvailableBridgeModels()
+    if (availableBridgeModels.value.length === 0) {
+      refreshAvailableBridgeModels({ background: true })
+    }
     fallbackModelsText.value = Array.isArray(config.value.RemoteFallbackModels)
       ? config.value.RemoteFallbackModels.join('\n')
       : ''
@@ -277,10 +318,14 @@ onMounted(async () => {
   safeEventsOn('feishu:status', (nextStatus) => {
     applyBridgeStatus(nextStatus, true)
   })
+  safeEventsOn('models:updated', (models) => {
+    availableBridgeModels.value = Array.isArray(models) ? models : []
+  })
 })
 
 onUnmounted(() => {
   safeEventsOff('feishu:status')
+  safeEventsOff('models:updated')
   stopBridgeStatusPolling()
 })
 
@@ -441,7 +486,76 @@ function openBridgeAdvancedDialog() {
   bridgeIdentityDraft.value = String(bridgeConfig.value.botIdentity || '')
   bridgeMCPEnabledDraft.value = Boolean(bridgeConfig.value.mcpEnabled)
   bridgeMCPServersDraft.value = bridgeAdvancedServersFromStatus()
+  bridgeContextDraft.value = {
+    autoCompact: bridgeConfig.value.context?.autoCompact !== false,
+    compactWatermark: Number(bridgeConfig.value.context?.compactWatermark || 75),
+    toolResultRetention: Number(bridgeConfig.value.context?.toolResultRetention || 2),
+    contextWindowOverride: Number(bridgeConfig.value.context?.contextWindowOverride || 0),
+    skillHttpTimeout: Number(bridgeConfig.value.context?.skillHttpTimeout || 60),
+    skillHttpMaxBytes: Number(bridgeConfig.value.context?.skillHttpMaxBytes || 5242880),
+  }
+  refreshBridgeSkills()
   bridgeAdvancedDialogOpen.value = true
+}
+
+async function refreshBridgeSkills() {
+  bridgeSkillsLoading.value = true
+  try {
+    bridgeSkills.value = await GetFeishuBridgeSkills()
+  } catch (e) {
+    emit('log', 'warn', 'Bridge Skills 读取失败：' + (e.message || String(e)))
+    bridgeSkills.value = []
+  } finally {
+    bridgeSkillsLoading.value = false
+  }
+}
+
+async function reloadBridgeSkills() {
+  bridgeSkillsLoading.value = true
+  try {
+    await ReloadFeishuBridgeSkills()
+    bridgeSkills.value = await GetFeishuBridgeSkills()
+    emit('notice', 'Feishu Bridge Skills 已重新扫描')
+  } catch (e) {
+    emit('notice', 'Skills 扫描失败：' + (e.message || String(e)))
+  } finally {
+    bridgeSkillsLoading.value = false
+  }
+}
+
+async function importBridgeSkill(kind) {
+  bridgeSkillImporting.value = true
+  try {
+    const path = kind === 'zip' ? await ChooseFeishuBridgeSkillZip() : await ChooseFeishuBridgeSkillFolder()
+    if (!path) return
+    const result = await ImportFeishuBridgeSkillPath(path)
+    bridgeSkills.value = await GetFeishuBridgeSkills()
+    const imported = Array.isArray(result?.imported) ? result.imported.length : 0
+    const errors = Array.isArray(result?.errors) && result.errors.length > 0 ? `；${result.errors.length} 个错误` : ''
+    emit('notice', `导入 ${imported} 个 Skill${errors}`)
+  } catch (e) {
+    emit('notice', 'Skill 导入失败：' + (e.message || String(e)))
+  } finally {
+    bridgeSkillImporting.value = false
+  }
+}
+
+async function toggleBridgeSkill(skill) {
+  try {
+    await SetFeishuBridgeSkillEnabled(skill.id, !skill.enabled)
+    bridgeSkills.value = await GetFeishuBridgeSkills()
+  } catch (e) {
+    emit('notice', 'Skill 状态更新失败：' + (e.message || String(e)))
+  }
+}
+
+async function deleteBridgeSkill(skill) {
+  try {
+    await DeleteFeishuBridgeSkill(skill.id)
+    bridgeSkills.value = await GetFeishuBridgeSkills()
+  } catch (e) {
+    emit('notice', 'Skill 删除失败：' + (e.message || String(e)))
+  }
 }
 
 async function refreshBridgeAdvancedMCP() {
@@ -535,6 +649,14 @@ async function saveBridgeAdvancedSettings() {
     botName: bridgeBotNameDraft.value.trim(),
     botIdentity: bridgeIdentityDraft.value.trim(),
     mcpEnabled: bridgeMCPEnabledDraft.value,
+    context: {
+      autoCompact: bridgeContextDraft.value.autoCompact,
+      compactWatermark: Number(bridgeContextDraft.value.compactWatermark || 75),
+      toolResultRetention: Number(bridgeContextDraft.value.toolResultRetention || 2),
+      contextWindowOverride: Number(bridgeContextDraft.value.contextWindowOverride || 0),
+      skillHttpTimeout: Number(bridgeContextDraft.value.skillHttpTimeout || 60),
+      skillHttpMaxBytes: Number(bridgeContextDraft.value.skillHttpMaxBytes || 5242880),
+    },
     mcpServers: bridgeMCPServersDraft.value.map((server) => ({
       name: server.name,
       source: server.source,
@@ -994,8 +1116,14 @@ async function handleBridgeStepClick(step) {
                     <span><code>/models</code>：列出代理可用模型</span>
                     <span><code>/model &lt;name&gt;</code>：本会话切换模型；不带参数查看当前</span>
                     <span><code>/model default</code>：恢复使用全局默认模型</span>
-                    <span><code>/mcp</code>：查看已启用 MCP server 和工具数量</span>
+                    <span><code>/mcp</code>：查看已启用 MCP server 与具体 tools</span>
                     <span><code>/cost</code>：查看本会话 prompt / completion tokens 估算</span>
+                    <span><code>/context</code>：查看上下文预算、水位和压缩状态</span>
+                    <h5>Skills</h5>
+                    <span><code>/skills</code>：列出启用的用户导入 Skills</span>
+                    <span><code>/skill &lt;name&gt;</code>：查看某个 Skill 摘要</span>
+                    <span><code>/reload-skills</code>：重新扫描用户导入 Skills</span>
+                    <span><code>/skill-run &lt;skill&gt; &lt;script&gt; confirm</code>：确认执行脚本</span>
                   </div>
                 </div>
               </div>
@@ -1272,6 +1400,82 @@ async function handleBridgeStepClick(step) {
               ></textarea>
             </div>
             <p class="identity-note">这段内容不会替代工具调用规则、权限规则和真实数据约束。需要恢复默认时清空后保存。</p>
+          </div>
+
+          <div class="advanced-section">
+            <div class="advanced-section-head">
+              <div>
+                <h3>上下文管理</h3>
+                <p>Bridge 会在请求前估算上下文水位，并按水位压缩旧工具结果或刷新摘要。</p>
+              </div>
+              <label class="switch">
+                <input v-model="bridgeContextDraft.autoCompact" type="checkbox" />
+                <span></span>
+              </label>
+            </div>
+            <div class="context-grid">
+              <label>
+                <span>模型窗口覆盖</span>
+                <input v-model.number="bridgeContextDraft.contextWindowOverride" type="number" min="0" step="1000" placeholder="0 表示自动" />
+              </label>
+              <label>
+                <span>压缩水位 %</span>
+                <input v-model.number="bridgeContextDraft.compactWatermark" type="number" min="50" max="92" step="1" />
+              </label>
+              <label>
+                <span>保留工具结果</span>
+                <input v-model.number="bridgeContextDraft.toolResultRetention" type="number" min="1" max="12" step="1" />
+              </label>
+              <label>
+                <span>HTTP 超时秒</span>
+                <input v-model.number="bridgeContextDraft.skillHttpTimeout" type="number" min="5" max="300" step="5" />
+              </label>
+              <label>
+                <span>HTTP 上限 bytes</span>
+                <input v-model.number="bridgeContextDraft.skillHttpMaxBytes" type="number" min="262144" max="52428800" step="262144" />
+              </label>
+            </div>
+          </div>
+
+          <div class="advanced-section">
+            <div class="advanced-section-head">
+              <div>
+                <h3>用户 Skills</h3>
+                <p>导入 zip 或包含 SKILL.md 的文件夹；Bot 只看索引，使用时再按需读取正文。</p>
+              </div>
+              <button class="secondary-button" type="button" :disabled="bridgeSkillsLoading" @click="reloadBridgeSkills">
+                {{ bridgeSkillsLoading ? '扫描中...' : '重新扫描' }}
+              </button>
+            </div>
+            <div class="actions-row">
+              <button class="secondary-button" type="button" :disabled="bridgeSkillImporting" @click="importBridgeSkill('folder')">
+                导入文件夹
+              </button>
+              <button class="secondary-button" type="button" :disabled="bridgeSkillImporting" @click="importBridgeSkill('zip')">
+                导入 zip
+              </button>
+            </div>
+            <div class="skill-list">
+              <div v-if="!bridgeSkillsLoading && bridgeSkills.length === 0" class="mcp-empty">
+                暂未导入用户 Skill。
+              </div>
+              <div v-for="skill in bridgeSkills" :key="skill.id" class="skill-card" :class="{ disabled: !skill.enabled, invalid: skill.error }">
+                <button class="skill-row" type="button" @click="toggleBridgeSkill(skill)">
+                  <span class="mcp-server-toggle" :class="{ on: skill.enabled }"></span>
+                  <span class="skill-main">
+                    <strong>{{ skill.name }}</strong>
+                    <small>{{ skill.description || '无描述' }}</small>
+                    <em>{{ skill.path }}</em>
+                  </span>
+                  <span class="mcp-server-meta">{{ skill.enabled ? '启用' : '停用' }}</span>
+                </button>
+                <div v-if="Array.isArray(skill.scripts) && skill.scripts.length > 0" class="skill-scripts">
+                  scripts: {{ skill.scripts.join(', ') }}
+                </div>
+                <div v-if="skill.error" class="mcp-json-error">{{ skill.error }}</div>
+                <button class="text-danger-button" type="button" @click.stop="deleteBridgeSkill(skill)">删除</button>
+              </div>
+            </div>
           </div>
 
           <div class="advanced-section">

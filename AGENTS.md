@@ -66,6 +66,8 @@ ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 Dev
 - **CardKit PUT body 格式**：`{"card": {"type":"card_json","data": <string>}, "sequence": N}`，`data` 是 JSON 字符串（双重编码），解码后传对象会报 `9499 Invalid parameter type`
 - **CardKit element 必须初始创建**：`streamUpdateCardContent` 要求 element 在卡片创建时就存在，条件性跳过会导致后续更新 404
 - **CardKit sequence**：同一卡片所有 API 调用的 `sequence` 必须严格递增，否则 300317 错误
+- **CardKit 工具折叠面板**：工具完成后要通过结构刷新把该工具插入为默认折叠的 `collapsible_panel`；正文流继续写 `reply_md`，不能等最终卡片才展示工具面板
+- **CardKit 完成态标题**：关闭 `/settings.streaming_mode` 不会刷新 header/title；短回复完成后仍需小尺寸最终卡片更新，否则标题会停在“正在思考”
 - **CardKit 降级**：`cardWriter` 双模式（CardKit → legacy PATCH → markdown），`createAndSendStreamingCard` 失败自动 `useCardKit=false`
 
 ## 关键设计

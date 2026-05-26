@@ -14,6 +14,14 @@ const (
 	cardElementReply = "reply_md"
 	cardElementSteps = "steps_md"
 	cardElementHint  = "hint_md"
+
+	finalCardStepBodyLimit     = 700
+	compactFinalReplyLimit     = 900
+	compactFinalStepLimit      = 6
+	compactFinalStepBodyLimit  = 320
+	finalCardJSONSoftLimit     = 12000
+	finalCardReplySoftLimit    = 3500
+	streamingReplyPreviewLimit = 3200
 )
 
 // cardState is the in-memory model used to render the streaming reply card.
@@ -61,7 +69,7 @@ func renderStreamingCardV2(state cardState) (string, error) {
 			},
 		},
 		"body": map[string]any{
-			"elements": buildFinalElements(state),
+			"elements": buildStreamingElements(state),
 		},
 	}
 	payload, err := json.Marshal(card)
@@ -118,13 +126,14 @@ func buildStreamingElements(state cardState) []map[string]any {
 		"content":    stepsContent,
 		"element_id": cardElementSteps,
 	})
-	replyContent := strings.TrimSpace(state.Reply)
-	if replyContent == "" {
-		replyContent = " "
+	for i, step := range state.Steps {
+		if stepElement := renderStreamingStepElement(step, i); stepElement != nil {
+			elements = append(elements, stepElement)
+		}
 	}
 	elements = append(elements, map[string]any{
 		"tag":        "markdown",
-		"content":    replyContent,
+		"content":    streamingReplyContent(state.Reply),
 		"element_id": cardElementReply,
 	})
 	elements = append(elements, map[string]any{
@@ -133,6 +142,13 @@ func buildStreamingElements(state cardState) []map[string]any {
 		"element_id": cardElementHint,
 	})
 	return elements
+}
+
+func renderStreamingStepElement(step cardStep, index int) map[string]any {
+	if step.Kind != "tool" || !step.Done {
+		return nil
+	}
+	return renderStepElement(step, index)
 }
 
 func buildFinalElements(state cardState) []map[string]any {
@@ -173,7 +189,11 @@ func renderStepElement(step cardStep, index int) map[string]any {
 		title = step.Kind
 	}
 	icon := stepIcon(step)
-	if step.Kind == "tool" && strings.TrimSpace(step.Body) != "" {
+	body := strings.TrimSpace(step.Body)
+	if body != "" {
+		body = summarizeText(body, finalCardStepBodyLimit)
+	}
+	if step.Kind == "tool" && body != "" {
 		return map[string]any{
 			"tag":              "collapsible_panel",
 			"element_id":       fmt.Sprintf("tool_panel_%02d", index%100),
@@ -189,7 +209,7 @@ func renderStepElement(step cardStep, index int) map[string]any {
 			"elements": []any{
 				map[string]any{
 					"tag":     "markdown",
-					"content": strings.TrimSpace(step.Body),
+					"content": body,
 				},
 			},
 			"padding":          "4px 0px 4px 0px",
@@ -197,7 +217,7 @@ func renderStepElement(step cardStep, index int) map[string]any {
 		}
 	}
 	content := fmt.Sprintf("%s **%s**", icon, title)
-	if body := strings.TrimSpace(step.Body); body != "" {
+	if body != "" {
 		content += "\n" + body
 	}
 	return map[string]any{
@@ -376,6 +396,7 @@ type cardWriter struct {
 	sequence      int    // monotonic counter for CardKit API calls
 	dirty         bool
 	flushing      bool
+	flushCancel   context.CancelFunc
 	closed        bool
 	startedAt     time.Time
 	timer         *time.Timer
@@ -452,6 +473,60 @@ func (c *cardWriter) UpdateLastStep(mutator func(*cardStep)) {
 	c.dirty = true
 	c.mu.Unlock()
 	c.schedule()
+}
+
+func (c *cardWriter) RefreshStructure() {
+	c.mu.Lock()
+	if c.closed || c.cardBroken {
+		c.mu.Unlock()
+		return
+	}
+	entityID := c.cardEntityID
+	if entityID == "" || !c.useCardKit {
+		c.dirty = true
+		c.mu.Unlock()
+		c.schedule()
+		return
+	}
+	if c.flushing {
+		c.dirty = true
+		c.mu.Unlock()
+		return
+	}
+	c.flushing = true
+	stateCopy := c.state
+	stateCopy.Elapsed = time.Since(c.startedAt)
+	c.dirty = false
+	c.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	c.setActiveFlushCancel(cancel)
+	defer func() {
+		c.clearActiveFlushCancel(cancel)
+		cancel()
+	}()
+	cardJSON, err := renderStreamingCardV2(stateCopy)
+	if err != nil {
+		c.markBroken(err)
+		return
+	}
+	seq := c.nextSequence()
+	if err := c.manager.updateCardEntity(ctx, entityID, cardJSON, seq); err != nil {
+		if ctx.Err() != nil {
+			c.finishCanceledFlush()
+			return
+		}
+		c.manager.logf("warn", "Feishu bridge 工具折叠卡片刷新失败："+err.Error(), c.logMeta)
+		c.finishCanceledFlush()
+		return
+	}
+	c.mu.Lock()
+	c.flushing = false
+	stillDirty := c.dirty
+	c.mu.Unlock()
+	if stillDirty {
+		c.schedule()
+	}
 }
 
 func (c *cardWriter) SetReply(reply string) {
@@ -532,7 +607,11 @@ func (c *cardWriter) flush(final bool) {
 	c.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	c.setActiveFlushCancel(cancel)
+	defer func() {
+		c.clearActiveFlushCancel(cancel)
+		cancel()
+	}()
 
 	// If no card entity yet, create one and send the initial card.
 	if entityIDSnap == "" && useCardKitSnap {
@@ -579,11 +658,12 @@ func (c *cardWriter) flush(final bool) {
 	}
 
 	// Update reply (the hot path — always updated)
-	replyContent := strings.TrimSpace(stateCopy.Reply)
-	if replyContent == "" {
-		replyContent = " "
-	}
+	replyContent := streamingReplyContent(stateCopy.Reply)
 	if err := c.manager.streamUpdateCardContent(ctx, entityIDSnap, cardElementReply, replyContent, seq); err != nil {
+		if ctx.Err() != nil {
+			c.finishCanceledFlush()
+			return
+		}
 		c.manager.logf("warn", "Feishu bridge streamUpdateCardContent 失败 seq="+fmt.Sprint(seq)+"，尝试全卡更新："+err.Error(), c.logMeta)
 		// Streaming text update failed — try a full card update as fallback
 		seq2 := c.nextSequence()
@@ -593,6 +673,10 @@ func (c *cardWriter) flush(final bool) {
 			return
 		}
 		if updateErr := c.manager.updateCardEntity(ctx, entityIDSnap, cardJSON, seq2); updateErr != nil {
+			if ctx.Err() != nil {
+				c.finishCanceledFlush()
+				return
+			}
 			c.markBroken(updateErr)
 			return
 		}
@@ -641,6 +725,10 @@ func (c *cardWriter) flushLegacy(ctx context.Context, stateCopy cardState, final
 		return
 	}
 	if patchErr := c.manager.patchCardMessage(ctx, msgIDSnap, cardJSON); patchErr != nil {
+		if ctx.Err() != nil {
+			c.finishCanceledFlush()
+			return
+		}
 		c.markBroken(patchErr)
 		return
 	}
@@ -663,6 +751,50 @@ func (c *cardWriter) markBroken(err error) {
 	}
 }
 
+func (c *cardWriter) setActiveFlushCancel(cancel context.CancelFunc) {
+	c.mu.Lock()
+	c.flushCancel = cancel
+	c.mu.Unlock()
+}
+
+func (c *cardWriter) clearActiveFlushCancel(cancel context.CancelFunc) {
+	c.mu.Lock()
+	c.flushCancel = nil
+	c.mu.Unlock()
+}
+
+func (c *cardWriter) cancelActiveFlush() {
+	c.mu.Lock()
+	cancel := c.flushCancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (c *cardWriter) finishCanceledFlush() {
+	c.mu.Lock()
+	c.flushing = false
+	c.dirty = false
+	c.mu.Unlock()
+}
+
+func (c *cardWriter) waitForFlushIdle(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		c.mu.Lock()
+		flushing := c.flushing
+		c.mu.Unlock()
+		if !flushing {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 // Finalize writes the final card state. If CardKit was used, it disables
 // streaming_mode and does a final full update. Falls back to markdown if
 // the card is broken.
@@ -680,6 +812,14 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 		c.timer.Stop()
 		c.timer = nil
 	}
+	c.mu.Unlock()
+
+	c.cancelActiveFlush()
+	if !c.waitForFlushIdle(3 * time.Second) {
+		c.manager.logf("warn", "Feishu bridge Finalize: 等待流式卡片更新结束超时，继续执行最终兜底", c.logMeta)
+	}
+
+	c.mu.Lock()
 	broken := c.cardBroken
 	useCardKit := c.useCardKit
 	entityID := c.cardEntityID
@@ -689,25 +829,65 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 
 	if broken || (entityID == "" && c.cardMsgID == "" && strings.TrimSpace(replyText) == "" && len(stateCopy.Steps) == 0) {
 		c.manager.logf("info", "Feishu bridge Finalize: 降级到 markdown（broken="+fmt.Sprint(broken)+"）", c.logMeta)
+		if useCardKit && entityID != "" {
+			c.updateCompactFinalCard(context.Background(), entityID, stateCopy)
+		}
 		c.fallbackMarkdown(rootMsg, replyText)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	if useCardKit && entityID == "" {
+		c.manager.logf("info", "Feishu bridge Finalize: 流式卡片尚未创建，先创建 CardKit 卡片", c.logMeta)
+		newEntityID, newMsgID, createErr := c.manager.createAndSendStreamingCard(ctx, rootMsg, stateCopy)
+		if createErr != nil {
+			c.manager.logf("warn", "Feishu bridge Finalize 创建 CardKit 失败，降级 legacy："+createErr.Error(), c.logMeta)
+			useCardKit = false
+		} else {
+			entityID = newEntityID
+			c.mu.Lock()
+			c.cardEntityID = newEntityID
+			c.cardMsgID = newMsgID
+			c.mu.Unlock()
+		}
+	}
+
 	if useCardKit && entityID != "" {
-		c.manager.logf("info", "Feishu bridge Finalize: CardKit 全卡更新 card_id="+entityID, c.logMeta)
-		// Final full update with streaming_mode=false
+		c.manager.logf("info", "Feishu bridge Finalize: CardKit 关闭流式 card_id="+entityID, c.logMeta)
 		cardJSON, err := renderFinalCardV2(stateCopy)
 		if err != nil {
 			c.fallbackMarkdown(rootMsg, replyText)
 			return
 		}
+		if shouldUseCompactFinalDelivery(cardJSON, stateCopy) {
+			c.manager.logf("info", "Feishu bridge Finalize: 最终内容较长，使用极简卡片并分段补发 markdown", c.logMeta)
+			c.updateCompactFinalCard(ctx, entityID, stateCopy)
+			c.fallbackMarkdown(rootMsg, replyText)
+			return
+		}
+		if err := c.closeStreamingCard(ctx, entityID, stateCopy); err == nil {
+			if updateErr := c.updateFinalCardHeader(ctx, entityID, cardJSON, stateCopy); updateErr != nil {
+				c.manager.logf("warn", "Feishu bridge 最终卡片状态更新失败，已保留流式正文："+updateErr.Error(), c.logMeta)
+			}
+			return
+		} else {
+			c.manager.logf("warn", "Feishu bridge 关闭 CardKit 流式失败，尝试全卡更新："+err.Error(), c.logMeta)
+		}
 		seq := c.nextSequence()
 		if err := c.manager.updateCardEntity(ctx, entityID, cardJSON, seq); err != nil {
 			c.manager.logf("warn", "Feishu bridge 最终卡片更新失败："+err.Error(), c.logMeta)
-			// Don't fallback to markdown — the streaming card already has content visible to the user. Sending markdown would create a duplicate message.
+			time.Sleep(700 * time.Millisecond)
+			retrySeq := c.nextSequence()
+			if retryErr := c.manager.updateCardEntity(ctx, entityID, cardJSON, retrySeq); retryErr == nil {
+				c.manager.logf("info", "Feishu bridge 最终卡片更新重试成功 card_id="+entityID, c.logMeta)
+				return
+			} else {
+				c.manager.logf("warn", "Feishu bridge 最终卡片更新重试失败："+retryErr.Error(), c.logMeta)
+			}
+			c.updateCompactFinalCard(ctx, entityID, stateCopy)
+			c.fallbackMarkdown(rootMsg, replyText)
 		}
 		return
 	}
@@ -738,4 +918,122 @@ func (c *cardWriter) fallbackMarkdown(rootMsg string, reply string) {
 	if err := c.manager.replyToMessage(context.Background(), rootMsg, reply); err != nil && c.manager != nil {
 		c.manager.logf("warn", "Feishu bridge markdown 兜底回复失败："+err.Error(), c.logMeta)
 	}
+}
+
+func (c *cardWriter) closeStreamingCard(ctx context.Context, entityID string, state cardState) error {
+	seq := c.nextSequence()
+	if stepsContent := renderStepsMarkdown(state.Steps); stepsContent != "" {
+		if err := c.manager.streamUpdateCardContent(ctx, entityID, cardElementSteps, stepsContent, seq); err != nil {
+			return fmt.Errorf("update final steps: %w", err)
+		}
+		seq = c.nextSequence()
+	}
+	replyContent := streamingReplyContent(state.Reply)
+	if err := c.manager.streamUpdateCardContent(ctx, entityID, cardElementReply, replyContent, seq); err != nil {
+		return fmt.Errorf("update final reply: %w", err)
+	}
+	if hint := strings.TrimSpace(state.Hint); hint != "" {
+		seq = c.nextSequence()
+		if err := c.manager.streamUpdateCardContent(ctx, entityID, cardElementHint, hint, seq); err != nil {
+			return fmt.Errorf("update final hint: %w", err)
+		}
+	}
+	seq = c.nextSequence()
+	summary := strings.TrimSpace(state.StatusLabel)
+	if summary == "" {
+		summary = "完成"
+	}
+	if err := c.manager.updateCardSettings(ctx, entityID, summary, seq); err != nil {
+		time.Sleep(500 * time.Millisecond)
+		retrySeq := c.nextSequence()
+		if retryErr := c.manager.updateCardSettings(ctx, entityID, summary, retrySeq); retryErr != nil {
+			return fmt.Errorf("close streaming settings: %w", retryErr)
+		}
+	}
+	return nil
+}
+
+func (c *cardWriter) updateFinalCardHeader(ctx context.Context, entityID string, cardJSON string, state cardState) error {
+	seq := c.nextSequence()
+	if err := c.manager.updateCardEntity(ctx, entityID, cardJSON, seq); err == nil {
+		return nil
+	} else {
+		time.Sleep(700 * time.Millisecond)
+		retrySeq := c.nextSequence()
+		if retryErr := c.manager.updateCardEntity(ctx, entityID, cardJSON, retrySeq); retryErr == nil {
+			c.manager.logf("info", "Feishu bridge 最终卡片状态更新重试成功 card_id="+entityID, c.logMeta)
+			return nil
+		}
+	}
+	compactState := compactFinalCardState(state)
+	compactJSON, compactErr := renderFinalCardV2(compactState)
+	if compactErr != nil {
+		return compactErr
+	}
+	compactSeq := c.nextSequence()
+	if compactUpdateErr := c.manager.updateCardEntity(ctx, entityID, compactJSON, compactSeq); compactUpdateErr != nil {
+		return compactUpdateErr
+	}
+	return nil
+}
+
+func (c *cardWriter) updateCompactFinalCard(ctx context.Context, entityID string, state cardState) {
+	compactState := compactFinalCardState(state)
+	compactJSON, compactErr := renderFinalCardV2(compactState)
+	if compactErr != nil {
+		c.manager.logf("warn", "Feishu bridge 极简最终卡片渲染失败："+compactErr.Error(), c.logMeta)
+		return
+	}
+	compactSeq := c.nextSequence()
+	if compactUpdateErr := c.manager.updateCardEntity(ctx, entityID, compactJSON, compactSeq); compactUpdateErr != nil {
+		c.manager.logf("warn", "Feishu bridge 极简最终卡片更新失败："+compactUpdateErr.Error(), c.logMeta)
+	}
+}
+
+func shouldUseCompactFinalDelivery(cardJSON string, state cardState) bool {
+	if len([]rune(cardJSON)) > finalCardJSONSoftLimit {
+		return true
+	}
+	if len([]rune(strings.TrimSpace(state.Reply))) > finalCardReplySoftLimit {
+		return true
+	}
+	return false
+}
+
+func streamingReplyContent(reply string) string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return " "
+	}
+	runes := []rune(reply)
+	if len(runes) <= streamingReplyPreviewLimit {
+		return reply
+	}
+	return strings.TrimSpace(string(runes[:streamingReplyPreviewLimit])) + "\n\n（回复较长，完整内容将在完成后分段发送。）"
+}
+
+func compactFinalCardState(state cardState) cardState {
+	state.Steps = compactFinalSteps(state.Steps)
+	state.Hint = strings.TrimSpace(firstNonEmptyString(state.Hint, "完整回复已通过分段 Markdown 补发。"))
+	reply := strings.TrimSpace(state.Reply)
+	if reply != "" {
+		state.Reply = summarizeText(reply, compactFinalReplyLimit) + "\n\n完整回复已通过分段 Markdown 补发。"
+	}
+	return state
+}
+
+func compactFinalSteps(steps []cardStep) []cardStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	start := 0
+	if len(steps) > compactFinalStepLimit {
+		start = len(steps) - compactFinalStepLimit
+	}
+	out := make([]cardStep, 0, len(steps)-start)
+	for _, step := range steps[start:] {
+		step.Body = summarizeText(step.Body, compactFinalStepBodyLimit)
+		out = append(out, step)
+	}
+	return out
 }

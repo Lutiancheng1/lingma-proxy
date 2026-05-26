@@ -128,8 +128,9 @@ type App struct {
 	stateFlushAt    time.Time
 	bootStartedAt   time.Time
 
-	lastFeishuProbeLog   string
-	lastFeishuProbeLogAt time.Time
+	lastFeishuProbeLog    string
+	lastFeishuProbeLogAt  time.Time
+	recentLogFingerprints map[string]time.Time
 }
 
 // ModelInfo represents a model returned by /v1/models
@@ -214,6 +215,7 @@ func (a *App) startup(ctx context.Context) {
 		feishu.SetCustomMCPConfigPath(path)
 	}
 	a.logBootMilestone("startup:config-loaded")
+	bridgeDataDir, _ := lingmaProxyConfigDir()
 	a.bridge = feishu.NewManager(feishu.ManagerOptions{
 		ProxyURL: func() string {
 			a.mu.RLock()
@@ -234,6 +236,7 @@ func (a *App) startup(ctx context.Context) {
 			defer a.mu.Unlock()
 			a.saveAppStateLocked()
 		},
+		DataDir: bridgeDataDir,
 	})
 	a.bridge.SetConfig(a.bridgeCfg)
 	a.logBootMilestone("startup:app-state-load:begin")
@@ -410,9 +413,11 @@ func (a *App) emitLogWithSourceMeta(source string, level string, message string,
 	if source == "" {
 		source = "app"
 	}
+	fingerprint := logFingerprint(source, level, message, sessionID, chatID, messageID)
+	now := time.Now()
 	entry := AppLog{
-		CreatedAt: time.Now().Format(time.RFC3339),
-		Time:      time.Now().Format("15:04:05"),
+		CreatedAt: now.Format(time.RFC3339),
+		Time:      now.Format("15:04:05"),
 		Source:    source,
 		SessionID: strings.TrimSpace(sessionID),
 		ChatID:    strings.TrimSpace(chatID),
@@ -421,13 +426,43 @@ func (a *App) emitLogWithSourceMeta(source string, level string, message string,
 		Message:   message,
 	}
 	a.mu.Lock()
+	if fingerprint != "" {
+		if a.recentLogFingerprints == nil {
+			a.recentLogFingerprints = make(map[string]time.Time)
+		}
+		const dedupeWindow = 10 * time.Second
+		for key, ts := range a.recentLogFingerprints {
+			if now.Sub(ts) > dedupeWindow {
+				delete(a.recentLogFingerprints, key)
+			}
+		}
+		if ts, ok := a.recentLogFingerprints[fingerprint]; ok && now.Sub(ts) <= dedupeWindow {
+			a.mu.Unlock()
+			return
+		}
+		a.recentLogFingerprints[fingerprint] = now
+	}
 	a.logs = append(a.logs, entry)
 	if len(a.logs) > 2000 {
 		a.logs = a.logs[len(a.logs)-2000:]
 	}
 	a.saveAppStateLocked()
 	a.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "log", summarizeLogEntry(entry))
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "log", summarizeLogEntry(entry))
+	}
+}
+
+func logFingerprint(source string, level string, message string, sessionID string, chatID string, messageID string) string {
+	parts := []string{
+		strings.TrimSpace(source),
+		strings.TrimSpace(level),
+		strings.TrimSpace(sessionID),
+		strings.TrimSpace(chatID),
+		strings.TrimSpace(messageID),
+		strings.TrimSpace(message),
+	}
+	return strings.Join(parts, "\x00")
 }
 
 // GetStatus returns the current proxy status
@@ -1064,8 +1099,8 @@ func startupModelProbeAttempts(hasCachedModels bool) int {
 func startupModelProbeTimeout(cfg service.Config, hasCachedModels bool) time.Duration {
 	timeout := effectiveWarmupTimeout(cfg)
 	if hasCachedModels {
-		if timeout > 5*time.Second {
-			return 5 * time.Second
+		if timeout > 12*time.Second {
+			return 12 * time.Second
 		}
 		return timeout
 	}

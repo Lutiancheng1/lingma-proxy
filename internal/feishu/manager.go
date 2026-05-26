@@ -28,8 +28,8 @@ const (
 	defaultBotDisplayName            = "飞书 Bridge"
 	maxFeishuImageAttachments        = 4
 	maxFeishuImageBytes              = 8 * 1024 * 1024
-	feishuImageDownloadTimeout       = 30 * time.Second
-	feishuVisionResponseTimeout      = 45 * time.Second
+	feishuImageDownloadTimeout       = 90 * time.Second
+	feishuVisionResponseTimeout      = 120 * time.Second
 )
 
 var (
@@ -45,6 +45,7 @@ type ManagerOptions struct {
 	Logf     func(level, message string, meta LogMeta)
 	Emit     func(status Status)
 	Persist  func()
+	DataDir  string
 }
 
 type LogMeta struct {
@@ -54,19 +55,24 @@ type LogMeta struct {
 }
 
 type conversationState struct {
-	History          []map[string]any
-	CompactBoundary  int // index into History; history[:CompactBoundary] is folded into Summary
-	Summary          string
-	Summarizing      bool
-	ModelOverride    string
-	Language         string // "" | "zh" | "en"
-	ShowThinking     *bool  // nil => default true
-	PromptTokens     int
-	OutputTokens     int
-	CacheReadTokens  int
-	CacheWriteTokens int
-	Turns            int
-	UsageByModel     map[string]*conversationUsage
+	History           []map[string]any
+	CompactBoundary   int // index into History; history[:CompactBoundary] is folded into Summary
+	Summary           string
+	StructuredSummary StructuredSummary
+	SummaryRange      string
+	LastCompactedAt   time.Time
+	Summarizing       bool
+	ModelOverride     string
+	Language          string // "" | "zh" | "en"
+	ShowThinking      *bool  // nil => default true
+	PromptTokens      int
+	OutputTokens      int
+	CacheReadTokens   int
+	CacheWriteTokens  int
+	Turns             int
+	UsageByModel      map[string]*conversationUsage
+	EstimatorScale    float64
+	LastBudget        ContextBudgetSnapshot
 }
 
 type conversationUsage struct {
@@ -99,18 +105,23 @@ var (
 )
 
 type ConversationSnapshot struct {
-	History          []map[string]any              `json:"history,omitempty"`
-	CompactBoundary  int                           `json:"compact_boundary,omitempty"`
-	Summary          string                        `json:"summary,omitempty"`
-	ModelOverride    string                        `json:"model_override,omitempty"`
-	Language         string                        `json:"language,omitempty"`
-	ShowThinking     *bool                         `json:"show_thinking,omitempty"`
-	PromptTokens     int                           `json:"prompt_tokens,omitempty"`
-	OutputTokens     int                           `json:"output_tokens,omitempty"`
-	CacheReadTokens  int                           `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int                           `json:"cache_write_tokens,omitempty"`
-	Turns            int                           `json:"turns,omitempty"`
-	UsageByModel     map[string]*conversationUsage `json:"usage_by_model,omitempty"`
+	History           []map[string]any              `json:"history,omitempty"`
+	CompactBoundary   int                           `json:"compact_boundary,omitempty"`
+	Summary           string                        `json:"summary,omitempty"`
+	StructuredSummary StructuredSummary             `json:"structured_summary,omitempty"`
+	SummaryRange      string                        `json:"summary_range,omitempty"`
+	LastCompactedAt   string                        `json:"last_compacted_at,omitempty"`
+	ModelOverride     string                        `json:"model_override,omitempty"`
+	Language          string                        `json:"language,omitempty"`
+	ShowThinking      *bool                         `json:"show_thinking,omitempty"`
+	PromptTokens      int                           `json:"prompt_tokens,omitempty"`
+	OutputTokens      int                           `json:"output_tokens,omitempty"`
+	CacheReadTokens   int                           `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens  int                           `json:"cache_write_tokens,omitempty"`
+	Turns             int                           `json:"turns,omitempty"`
+	UsageByModel      map[string]*conversationUsage `json:"usage_by_model,omitempty"`
+	EstimatorScale    float64                       `json:"estimator_scale,omitempty"`
+	LastBudget        ContextBudgetSnapshot         `json:"last_budget,omitempty"`
 }
 
 func (u conversationUsage) MarshalJSON() ([]byte, error) {
@@ -121,6 +132,45 @@ func (u conversationUsage) MarshalJSON() ([]byte, error) {
 		CacheWrite int `json:"cache_write"`
 		Calls      int `json:"calls"`
 	}{u.Prompt, u.Output, u.CacheRead, u.CacheWrite, u.Calls})
+}
+
+func (s conversationState) toSnapshot() ConversationSnapshot {
+	usageCopy := make(map[string]*conversationUsage, len(s.UsageByModel))
+	for k, v := range s.UsageByModel {
+		if v == nil {
+			continue
+		}
+		cp := *v
+		usageCopy[k] = &cp
+	}
+	var thinking *bool
+	if s.ShowThinking != nil {
+		val := *s.ShowThinking
+		thinking = &val
+	}
+	lastCompacted := ""
+	if !s.LastCompactedAt.IsZero() {
+		lastCompacted = s.LastCompactedAt.Format(time.RFC3339)
+	}
+	return ConversationSnapshot{
+		History:           cloneMessages(s.History),
+		CompactBoundary:   s.CompactBoundary,
+		Summary:           strings.TrimSpace(s.Summary),
+		StructuredSummary: s.StructuredSummary,
+		SummaryRange:      strings.TrimSpace(s.SummaryRange),
+		LastCompactedAt:   lastCompacted,
+		ModelOverride:     strings.TrimSpace(s.ModelOverride),
+		Language:          strings.TrimSpace(s.Language),
+		ShowThinking:      thinking,
+		PromptTokens:      s.PromptTokens,
+		OutputTokens:      s.OutputTokens,
+		CacheReadTokens:   s.CacheReadTokens,
+		CacheWriteTokens:  s.CacheWriteTokens,
+		Turns:             s.Turns,
+		UsageByModel:      usageCopy,
+		EstimatorScale:    s.EstimatorScale,
+		LastBudget:        s.LastBudget,
+	}
 }
 
 type Manager struct {
@@ -136,9 +186,12 @@ type Manager struct {
 	setupCancel context.CancelFunc
 	loginCancel context.CancelFunc
 
-	conversations map[string]conversationState
-	runs          map[string]*conversationRunState
-	mcp           *MCPRuntime
+	conversations  map[string]conversationState
+	runs           map[string]*conversationRunState
+	mcp            *MCPRuntime
+	store          *bridgeStore
+	skillService   *BridgeSkillService
+	skillApprovals map[string]map[string]struct{}
 
 	// refreshGuard ensures only one refreshStatus runs at a time. The desktop
 	// polls every ~2.5s; without serialization, a slow `npx skills ls` causes
@@ -147,7 +200,7 @@ type Manager struct {
 }
 
 func NewManager(opts ManagerOptions) *Manager {
-	return &Manager{
+	manager := &Manager{
 		cfg: DefaultConfig(),
 		status: Status{
 			Platform:       goruntime.GOOS,
@@ -155,11 +208,24 @@ func NewManager(opts ManagerOptions) *Manager {
 			RequiredSkills: append([]string(nil), fallbackRequiredSkillNames...),
 			CurrentModel:   DefaultModel,
 		},
-		opts:          opts,
-		conversations: make(map[string]conversationState),
-		runs:          make(map[string]*conversationRunState),
-		mcp:           NewMCPRuntime(),
+		opts:           opts,
+		conversations:  make(map[string]conversationState),
+		runs:           make(map[string]*conversationRunState),
+		mcp:            NewMCPRuntime(),
+		skillApprovals: make(map[string]map[string]struct{}),
 	}
+	if strings.TrimSpace(opts.DataDir) != "" {
+		if store, err := newBridgeStore(opts.DataDir); err == nil {
+			manager.store = store
+		}
+	}
+	if svc, err := NewBridgeSkillService(opts.DataDir, manager.store); err == nil {
+		manager.skillService = svc
+		manager.status.SkillCount = len(svc.List(true))
+	} else {
+		manager.skillService, _ = NewBridgeSkillService("", nil)
+	}
+	return manager
 }
 
 func (m *Manager) SetConfig(cfg Config) {
@@ -186,6 +252,66 @@ func (m *Manager) Probe(ctx context.Context) Status {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.status
+}
+
+func (m *Manager) ImportSkillPath(ctx context.Context, path string) (BridgeSkillImportResult, error) {
+	if m.skillService == nil {
+		return BridgeSkillImportResult{}, fmt.Errorf("Skill 服务未初始化")
+	}
+	result, err := m.skillService.ImportPath(ctx, path)
+	m.mu.Lock()
+	m.status.SkillCount = len(m.skillService.List(true))
+	m.mu.Unlock()
+	m.notifyConversationChanged()
+	return result, err
+}
+
+func (m *Manager) ListBridgeSkills() []BridgeSkill {
+	if m.skillService == nil {
+		return nil
+	}
+	return m.skillService.List(false)
+}
+
+func (m *Manager) ReloadBridgeSkills(ctx context.Context) error {
+	if m.skillService == nil {
+		return fmt.Errorf("Skill 服务未初始化")
+	}
+	if err := m.skillService.Reload(ctx); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.status.SkillCount = len(m.skillService.List(true))
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) SetBridgeSkillEnabled(ctx context.Context, id string, enabled bool) error {
+	if m.skillService == nil {
+		return fmt.Errorf("Skill 服务未初始化")
+	}
+	if err := m.skillService.SetEnabled(ctx, id, enabled); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.status.SkillCount = len(m.skillService.List(true))
+	m.mu.Unlock()
+	m.notifyConversationChanged()
+	return nil
+}
+
+func (m *Manager) DeleteBridgeSkill(ctx context.Context, id string) error {
+	if m.skillService == nil {
+		return fmt.Errorf("Skill 服务未初始化")
+	}
+	if err := m.skillService.Delete(ctx, id); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.status.SkillCount = len(m.skillService.List(true))
+	m.mu.Unlock()
+	m.notifyConversationChanged()
+	return nil
 }
 
 // tryRefreshStatus runs refreshStatus only if no other refresh is in flight.
@@ -247,6 +373,9 @@ func (m *Manager) doRefreshStatus(ctx context.Context) {
 	m.status.MCPServers = m.mcp.Sync(ctx, m.cfg)
 	m.status.Config = configStatus
 	m.status.Auth = authStatus
+	if m.skillService != nil {
+		m.status.SkillCount = len(m.skillService.List(true))
+	}
 	if authStatus.Authorized && !m.status.LoginRunning {
 		m.status.LoginURL = ""
 	}
@@ -634,7 +763,12 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.mu.Unlock()
 		return fmt.Errorf("飞书 CLI 尚未完成用户授权")
 	}
+	m.mu.Unlock()
+
+	m.resetEventBus(ctx)
+
 	runCtx, cancel := context.WithCancel(ctx)
+	m.mu.Lock()
 	m.cancelFunc = cancel
 	m.status.LastError = ""
 	m.status.MCPServers = m.mcp.Sync(runCtx, m.cfg)
@@ -693,6 +827,26 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+func (m *Manager) resetEventBus(ctx context.Context) {
+	stopCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	cmd := commandContextWithEnv(stopCtx, "lark-cli", "event", "stop", "--force", "--json")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if stopCtx.Err() != nil {
+			m.logf("warn", "Feishu bridge 重置事件总线超时，将继续尝试启动监听")
+			return
+		}
+		m.logf("warn", "Feishu bridge 重置事件总线失败，将继续尝试启动监听："+strings.TrimSpace(string(output)))
+		return
+	}
+	if trimmed := strings.TrimSpace(string(output)); trimmed != "" {
+		m.logf("info", "Feishu bridge 已重置事件总线："+summarizeText(trimmed, 180))
+	} else {
+		m.logf("info", "Feishu bridge 已重置事件总线")
+	}
 }
 
 func (m *Manager) Stop() error {
@@ -1025,6 +1179,8 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 	}
 	skills, _ := discoverSkillsForPrompt(ctx)
 	input := m.buildConversationInput(ctx, event)
+	m.setTurnSkillScriptApprovals(conversationKey, input.Text)
+	defer m.clearTurnSkillScriptApprovals(conversationKey)
 	commandReply, handled := m.handleConversationCommand(ctx, conversationKey, proxyURL, model, input.Text, logMeta)
 	if handled {
 		if err := m.replyToMessage(ctx, event.MessageID, commandReply); err != nil {
@@ -1043,7 +1199,11 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 	}
 	mcpTools := m.mcp.Tools()
 	toolDefs := toolDefinitionsWithMCP(mcpTools)
-	messages := []map[string]any{{"role": "system", "content": buildSystemPrompt(skills, cfg.BotIdentity, buildMCPPromptSection(mcpTools))}}
+	importedSkillListing := ""
+	if m.skillService != nil {
+		importedSkillListing = m.skillService.PromptListing(40)
+	}
+	messages := []map[string]any{{"role": "system", "content": buildSystemPrompt(skills, cfg.BotIdentity, buildMCPPromptSection(mcpTools), importedSkillListing)}}
 	state := m.getConversationState(conversationKey)
 	if strings.TrimSpace(state.Summary) != "" {
 		messages = append(messages, map[string]any{
@@ -1051,11 +1211,28 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 			"content": "当前飞书会话压缩摘要：\n" + strings.TrimSpace(state.Summary),
 		})
 	}
+	if len(state.History) == 0 {
+		if backfill := m.fetchFeishuConversationBackfill(ctx, event.ChatID, event.MessageID, logMeta); strings.TrimSpace(backfill) != "" {
+			messages = append(messages, map[string]any{
+				"role":    "system",
+				"content": backfill,
+			})
+		}
+	}
 	rawHistory := cloneMessages(state.activeHistory())
 	messages = append(messages, cloneMessages(rawHistory)...)
 	userMessage := map[string]any{"role": "user", "content": input.Content}
 	messages = append(messages, userMessage)
 	rawHistory = append(rawHistory, cloneMessage(userMessage))
+	budget := estimateContextBudget(model, cfg.Context, messages, toolDefs, importedSkillListing, state)
+	m.setConversationBudget(conversationKey, budget)
+	if budget.Watermark == "blocking" {
+		replyText := fmt.Sprintf("当前会话上下文已接近模型上限（约 %d%%，%d / %d tokens）。请先发送 /compact 压缩上下文，或 /reset 开启新会话后再继续。", budget.UsedPercent, budget.EstimatedTokens, budget.ContextWindow)
+		if err := m.replyToMessage(ctx, event.MessageID, replyText); err != nil {
+			m.logf("warn", "Feishu bridge 回复消息失败："+err.Error(), logMeta)
+		}
+		return
+	}
 	consecutiveToolFailures := 0
 	const maxConsecutiveToolFailures = 8
 	const maxRepeatedToolFailures = 4
@@ -1094,7 +1271,7 @@ conversation:
 		streamHadText := false
 		var resp *llmResponse
 		var err error
-		requestMessages := microcompactToolResults(messages)
+		requestMessages := applyBudgetCompaction(messages, cfg.Context, budget)
 		if plainVisionTurn {
 			m.logf("info", fmt.Sprintf("Feishu bridge 视觉请求开始: model=%s timeout=%s", model, feishuVisionResponseTimeout), logMeta)
 			visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
@@ -1157,7 +1334,9 @@ conversation:
 			card.SetStatus("error", "无可用回复")
 			break
 		}
-		m.accumulateUsage(conversationKey, model, usageFromResponse(resp))
+		usage := usageFromResponse(resp)
+		m.accumulateUsage(conversationKey, model, usage)
+		m.adjustEstimator(conversationKey, budget.EstimatedTokens, usage.Prompt+usage.CacheRead+usage.CacheWrite)
 		msg := resp.Choices[0].Message
 		assistant := map[string]any{
 			"role":    "assistant",
@@ -1201,7 +1380,12 @@ conversation:
 				Tool:  tc.Function.Name,
 				Body:  "参数：`" + summarizeText(argsSummary, 200) + "`",
 			})
-			result := executeToolContextWithRuntime(ctx, cfg, m.mcp, tc.Function.Name, args)
+			var result ToolExecutionResult
+			if isBridgeSkillTool(tc.Function.Name) {
+				result = m.executeBridgeSkillTool(ctx, conversationKey, tc.ID, tc.Function.Name, args)
+			} else {
+				result = executeToolContextWithRuntime(ctx, cfg, m.mcp, tc.Function.Name, args)
+			}
 			toolCallsExecuted = true
 			content := result.Output
 			if result.NeedsLogin {
@@ -1214,6 +1398,7 @@ conversation:
 						step.Done = true
 						step.Body = "需要用户授权（自动授权失败）"
 					})
+					card.RefreshStructure()
 					m.logf("warn", "Feishu bridge 自动发起用户授权失败："+authErr.Error(), logMeta)
 				} else {
 					replyText = "当前操作需要飞书用户授权。我已经为你发起授权流程，请打开下面的授权链接完成授权；授权完成后再对我说一次，我会继续处理。" + loginHint(loginURL)
@@ -1226,6 +1411,7 @@ conversation:
 						step.Done = true
 						step.Body = "需要用户授权（已自动发起）"
 					})
+					card.RefreshStructure()
 					m.logf("info", "Feishu bridge 检测到需要用户授权，已自动发起登录", logMeta)
 				}
 				messages = append(messages, map[string]any{
@@ -1253,6 +1439,7 @@ conversation:
 						step.Done = true
 						step.Body = "缺少权限：" + scopeLabel + "（自动授权失败）"
 					})
+					card.RefreshStructure()
 					m.logf("warn", "Feishu bridge 自动发起 scope 授权失败："+authErr.Error(), logMeta)
 				} else {
 					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已经为你发起授权流程，请先在浏览器完成授权。如果 Lingma Proxy 已打开，请直接到 Feishu Bridge 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。%s", scopeLabel, loginHint(loginURL))
@@ -1265,6 +1452,7 @@ conversation:
 						step.Done = true
 						step.Body = "需要授权 " + scopeLabel + "（已自动发起）"
 					})
+					card.RefreshStructure()
 					m.logf("info", "Feishu bridge 检测到缺少权限，已自动发起授权："+scopeLabel, logMeta)
 				}
 				messages = append(messages, map[string]any{
@@ -1281,11 +1469,17 @@ conversation:
 				break conversation
 			}
 			lastToolOutput = content
+			if m.store != nil {
+				if memoryID, err := m.store.SaveToolMemory(ctx, conversationKey, tc.Function.Name, args, content, result.IsError); err == nil && memoryID != "" && len(content) > 1200 {
+					content = summarizeText(content, 1200) + "\n\n[完整工具结果已保存为 " + memoryID + "；如需要完整内容，请基于该引用继续请求。]"
+				}
+			}
 			m.logf("info", fmt.Sprintf("Feishu bridge tool result: %s %s", tc.Function.Name, summarizeText(result.Output, 160)), logMeta)
 			card.UpdateLastStep(func(step *cardStep) {
 				step.Done = true
 				step.Body = step.Body + "\n结果：" + summarizeText(result.Output, 1200)
 			})
+			card.RefreshStructure()
 			toolMsg := map[string]any{
 				"role":         "tool",
 				"tool_call_id": tc.ID,
@@ -1455,7 +1649,13 @@ func (m *Manager) storeConversation(chatID string, activeTail []map[string]any) 
 	state.History = append(preserved, cloneMessages(activeTail)...)
 	state.CompactBoundary = boundary
 	m.conversations[chatID] = state
+	snapshot := state.toSnapshot()
 	m.mu.Unlock()
+	if m.store != nil {
+		if err := m.store.SaveConversationSnapshot(context.Background(), chatID, snapshot); err != nil {
+			m.logf("warn", "Feishu bridge SQLite 会话写入失败，已降级内存态："+err.Error())
+		}
+	}
 	m.notifyConversationChanged()
 	m.scheduleConversationSummary(chatID)
 }
@@ -1471,15 +1671,23 @@ func (m *Manager) getConversationState(chatID string) conversationState {
 		return conversationState{}
 	}
 	return conversationState{
-		History:         cloneMessages(state.History),
-		CompactBoundary: state.CompactBoundary,
-		Summary:         state.Summary,
-		ModelOverride:   state.ModelOverride,
-		Language:        state.Language,
-		ShowThinking:    state.ShowThinking,
-		PromptTokens:    state.PromptTokens,
-		OutputTokens:    state.OutputTokens,
-		Turns:           state.Turns,
+		History:           cloneMessages(state.History),
+		CompactBoundary:   state.CompactBoundary,
+		Summary:           state.Summary,
+		StructuredSummary: state.StructuredSummary,
+		SummaryRange:      state.SummaryRange,
+		LastCompactedAt:   state.LastCompactedAt,
+		ModelOverride:     state.ModelOverride,
+		Language:          state.Language,
+		ShowThinking:      state.ShowThinking,
+		PromptTokens:      state.PromptTokens,
+		OutputTokens:      state.OutputTokens,
+		CacheReadTokens:   state.CacheReadTokens,
+		CacheWriteTokens:  state.CacheWriteTokens,
+		Turns:             state.Turns,
+		UsageByModel:      state.UsageByModel,
+		EstimatorScale:    state.EstimatorScale,
+		LastBudget:        state.LastBudget,
 	}
 }
 
@@ -1560,6 +1768,36 @@ func microcompactToolResults(messages []map[string]any) []map[string]any {
 		out[i] = msg
 	}
 	return out
+}
+
+func applyBudgetCompaction(messages []map[string]any, cfg ContextConfig, budget ContextBudgetSnapshot) []map[string]any {
+	cfg = normalizeContextConfig(cfg)
+	if budget.Watermark == "ok" {
+		return messages
+	}
+	compacted := microcompactToolResults(messages)
+	if budget.Watermark != "critical" && budget.Watermark != "compact" {
+		return compacted
+	}
+	keepRecent := cfg.ToolResultRetention
+	if keepRecent <= 0 {
+		keepRecent = defaultToolResultRetention
+	}
+	toolSeen := 0
+	for i := len(compacted) - 1; i >= 0; i-- {
+		role, _ := compacted[i]["role"].(string)
+		if role != "tool" {
+			continue
+		}
+		toolSeen++
+		if toolSeen <= keepRecent {
+			continue
+		}
+		next := cloneMessage(compacted[i])
+		next["content"] = "[old tool result compacted; full content is stored in Feishu Bridge tool memory if persistence is available]"
+		compacted[i] = next
+	}
+	return compacted
 }
 
 // assistant.tool_calls and synthesises a placeholder tool_result for any
@@ -1955,6 +2193,11 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 			"- /models：列出代理可用模型\n" +
 			"- /model <name>：切换本会话模型；/model 不带参数查看；/model default 恢复全局默认\n" +
 			"- /cost：查看本会话累计 tokens 估算\n" +
+			"- /context：查看本会话上下文预算、压缩水位和 Skill 占用\n" +
+			"- /skills：列出用户导入并启用的 Feishu Bridge Skills\n" +
+			"- /skill <name>：查看某个 Skill 摘要\n" +
+			"- /reload-skills：重新扫描用户导入 Skills\n" +
+			"- /skill-run <skill> <script> confirm：确认执行 Skill scripts/ 下的脚本\n" +
 			"- /retry：用最近一条用户消息重新跑一次（先自动 /undo）\n" +
 			"- /undo：撤回最近一轮（assistant + 关联 tool 消息）\n" +
 			"- /summary：查看本会话摘要\n" +
@@ -2001,6 +2244,40 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 	case "/cost":
 		m.logf("info", "Feishu bridge 会话命令: /cost", meta)
 		return m.commandCostText(chatID), true
+	case "/context":
+		m.logf("info", "Feishu bridge 会话命令: /context", meta)
+		return m.commandContextText(chatID), true
+	case "/skills":
+		m.logf("info", "Feishu bridge 会话命令: /skills", meta)
+		return m.commandSkillsText(), true
+	case "/skill":
+		m.logf("info", "Feishu bridge 会话命令: /skill", meta)
+		if len(args) == 0 {
+			return "用法：/skill <name-or-id>", true
+		}
+		return m.commandSkillText(strings.Join(args, " ")), true
+	case "/reload-skills":
+		m.logf("info", "Feishu bridge 会话命令: /reload-skills", meta)
+		if m.skillService == nil {
+			return "Skill 服务未初始化。", true
+		}
+		if err := m.skillService.Reload(ctx); err != nil {
+			return "Skills 重新扫描失败：" + err.Error(), true
+		}
+		m.mu.Lock()
+		m.status.SkillCount = len(m.skillService.List(true))
+		m.mu.Unlock()
+		return "Skills 已重新扫描。当前启用 " + fmt.Sprint(len(m.skillService.List(true))) + " 个。", true
+	case "/skill-run":
+		m.logf("info", "Feishu bridge 会话命令: /skill-run", meta)
+		if len(args) < 3 || !strings.EqualFold(args[len(args)-1], "confirm") {
+			return "用法：/skill-run <skill> <script> confirm。脚本执行前必须由用户显式确认。", true
+		}
+		output, err := m.runSkillScriptCommand(ctx, args[0], args[1], args[2:len(args)-1])
+		if err != nil {
+			return "Skill 脚本执行失败：" + err.Error() + "\n\n输出：\n" + output, true
+		}
+		return "Skill 脚本执行完成：\n" + output, true
 	case "/undo":
 		removed := m.undoLastTurn(chatID)
 		if removed == 0 {
@@ -2162,6 +2439,28 @@ func (m *Manager) accumulateUsage(chatID, model string, usage callUsage) {
 	bucket.CacheRead += usage.CacheRead
 	bucket.CacheWrite += usage.CacheWrite
 	bucket.Calls++
+	m.conversations[chatID] = state
+	m.mu.Unlock()
+}
+
+func (m *Manager) setConversationBudget(chatID string, budget ContextBudgetSnapshot) {
+	if chatID == "" {
+		return
+	}
+	m.mu.Lock()
+	state := m.conversations[chatID]
+	state.LastBudget = budget
+	m.conversations[chatID] = state
+	m.mu.Unlock()
+}
+
+func (m *Manager) adjustEstimator(chatID string, estimated int, actual int) {
+	if chatID == "" || estimated <= 0 || actual <= 0 {
+		return
+	}
+	m.mu.Lock()
+	state := m.conversations[chatID]
+	state.EstimatorScale = updateEstimatorScale(state.EstimatorScale, estimated, actual)
 	m.conversations[chatID] = state
 	m.mu.Unlock()
 }
@@ -2376,6 +2675,90 @@ func (m *Manager) commandCostText(chatID string) string {
 	return b.String()
 }
 
+func (m *Manager) commandContextText(chatID string) string {
+	m.mu.RLock()
+	state, ok := m.conversations[chatID]
+	m.mu.RUnlock()
+	if !ok {
+		return "当前会话还没有上下文统计。"
+	}
+	budget := state.LastBudget
+	if budget.ContextWindow == 0 {
+		cfg := m.Config()
+		budget = estimateContextBudget(m.resolveSessionModel(chatID, cfg.Model), cfg.Context, state.activeHistory(), nil, "", state)
+	}
+	summaryState := "无"
+	if strings.TrimSpace(state.Summary) != "" {
+		summaryState = "已有"
+	}
+	lastCompact := "从未"
+	if !state.LastCompactedAt.IsZero() {
+		lastCompact = state.LastCompactedAt.Format("2006-01-02 15:04:05")
+	}
+	return fmt.Sprintf("上下文状态：\n- 模型：%s\n- 估算占用：%d%%（约 %d / %d tokens）\n- 剩余额度：%d tokens\n- 工具结果占用：约 %d tokens\n- Skill 占用：约 %d tokens\n- 水位：%s\n- 下一步策略：%s\n- 摘要：%s（范围：%s）\n- 最近压缩：%s",
+		budget.Model, budget.UsedPercent, budget.EstimatedTokens, budget.ContextWindow,
+		budget.RemainingTokens, budget.ToolResultTokens, budget.SkillTokens,
+		budget.Watermark, budget.NextAction, summaryState, fallbackText(state.SummaryRange, "未记录"), lastCompact)
+}
+
+func (m *Manager) commandSkillsText() string {
+	if m.skillService == nil {
+		return "Skill 服务未初始化。"
+	}
+	skills := m.skillService.List(false)
+	if len(skills) == 0 {
+		return "当前未导入用户 Skill。可在 Lingma Proxy → Feishu Bridge 高级设置中导入 zip 或文件夹。"
+	}
+	lines := []string{"Feishu Bridge Skills："}
+	for _, skill := range skills {
+		state := "启用"
+		if !skill.Enabled {
+			state = "停用"
+		}
+		if skill.Error != "" {
+			state = "错误：" + summarizeText(skill.Error, 80)
+		}
+		lines = append(lines, fmt.Sprintf("- `%s`（%s，%s）：%s", skill.Name, skill.ID, state, summarizeText(skill.Description, 140)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Manager) commandSkillText(name string) string {
+	if m.skillService == nil {
+		return "Skill 服务未初始化。"
+	}
+	skill, ok := m.skillService.Find(name)
+	if !ok {
+		return "未找到 Skill：" + name
+	}
+	lines := []string{
+		"Skill：" + skill.Name,
+		"- ID：" + skill.ID,
+		"- 状态：" + map[bool]string{true: "启用", false: "停用"}[skill.Enabled],
+		"- 路径：" + skill.Path,
+	}
+	if skill.Version != "" {
+		lines = append(lines, "- 版本："+skill.Version)
+	}
+	if skill.Description != "" {
+		lines = append(lines, "- 描述："+skill.Description)
+	}
+	if skill.WhenToUse != "" {
+		lines = append(lines, "- 使用场景："+skill.WhenToUse)
+	}
+	if len(skill.Scripts) > 0 {
+		lines = append(lines, "- scripts："+strings.Join(skill.Scripts, ", "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func fallbackText(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
+}
+
 // undoLastTurn drops the trailing assistant reply and any tool messages that
 // belong to it. Returns the number of messages removed. Operates only within
 // the active region (after CompactBoundary) to avoid corrupting the folded
@@ -2483,13 +2866,14 @@ func (m *Manager) ensureConversationSummary(ctx context.Context, chatID string, 
 	if !compact && strings.TrimSpace(state.Summary) != "" {
 		return strings.TrimSpace(state.Summary), nil
 	}
-	summary, err := summarizeConversation(ctx, proxyURL, model, state.Summary, state.History)
+	summary, structured, err := summarizeConversation(ctx, proxyURL, model, state.Summary, state.History)
 	if err != nil {
 		return "", err
 	}
 	m.mu.Lock()
 	next := m.conversations[chatID]
 	next.Summary = summary
+	next.StructuredSummary = structured
 	if compact {
 		// Set boundary to keep recent N messages active; older ones stay in
 		// History but are folded into Summary so /undo can rewind across.
@@ -2499,10 +2883,15 @@ func (m *Manager) ensureConversationSummary(ctx context.Context, chatID string, 
 		} else {
 			next.CompactBoundary = 0
 		}
+		next.LastCompactedAt = time.Now()
+		next.SummaryRange = fmt.Sprintf("1-%d", len(next.History))
 	}
 	m.conversations[chatID] = next
 	m.mu.Unlock()
 	m.notifyConversationChanged()
+	if m.store != nil {
+		_ = m.store.SaveSummary(ctx, chatID, model, structured, 0, len(state.History), estimateMessagesTokens(state.History), estimateTextTokens(summary))
+	}
 	return summary, nil
 }
 
@@ -2519,6 +2908,9 @@ func (m *Manager) scheduleConversationSummary(chatID string) {
 		return
 	}
 	cfg := m.Config()
+	if !cfg.Context.AutoCompact {
+		return
+	}
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
 		model = DefaultModel
@@ -2535,7 +2927,7 @@ func (m *Manager) scheduleConversationSummary(chatID string) {
 	// Token-driven autocompact: if the running prompt budget is approaching the
 	// model context, fold the older history into a summary even if we already
 	// have one — this is the second-pass "compact existing summary + new turns".
-	overTokens := state.PromptTokens >= autoCompactTokenThreshold && len(state.History) > persistedConversationRecentLimit
+	overTokens := (state.PromptTokens >= autoCompactTokenThreshold || state.LastBudget.Watermark == "compact" || state.LastBudget.Watermark == "critical") && len(state.History) > persistedConversationRecentLimit
 	if hasSummary && !overTokens {
 		m.mu.Unlock()
 		return
@@ -2547,13 +2939,14 @@ func (m *Manager) scheduleConversationSummary(chatID string) {
 	state.Summarizing = true
 	history := cloneMessages(state.History)
 	existingSummary := state.Summary
+	shouldCompact := overMessages || overTokens
 	m.conversations[chatID] = state
 	m.mu.Unlock()
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		summary, err := summarizeConversation(ctx, proxyURL, model, existingSummary, history)
+		summary, structured, err := summarizeConversation(ctx, proxyURL, model, existingSummary, history)
 
 		m.mu.Lock()
 		state, ok := m.conversations[chatID]
@@ -2564,18 +2957,18 @@ func (m *Manager) scheduleConversationSummary(chatID string) {
 		state.Summarizing = false
 		if err == nil && strings.TrimSpace(summary) != "" {
 			trimmed := strings.TrimSpace(summary)
-			// First-pass summary: only adopt if no existing one (避免覆盖手动 /summary).
-			// Token-driven recompact: always adopt and physically trim history so
-			// subsequent prompts shrink back below the threshold.
-			if strings.TrimSpace(state.Summary) == "" {
+			if strings.TrimSpace(state.Summary) == "" || shouldCompact {
 				state.Summary = trimmed
-			} else if state.PromptTokens >= autoCompactTokenThreshold {
-				state.Summary = trimmed
+				state.StructuredSummary = structured
+			}
+			if shouldCompact {
 				if len(state.History) > persistedConversationRecentLimit {
 					state.CompactBoundary = len(state.History) - persistedConversationRecentLimit
 				} else {
 					state.CompactBoundary = 0
 				}
+				state.LastCompactedAt = time.Now()
+				state.SummaryRange = fmt.Sprintf("1-%d", len(state.History))
 				// Reset the running prompt counter; subsequent calls will re-fill it
 				// against the now-shorter active window. Keep cumulative cache/output
 				// for /cost reporting.
@@ -2586,35 +2979,44 @@ func (m *Manager) scheduleConversationSummary(chatID string) {
 		m.mu.Unlock()
 
 		if err == nil && strings.TrimSpace(summary) != "" {
+			if m.store != nil {
+				_ = m.store.SaveSummary(context.Background(), chatID, model, structured, 0, len(history), estimateMessagesTokens(history), estimateTextTokens(summary))
+			}
 			m.notifyConversationChanged()
 		}
 	}()
 }
 
-func summarizeConversation(ctx context.Context, proxyURL string, model string, existingSummary string, history []map[string]any) (string, error) {
+func summarizeConversation(ctx context.Context, proxyURL string, model string, existingSummary string, history []map[string]any) (string, StructuredSummary, error) {
 	if strings.TrimSpace(proxyURL) == "" || strings.TrimSpace(model) == "" {
-		return "", fmt.Errorf("missing proxy context")
+		return "", StructuredSummary{}, fmt.Errorf("missing proxy context")
 	}
-	serialized, err := json.Marshal(history)
+	sanitized := sanitizeMessagesForSummary(history)
+	serialized, err := json.Marshal(sanitized)
 	if err != nil {
-		return "", err
+		return "", StructuredSummary{}, err
 	}
-	prompt := "请用中文把下面这段飞书工作会话压缩成一段可续接摘要，要求包含：当前目标、已完成步骤、关键对象、待办事项、重要约束。控制在 8 行内，直接输出摘要正文，不要加前言。"
+	prompt := "请用中文把下面这段飞书工作会话压缩成可续接的结构化摘要。只输出 JSON，不要 Markdown，不要前言。字段必须包含：primary_goal、user_preferences、confirmed_decisions、pending_actions、open_questions、important_entities、artifacts、tool_results、errors_and_recoveries、next_step。数组字段输出字符串数组。摘要要保留授权状态、待继续任务、关键文档/文件/图片引用和工具失败恢复信息。"
 	if strings.TrimSpace(existingSummary) != "" {
 		prompt += "\n\n已有摘要（如有价值可合并更新）：\n" + strings.TrimSpace(existingSummary)
 	}
 	prompt += "\n\n原始会话（JSON）：\n" + string(serialized)
 	resp, err := callLLMPlain(ctx, proxyURL, model, []map[string]any{
-		{"role": "system", "content": "你是一个会话压缩器，只输出简洁、可续接的中文摘要正文。"},
+		{"role": "system", "content": "你是一个会话压缩器，只输出可解析 JSON。不要调用工具。"},
 		{"role": "user", "content": prompt},
 	})
 	if err != nil {
-		return "", err
+		return "", StructuredSummary{}, err
 	}
 	if len(resp.Choices) == 0 {
-		return "", nil
+		return "", StructuredSummary{}, nil
 	}
-	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
+	raw := strings.TrimSpace(resp.Choices[0].Message.Content)
+	structured := parseStructuredSummary(raw)
+	if isEmptyStructuredSummary(structured) {
+		structured.PrimaryGoal = summarizeText(raw, 500)
+	}
+	return renderStructuredSummary(structured), structured, nil
 }
 
 func keepRecentConversation(history []map[string]any, max int) []map[string]any {
@@ -2623,6 +3025,88 @@ func keepRecentConversation(history []map[string]any, max int) []map[string]any 
 	}
 	start := len(history) - max
 	return cloneMessages(history[start:])
+}
+
+func sanitizeMessagesForSummary(history []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(history))
+	for _, msg := range history {
+		next := cloneMessage(msg)
+		content, ok := next["content"].(string)
+		if ok && len(content) > 1800 {
+			next["content"] = summarizeText(content, 900) + "\n[content compacted for summary]"
+		}
+		if contentBlocks, ok := next["content"].([]any); ok {
+			blocks := make([]any, 0, len(contentBlocks))
+			for _, block := range contentBlocks {
+				item, _ := block.(map[string]any)
+				if item == nil {
+					blocks = append(blocks, block)
+					continue
+				}
+				if typ, _ := item["type"].(string); typ == "image_url" || typ == "image" {
+					blocks = append(blocks, map[string]any{"type": "text", "text": "[image attachment]"})
+					continue
+				}
+				blocks = append(blocks, item)
+			}
+			next["content"] = blocks
+		}
+		out = append(out, next)
+	}
+	return out
+}
+
+func parseStructuredSummary(raw string) StructuredSummary {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+	var summary StructuredSummary
+	_ = json.Unmarshal([]byte(raw), &summary)
+	return summary
+}
+
+func isEmptyStructuredSummary(summary StructuredSummary) bool {
+	return strings.TrimSpace(summary.PrimaryGoal) == "" &&
+		len(summary.UserPreferences) == 0 &&
+		len(summary.ConfirmedDecisions) == 0 &&
+		len(summary.PendingActions) == 0 &&
+		len(summary.OpenQuestions) == 0 &&
+		len(summary.ImportantEntities) == 0 &&
+		len(summary.Artifacts) == 0 &&
+		len(summary.ToolResults) == 0 &&
+		len(summary.ErrorsAndRecoveries) == 0 &&
+		strings.TrimSpace(summary.NextStep) == ""
+}
+
+func renderStructuredSummary(summary StructuredSummary) string {
+	lines := make([]string, 0, 16)
+	if summary.PrimaryGoal != "" {
+		lines = append(lines, "当前目标："+summary.PrimaryGoal)
+	}
+	appendList := func(title string, items []string) {
+		clean := uniqueNonEmpty(items)
+		if len(clean) == 0 {
+			return
+		}
+		lines = append(lines, title+"："+strings.Join(clean, "；"))
+	}
+	appendList("用户偏好", summary.UserPreferences)
+	appendList("已确认决策", summary.ConfirmedDecisions)
+	appendList("待办动作", summary.PendingActions)
+	appendList("开放问题", summary.OpenQuestions)
+	appendList("关键对象", summary.ImportantEntities)
+	appendList("产物引用", summary.Artifacts)
+	appendList("工具结果", summary.ToolResults)
+	appendList("错误与恢复", summary.ErrorsAndRecoveries)
+	if summary.NextStep != "" {
+		lines = append(lines, "下一步："+summary.NextStep)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
 
 func buildPersistedConversationSummary(history []map[string]any) string {
@@ -2678,33 +3162,11 @@ func (m *Manager) ConversationSnapshot() map[string]ConversationSnapshot {
 			}
 			boundary += extra
 		}
-		usageCopy := make(map[string]*conversationUsage, len(state.UsageByModel))
-		for k, v := range state.UsageByModel {
-			if v == nil {
-				continue
-			}
-			cp := *v
-			usageCopy[k] = &cp
-		}
-		var thinking *bool
-		if state.ShowThinking != nil {
-			val := *state.ShowThinking
-			thinking = &val
-		}
-		out[chatID] = ConversationSnapshot{
-			History:          history,
-			CompactBoundary:  boundary,
-			Summary:          summary,
-			ModelOverride:    strings.TrimSpace(state.ModelOverride),
-			Language:         strings.TrimSpace(state.Language),
-			ShowThinking:     thinking,
-			PromptTokens:     state.PromptTokens,
-			OutputTokens:     state.OutputTokens,
-			CacheReadTokens:  state.CacheReadTokens,
-			CacheWriteTokens: state.CacheWriteTokens,
-			Turns:            state.Turns,
-			UsageByModel:     usageCopy,
-		}
+		next := state.toSnapshot()
+		next.History = history
+		next.CompactBoundary = boundary
+		next.Summary = summary
+		out[chatID] = next
 	}
 	return out
 }
@@ -2739,19 +3201,28 @@ func (m *Manager) LoadConversationSnapshot(snapshot map[string]ConversationSnaps
 			cp := *v
 			usageCopy[k] = &cp
 		}
+		var lastCompacted time.Time
+		if strings.TrimSpace(state.LastCompactedAt) != "" {
+			lastCompacted, _ = time.Parse(time.RFC3339, strings.TrimSpace(state.LastCompactedAt))
+		}
 		m.conversations[chatID] = conversationState{
-			History:          history,
-			CompactBoundary:  boundary,
-			Summary:          strings.TrimSpace(state.Summary),
-			ModelOverride:    strings.TrimSpace(state.ModelOverride),
-			Language:         strings.TrimSpace(state.Language),
-			ShowThinking:     thinking,
-			PromptTokens:     state.PromptTokens,
-			OutputTokens:     state.OutputTokens,
-			CacheReadTokens:  state.CacheReadTokens,
-			CacheWriteTokens: state.CacheWriteTokens,
-			Turns:            state.Turns,
-			UsageByModel:     usageCopy,
+			History:           history,
+			CompactBoundary:   boundary,
+			Summary:           strings.TrimSpace(state.Summary),
+			StructuredSummary: state.StructuredSummary,
+			SummaryRange:      strings.TrimSpace(state.SummaryRange),
+			LastCompactedAt:   lastCompacted,
+			ModelOverride:     strings.TrimSpace(state.ModelOverride),
+			Language:          strings.TrimSpace(state.Language),
+			ShowThinking:      thinking,
+			PromptTokens:      state.PromptTokens,
+			OutputTokens:      state.OutputTokens,
+			CacheReadTokens:   state.CacheReadTokens,
+			CacheWriteTokens:  state.CacheWriteTokens,
+			Turns:             state.Turns,
+			UsageByModel:      usageCopy,
+			EstimatorScale:    state.EstimatorScale,
+			LastBudget:        state.LastBudget,
 		}
 	}
 }
@@ -2925,7 +3396,7 @@ func (m *Manager) replyToMessage(ctx context.Context, messageID string, reply st
 		if sendCtx == nil || sendCtx.Err() != nil {
 			sendCtx = context.Background()
 		}
-		cmdCtx, cancel := context.WithTimeout(sendCtx, 15*time.Second)
+		cmdCtx, cancel := context.WithTimeout(sendCtx, 30*time.Second)
 		cmd := commandContextWithEnv(cmdCtx, "lark-cli", "im", "+messages-reply", "--as", "bot", "--message-id", messageID, "--markdown", part)
 		output, err := cmd.CombinedOutput()
 		cancel()
@@ -3152,6 +3623,39 @@ func (m *Manager) updateCardEntity(ctx context.Context, cardEntityID string, car
 	endpoint := "/open-apis/cardkit/v1/cards/" + cardEntityID
 	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
 		"PUT", endpoint,
+		"--as", "bot",
+		"--data", string(body),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// updateCardSettings disables CardKit streaming without replacing the full
+// card body. This mirrors Feishu's recommended streaming-card close flow and
+// avoids re-sending large reply/tool content during finalization.
+func (m *Manager) updateCardSettings(ctx context.Context, cardEntityID string, summary string, sequence int) error {
+	settingsJSON, err := json.Marshal(map[string]any{
+		"config": map[string]any{
+			"streaming_mode": false,
+			"summary":        map[string]any{"content": summary},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal card settings: %w", err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"settings": string(settingsJSON),
+		"sequence": sequence,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal update card settings body: %w", err)
+	}
+	endpoint := "/open-apis/cardkit/v1/cards/" + cardEntityID + "/settings"
+	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
+		"PATCH", endpoint,
 		"--as", "bot",
 		"--data", string(body),
 	)

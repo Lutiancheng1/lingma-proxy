@@ -26,7 +26,8 @@ const filteredLogs = computed(() => {
   return visibleLogs.value.filter((log) => {
     const matchesLevel = filter.value === 'all' || log.level === filter.value
     const matchesSource = sourceFilter.value === 'all' || (sourceFilter.value === 'feishu-bridge' && log.source === 'feishu-bridge')
-    const matchesSearch = !q || `${log.time} ${log.source || 'app'} ${log.level} ${log.message} ${log.sessionId || ''} ${log.chatId || ''}`.toLowerCase().includes(q)
+    const displayTime = formatLogDateTime(log)
+    const matchesSearch = !q || `${displayTime} ${log.time || ''} ${log.source || 'app'} ${log.level} ${log.message} ${log.sessionId || ''} ${log.chatId || ''}`.toLowerCase().includes(q)
     return matchesLevel && matchesSource && matchesSearch
   })
 })
@@ -65,6 +66,39 @@ function hasLogMeta(log) {
   return Boolean(String(log?.sessionId || '').trim() || String(log?.chatId || '').trim())
 }
 
+function formatLogDateTime(log) {
+  if (log?.createdAt) {
+    const date = new Date(log.createdAt)
+    if (!Number.isNaN(date.getTime())) {
+      return formatRelativeDateTime(date)
+    }
+  }
+  return log?.time || '-'
+}
+
+function formatRelativeDateTime(date) {
+  const now = new Date()
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const timeStr = date.toLocaleTimeString('zh-CN', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+  if (date.toDateString() === now.toDateString()) {
+    return `今天 ${timeStr}`
+  }
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `昨天 ${timeStr}`
+  }
+  const dateStr = date.toLocaleDateString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit'
+  })
+  return `${dateStr} ${timeStr}`
+}
+
 function serializeLogs() {
   return filteredLogs.value
     .map((log) => {
@@ -75,7 +109,7 @@ function serializeLogs() {
         chat ? `chat=${chat}` : '',
       ].filter(Boolean)
       const metaText = meta.length > 0 ? ` [${meta.join('] [')}]` : ''
-      return `[${log.time}] [${sourceLabel(log.source)}] ${levelLabel(log.level)}${metaText} ${log.message}`
+      return `[${formatLogDateTime(log)}] [${sourceLabel(log.source)}] ${levelLabel(log.level)}${metaText} ${log.message}`
     })
     .join('\n')
 }
@@ -152,7 +186,7 @@ function proceedClearLogs() {
           :key="log.createdAt || index"
           class="log-row"
         >
-          <span class="muted">{{ log.time }}</span>
+          <span class="muted">{{ formatLogDateTime(log) }}</span>
           <span class="log-source-chip">{{ sourceLabel(log.source) }}</span>
           <strong :class="levelClass(log.level)">{{ levelLabel(log.level) }}</strong>
           <span class="log-meta-cell">{{ shortID(log.sessionId) || '' }}</span>

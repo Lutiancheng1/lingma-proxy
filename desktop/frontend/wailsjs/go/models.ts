@@ -46,6 +46,96 @@ export namespace feishu {
 	        this.hint = source["hint"];
 	    }
 	}
+	export class BridgeSkill {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    version?: string;
+	    whenToUse?: string;
+	    path: string;
+	    source?: string;
+	    hash: string;
+	    enabled: boolean;
+	    error?: string;
+	    scripts?: string[];
+	    createdAt?: string;
+	    updatedAt?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BridgeSkill(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.version = source["version"];
+	        this.whenToUse = source["whenToUse"];
+	        this.path = source["path"];
+	        this.source = source["source"];
+	        this.hash = source["hash"];
+	        this.enabled = source["enabled"];
+	        this.error = source["error"];
+	        this.scripts = source["scripts"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class BridgeSkillImportResult {
+	    imported: BridgeSkill[];
+	    errors?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new BridgeSkillImportResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.imported = this.convertValues(source["imported"], BridgeSkill);
+	        this.errors = source["errors"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ContextConfig {
+	    contextWindowOverride?: number;
+	    autoCompact: boolean;
+	    compactWatermark?: number;
+	    toolResultRetention?: number;
+	    skillHttpTimeout?: number;
+	    skillHttpMaxBytes?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ContextConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.contextWindowOverride = source["contextWindowOverride"];
+	        this.autoCompact = source["autoCompact"];
+	        this.compactWatermark = source["compactWatermark"];
+	        this.toolResultRetention = source["toolResultRetention"];
+	        this.skillHttpTimeout = source["skillHttpTimeout"];
+	        this.skillHttpMaxBytes = source["skillHttpMaxBytes"];
+	    }
+	}
 	export class MCPServerConfig {
 	    name: string;
 	    source?: string;
@@ -79,6 +169,7 @@ export namespace feishu {
 	    botIdentity: string;
 	    mcpEnabled: boolean;
 	    mcpServers?: MCPServerConfig[];
+	    context?: ContextConfig;
 	    maxToolRounds: number;
 	    groupOnlyAtBot: boolean;
 
@@ -96,6 +187,7 @@ export namespace feishu {
 	        this.botIdentity = source["botIdentity"];
 	        this.mcpEnabled = source["mcpEnabled"];
 	        this.mcpServers = this.convertValues(source["mcpServers"], MCPServerConfig);
+	        this.context = this.convertValues(source["context"], ContextConfig);
 	        this.maxToolRounds = source["maxToolRounds"];
 	        this.groupOnlyAtBot = source["groupOnlyAtBot"];
 	    }
@@ -138,6 +230,7 @@ export namespace feishu {
 	        this.message = source["message"];
 	    }
 	}
+
 
 	export class MCPToolStatus {
 	    name: string;
@@ -246,6 +339,7 @@ export namespace feishu {
 	    lastStartedAt?: string;
 	    currentModel?: string;
 	    requiredSkills?: string[];
+	    skillCount?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new Status(source);
@@ -276,6 +370,7 @@ export namespace feishu {
 	        this.lastStartedAt = source["lastStartedAt"];
 	        this.currentModel = source["currentModel"];
 	        this.requiredSkills = source["requiredSkills"];
+	        this.skillCount = source["skillCount"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -18,6 +18,7 @@ type Config struct {
 	BotIdentity    string            `json:"botIdentity"`
 	MCPEnabled     bool              `json:"mcpEnabled"`
 	MCPServers     []MCPServerConfig `json:"mcpServers,omitempty"`
+	Context        ContextConfig     `json:"context,omitempty"`
 	MaxToolRounds  int               `json:"maxToolRounds"`
 	GroupOnlyAtBot bool              `json:"groupOnlyAtBot"`
 }
@@ -28,6 +29,7 @@ func DefaultConfig() Config {
 		AutoStart:      false,
 		Brand:          DefaultBrand,
 		Model:          DefaultModel,
+		Context:        DefaultContextConfig(),
 		MaxToolRounds:  DefaultMaxToolRounds,
 		GroupOnlyAtBot: true,
 	}
@@ -43,6 +45,7 @@ func NormalizeConfig(cfg Config) Config {
 	cfg.BotName = limitBotName(cfg.BotName)
 	cfg.BotIdentity = limitBotIdentity(cfg.BotIdentity)
 	cfg.MCPServers = normalizeMCPServerConfigs(cfg.MCPServers)
+	cfg.Context = normalizeContextConfig(cfg.Context)
 	if cfg.MaxToolRounds <= 0 || cfg.MaxToolRounds == legacyMaxToolRounds {
 		cfg.MaxToolRounds = DefaultMaxToolRounds
 	}

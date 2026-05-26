@@ -174,3 +174,14 @@ func TestShouldRetryFeishuAutoStartForTransientProbeFailures(t *testing.T) {
 		t.Fatal("should not retry non-prerequisite bridge errors")
 	}
 }
+
+func TestEmitLogDedupesRecentNonAdjacentDuplicates(t *testing.T) {
+	app := &App{}
+	app.emitLogWithSourceMeta("feishu-bridge", "info", "same message", "s1", "c1", "m1")
+	app.emitLogWithSourceMeta("feishu-bridge", "info", "different message", "s1", "c1", "m1")
+	app.emitLogWithSourceMeta("feishu-bridge", "info", "same message", "s1", "c1", "m1")
+
+	if got, want := len(app.logs), 2; got != want {
+		t.Fatalf("logs len = %d, want %d: %#v", got, want, app.logs)
+	}
+}

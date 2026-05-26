@@ -6,12 +6,24 @@ export function ChooseFeedbackExportPath() {
   return window['go']['main']['App']['ChooseFeedbackExportPath']();
 }
 
+export function ChooseFeishuBridgeSkillFolder() {
+  return window['go']['main']['App']['ChooseFeishuBridgeSkillFolder']();
+}
+
+export function ChooseFeishuBridgeSkillZip() {
+  return window['go']['main']['App']['ChooseFeishuBridgeSkillZip']();
+}
+
 export function ClearLogs() {
   return window['go']['main']['App']['ClearLogs']();
 }
 
 export function ClearRequests() {
   return window['go']['main']['App']['ClearRequests']();
+}
+
+export function DeleteFeishuBridgeSkill(arg1) {
+  return window['go']['main']['App']['DeleteFeishuBridgeSkill'](arg1);
 }
 
 export function ExportFeedbackBundle(arg1) {
@@ -40,6 +52,10 @@ export function GetFeishuBridgeConfig() {
 
 export function GetFeishuBridgeMCPJSON() {
   return window['go']['main']['App']['GetFeishuBridgeMCPJSON']();
+}
+
+export function GetFeishuBridgeSkills() {
+  return window['go']['main']['App']['GetFeishuBridgeSkills']();
 }
 
 export function GetFeishuBridgeStatus() {
@@ -78,6 +94,10 @@ export function HideWindow() {
   return window['go']['main']['App']['HideWindow']();
 }
 
+export function ImportFeishuBridgeSkillPath(arg1) {
+  return window['go']['main']['App']['ImportFeishuBridgeSkillPath'](arg1);
+}
+
 export function InstallFeishuCLI() {
   return window['go']['main']['App']['InstallFeishuCLI']();
 }
@@ -106,6 +126,10 @@ export function ReinstallFeishuSkills() {
   return window['go']['main']['App']['ReinstallFeishuSkills']();
 }
 
+export function ReloadFeishuBridgeSkills() {
+  return window['go']['main']['App']['ReloadFeishuBridgeSkills']();
+}
+
 export function RequestQuitShortcut() {
   return window['go']['main']['App']['RequestQuitShortcut']();
 }
@@ -116,6 +140,10 @@ export function SaveFeishuBridgeMCPJSON(arg1) {
 
 export function SelectModel(arg1) {
   return window['go']['main']['App']['SelectModel'](arg1);
+}
+
+export function SetFeishuBridgeSkillEnabled(arg1, arg2) {
+  return window['go']['main']['App']['SetFeishuBridgeSkillEnabled'](arg1, arg2);
 }
 
 export function ShowWindow() {

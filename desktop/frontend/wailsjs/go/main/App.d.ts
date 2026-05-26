@@ -6,9 +6,15 @@ import {feishu} from '../models';
 
 export function ChooseFeedbackExportPath():Promise<string>;
 
+export function ChooseFeishuBridgeSkillFolder():Promise<string>;
+
+export function ChooseFeishuBridgeSkillZip():Promise<string>;
+
 export function ClearLogs():Promise<void>;
 
 export function ClearRequests():Promise<void>;
+
+export function DeleteFeishuBridgeSkill(arg1:string):Promise<void>;
 
 export function ExportFeedbackBundle(arg1:main.FeedbackExportOptions):Promise<main.FeedbackExportResult>;
 
@@ -23,6 +29,8 @@ export function GetDetectionInfo():Promise<main.DetectionInfo>;
 export function GetFeishuBridgeConfig():Promise<feishu.Config>;
 
 export function GetFeishuBridgeMCPJSON():Promise<main.MCPJSONFile>;
+
+export function GetFeishuBridgeSkills():Promise<Array<feishu.BridgeSkill>>;
 
 export function GetFeishuBridgeStatus():Promise<feishu.Status>;
 
@@ -42,6 +50,8 @@ export function GetTokenStats():Promise<main.TokenStats>;
 
 export function HideWindow():Promise<void>;
 
+export function ImportFeishuBridgeSkillPath(arg1:string):Promise<feishu.BridgeSkillImportResult>;
+
 export function InstallFeishuCLI():Promise<void>;
 
 export function MinimizeWindow():Promise<void>;
@@ -56,11 +66,15 @@ export function RefreshModels():Promise<Array<main.ModelInfo>>;
 
 export function ReinstallFeishuSkills():Promise<void>;
 
+export function ReloadFeishuBridgeSkills():Promise<void>;
+
 export function RequestQuitShortcut():Promise<void>;
 
 export function SaveFeishuBridgeMCPJSON(arg1:string):Promise<main.MCPJSONFile>;
 
 export function SelectModel(arg1:string):Promise<main.ProxyStatus>;
+
+export function SetFeishuBridgeSkillEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function ShowWindow():Promise<void>;
 

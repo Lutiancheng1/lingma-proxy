@@ -12,6 +12,8 @@ import (
 	"lingma-ipc-proxy/internal/feishu"
 	"lingma-ipc-proxy/internal/lingmaipc"
 	"lingma-ipc-proxy/internal/service"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type desktopConfigEnvelope struct {
@@ -47,6 +49,9 @@ type MCPJSONFile struct {
 	Content     string `json:"content"`
 	ServerCount int    `json:"serverCount"`
 }
+
+type FeishuBridgeSkillImportResult = feishu.BridgeSkillImportResult
+type FeishuBridgeSkill = feishu.BridgeSkill
 
 func loadDesktopConfig() (service.Config, feishu.Config) {
 	cfg := defaultConfig()
@@ -417,4 +422,58 @@ func (a *App) StopFeishuBridge() error {
 		return nil
 	}
 	return a.bridge.Stop()
+}
+
+func (a *App) GetFeishuBridgeSkills() []feishu.BridgeSkill {
+	if a.bridge == nil {
+		return nil
+	}
+	return a.bridge.ListBridgeSkills()
+}
+
+func (a *App) ChooseFeishuBridgeSkillZip() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择 Skill zip",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Skill zip (*.zip)", Pattern: "*.zip"},
+		},
+	})
+}
+
+func (a *App) ChooseFeishuBridgeSkillFolder() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择包含 SKILL.md 的文件夹",
+	})
+}
+
+func (a *App) ImportFeishuBridgeSkillPath(path string) (feishu.BridgeSkillImportResult, error) {
+	if a.bridge == nil {
+		return feishu.BridgeSkillImportResult{}, fmt.Errorf("feishu bridge manager not initialized")
+	}
+	result, err := a.bridge.ImportSkillPath(context.Background(), path)
+	if err == nil {
+		a.emitLogWithSource("feishu-bridge", "info", fmt.Sprintf("Feishu Bridge Skill 导入完成：%d 个", len(result.Imported)))
+	}
+	return result, err
+}
+
+func (a *App) ReloadFeishuBridgeSkills() error {
+	if a.bridge == nil {
+		return fmt.Errorf("feishu bridge manager not initialized")
+	}
+	return a.bridge.ReloadBridgeSkills(context.Background())
+}
+
+func (a *App) SetFeishuBridgeSkillEnabled(id string, enabled bool) error {
+	if a.bridge == nil {
+		return fmt.Errorf("feishu bridge manager not initialized")
+	}
+	return a.bridge.SetBridgeSkillEnabled(context.Background(), id, enabled)
+}
+
+func (a *App) DeleteFeishuBridgeSkill(id string) error {
+	if a.bridge == nil {
+		return fmt.Errorf("feishu bridge manager not initialized")
+	}
+	return a.bridge.DeleteBridgeSkill(context.Background(), id)
 }

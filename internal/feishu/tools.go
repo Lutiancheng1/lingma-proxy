@@ -237,6 +237,7 @@ func toolDefinitions() []map[string]any {
 
 func toolDefinitionsWithMCP(mcpTools []mcpTool) []map[string]any {
 	defs := toolDefinitions()
+	defs = append(defs, skillToolDefinitions()...)
 	for _, tool := range mcpTools {
 		name := strings.TrimSpace(tool.Function)
 		if name == "" {
@@ -261,6 +262,97 @@ func toolDefinitionsWithMCP(mcpTools []mcpTool) []map[string]any {
 		})
 	}
 	return defs
+}
+
+func skillToolDefinitions() []map[string]any {
+	return []map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "skill_list",
+				"description": "列出用户在 Feishu Bridge 高级设置中导入并启用的 Skills。只返回索引，不返回完整正文。",
+				"parameters": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "skill_search",
+				"description": "按关键词搜索用户导入的 Skills。用于选择最相关的 skill 后再调用 skill_view 读取正文。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query": map[string]any{"type": "string", "description": "搜索关键词"},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "skill_view",
+				"description": "读取一个已启用 Skill 的完整 SKILL.md 正文。只有准备使用该 skill 时再调用，避免浪费上下文。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name": map[string]any{"type": "string", "description": "Skill 名称或 ID"},
+					},
+					"required": []string{"name"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "skill_run_script",
+				"description": "请求执行某个 Skill scripts/ 目录下实际存在的脚本。只有 skill_view 显示 scripts 存在时才调用；如果 Skill 文档要求 curl/HTTP API，请改用 skill_http_request，不要用 lark_cli_exec 运行 curl。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"skill":  map[string]any{"type": "string", "description": "Skill 名称或 ID"},
+						"script": map[string]any{"type": "string", "description": "scripts/ 目录下的脚本文件名"},
+						"args":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "可选参数"},
+					},
+					"required": []string{"skill", "script"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "skill_http_request",
+				"description": "按已读取的 Skill 文档执行 HTTP API 请求。适用于无 scripts/、但 SKILL.md 要求访问公开 REST API 的 Skill。支持 GET/POST/PUT/PATCH/DELETE，默认超时和响应上限可在高级设置调整；不要用 lark_cli_exec 或 MCP 代替 curl/API 调用。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"skill":  map[string]any{"type": "string", "description": "关联的 Skill 名称或 ID，用于审计和确认该请求来自哪个 Skill"},
+						"method": map[string]any{"type": "string", "enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE"}, "description": "HTTP method，默认 GET"},
+						"url":    map[string]any{"type": "string", "description": "完整 HTTP/HTTPS URL"},
+						"headers": map[string]any{
+							"type":                 "object",
+							"additionalProperties": map[string]any{"type": "string"},
+							"description":          "可选请求头，例如 User-Agent",
+						},
+						"body": map[string]any{"type": "string", "description": "可选请求体，通常为 JSON 字符串；GET/DELETE 一般不需要"},
+					},
+					"required": []string{"skill", "url"},
+				},
+			},
+		},
+	}
+}
+
+func isBridgeSkillTool(name string) bool {
+	switch name {
+	case "skill_list", "skill_search", "skill_view", "skill_run_script", "skill_http_get", "skill_http_request":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildToolCommand(toolName string, args map[string]any) ([]string, error) {

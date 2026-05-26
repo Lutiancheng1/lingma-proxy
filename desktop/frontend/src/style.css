@@ -1170,7 +1170,7 @@ button {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  height: 310px;
+  height: 280px;
 }
 
 .model-card-list,
@@ -2493,6 +2493,94 @@ button:disabled {
   line-height: 1.45;
 }
 
+.context-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.context-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.skill-list {
+  display: grid;
+  gap: 8px;
+}
+
+.skill-card {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.skill-card.disabled {
+  opacity: 0.68;
+}
+
+.skill-card.invalid {
+  border-color: rgba(220, 38, 38, 0.34);
+}
+
+.skill-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  color: var(--text);
+  text-align: left;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.skill-main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.skill-main strong,
+.skill-main small,
+.skill-main em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-main small,
+.skill-main em,
+.skill-scripts {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.skill-scripts {
+  padding: 0 10px 8px 32px;
+}
+
+.text-danger-button {
+  margin: 0 10px 10px 32px;
+  padding: 4px 8px;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid rgba(220, 38, 38, 0.28);
+  border-radius: 6px;
+  background: rgba(220, 38, 38, 0.06);
+  cursor: pointer;
+}
+
 .mcp-server-list {
   display: grid;
   gap: 8px;
@@ -3078,11 +3166,15 @@ button:disabled {
 }
 
 .log-row {
-  grid-template-columns: 82px 148px 42px 118px 118px minmax(0, 1fr);
+  grid-template-columns: 116px 148px 42px 118px 118px minmax(0, 1fr);
   font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
   font-size: 12px;
   -webkit-user-select: text;
   user-select: text;
+}
+
+.log-row > span:first-child {
+  white-space: nowrap;
 }
 
 .log-source-chip {

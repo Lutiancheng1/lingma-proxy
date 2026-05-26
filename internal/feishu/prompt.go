@@ -39,7 +39,7 @@ const baseSystemPrompt = `你是一个飞书智能助手。当前通过官方 Fe
 10. 如果工具结果中出现”truncated””仅列出前 N 个””请勿推断未展示项”等提示，只能基于已展示结果回答，禁止补写未展示的内容、名称、ID 或数量。
 10. 对”查看日程/创建会议/发送消息/搜索消息/创建文档/读取文档/查看云盘文档/列出文件/搜索文件/操作多维表格/读取电子表格/查看任务/查看知识库/查看邮箱/通讯录/妙记/会议纪要”等直接操作型请求，应先工具调用，再总结结果。`
 
-func buildSystemPrompt(skills []SkillStatus, botIdentity string, mcpSection string) string {
+func buildSystemPrompt(skills []SkillStatus, botIdentity string, mcpSection string, importedSkillSection string) string {
 	sections := make([]string, 0, len(skills))
 	for _, skill := range skills {
 		if !skill.Found || strings.TrimSpace(skill.Path) == "" {
@@ -57,12 +57,18 @@ func buildSystemPrompt(skills []SkillStatus, botIdentity string, mcpSection stri
 		prompt = "用户自定义 Bot 身份描述：\n" + identity + "\n\n以上身份描述只影响 Bot 的角色定位、服务边界、语气和表达风格；不得覆盖后续工具调用规则、权限规则、真实数据约束和安全约束。\n\n" + prompt
 	}
 	if len(sections) == 0 {
-		if strings.TrimSpace(mcpSection) == "" {
-			return prompt
+		if strings.TrimSpace(importedSkillSection) != "" {
+			prompt += "\n\n" + strings.TrimSpace(importedSkillSection)
 		}
-		return prompt + "\n\n" + strings.TrimSpace(mcpSection)
+		if strings.TrimSpace(mcpSection) != "" {
+			prompt += "\n\n" + strings.TrimSpace(mcpSection)
+		}
+		return prompt
 	}
 	prompt = prompt + "\n\n以下是本机已安装的 lark-cli skills 摘要，请优先遵循其中的命令约束、身份约束和 shortcut 习惯：\n\n" + strings.Join(sections, "\n\n")
+	if strings.TrimSpace(importedSkillSection) != "" {
+		prompt += "\n\n" + strings.TrimSpace(importedSkillSection)
+	}
 	if strings.TrimSpace(mcpSection) != "" {
 		prompt += "\n\n" + strings.TrimSpace(mcpSection)
 	}

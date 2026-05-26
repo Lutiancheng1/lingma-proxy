@@ -72,6 +72,12 @@ func TestStreamingReplyDeliveredToCardAndFinal(t *testing.T) {
 	if !strings.Contains(got, chunks[0]) {
 		t.Fatalf("first delta %q never appeared in card patches: %s", chunks[0], got)
 	}
+	if !strings.Contains(got, "/settings") {
+		t.Fatalf("finalize should close CardKit streaming via settings endpoint, got: %s", got)
+	}
+	if !strings.Contains(got, "已完成") {
+		t.Fatalf("finalize should refresh the card header to completed state, got: %s", got)
+	}
 }
 
 // TestStreamingFallsBackToNonStreamWhenStreamFails ensures the non-stream

@@ -26,7 +26,7 @@ func main() {
 	err := wails.Run(&options.App{
 		Title:             "Lingma Proxy",
 		Width:             1160,
-		Height:            740,
+		Height:            725,
 		MinWidth:          900,
 		MinHeight:         600,
 		StartHidden:       true,

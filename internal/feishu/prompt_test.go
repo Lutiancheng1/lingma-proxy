@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildSystemPromptInjectsBotIdentity(t *testing.T) {
-	prompt := buildSystemPrompt(nil, "你是研发效能助手。", "")
+	prompt := buildSystemPrompt(nil, "你是研发效能助手。", "", "")
 	if !strings.Contains(prompt, "用户自定义 Bot 身份描述") {
 		t.Fatal("prompt should include custom identity section")
 	}
@@ -22,14 +22,14 @@ func TestBuildSystemPromptInjectsBotIdentity(t *testing.T) {
 }
 
 func TestBuildSystemPromptOmitsEmptyBotIdentity(t *testing.T) {
-	prompt := buildSystemPrompt(nil, "  ", "")
+	prompt := buildSystemPrompt(nil, "  ", "", "")
 	if strings.Contains(prompt, "用户自定义 Bot 身份描述") {
 		t.Fatal("empty custom identity should not add identity section")
 	}
 }
 
 func TestBuildSystemPromptAppendsMCPSection(t *testing.T) {
-	prompt := buildSystemPrompt(nil, "", "已启用 MCP 工具。")
+	prompt := buildSystemPrompt(nil, "", "已启用 MCP 工具。", "")
 	if !strings.Contains(prompt, "已启用 MCP 工具") {
 		t.Fatal("prompt should include MCP section")
 	}

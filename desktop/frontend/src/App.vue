@@ -67,8 +67,28 @@ const navigation = [
 ]
 
 function addLog(level, message, source = 'app') {
-  const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  logs.value.unshift({ time, level, source, message })
+  const now = new Date()
+  const time = now.toLocaleTimeString('zh-CN', { hour12: false })
+  pushLogEntry({ time, createdAt: now.toISOString(), level, source, message })
+}
+
+function logEntryKey(entry) {
+  return [
+    entry?.source || 'app',
+    entry?.level || '',
+    entry?.sessionId || '',
+    entry?.chatId || '',
+    entry?.messageId || '',
+    entry?.message || ''
+  ].join('\u0000')
+}
+
+function pushLogEntry(entry) {
+  const key = logEntryKey(entry)
+  if (key && logs.value.slice(0, 80).some((item) => logEntryKey(item) === key)) {
+    return
+  }
+  logs.value.unshift(entry)
   if (logs.value.length > 500) {
     logs.value = logs.value.slice(0, 500)
   }
@@ -314,8 +334,7 @@ onMounted(() => {
   })
   safeEventsOn('log', (data) => {
     if (data.time && data.message !== undefined) {
-      logs.value.unshift(data)
-      if (logs.value.length > 500) logs.value = logs.value.slice(0, 500)
+      pushLogEntry({ ...data, createdAt: data.createdAt || new Date().toISOString() })
     } else {
       addLog(data.level || 'info', data.message || '', data.source || 'app')
     }

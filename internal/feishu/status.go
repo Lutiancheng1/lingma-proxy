@@ -87,4 +87,5 @@ type Status struct {
 	LastStartedAt  string            `json:"lastStartedAt,omitempty"`
 	CurrentModel   string            `json:"currentModel,omitempty"`
 	RequiredSkills []string          `json:"requiredSkills,omitempty"`
+	SkillCount     int               `json:"skillCount,omitempty"`
 }

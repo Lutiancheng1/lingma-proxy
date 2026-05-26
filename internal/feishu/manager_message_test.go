@@ -269,7 +269,7 @@ func TestHandleEventGuidesThenStopsOnRepeatedIdenticalToolFailure(t *testing.T) 
 
 func TestRemovedConversationPreferenceCommandsAreNotHandled(t *testing.T) {
 	manager := NewManager(ManagerOptions{})
-	for _, command := range []string{"/think off", "/lang en", "/at off", "/skills", "/whoami"} {
+	for _, command := range []string{"/think off", "/lang en", "/at off", "/whoami"} {
 		if reply, handled := manager.handleConversationCommand(context.Background(), "oc_removed_commands", "http://127.0.0.1:8095/v1/chat/completions", "kmodel", command, LogMeta{}); handled {
 			t.Fatalf("%s should not be handled, got reply %q", command, reply)
 		}
@@ -331,12 +331,12 @@ func TestHandleEventMergesBurstMessagesPerConversation(t *testing.T) {
 		MessageType: "text",
 	})
 
-	got := string(mustReadFileContainingEventually(t, replyLog, "已合并处理。"))
+	got := string(mustReadFileContainingEventually(t, replyLog, "im +messages-reply --as bot --message-id om_burst_2"))
 	if calls != 1 {
 		t.Fatalf("expected one merged LLM call, got %d; log=%s", calls, got)
 	}
-	if !strings.Contains(got, "--message-id om_burst_2") {
-		t.Fatalf("merged reply should target the latest message, got: %s", got)
+	if !strings.Contains(got, "已合并处理。") {
+		t.Fatalf("merged reply body missing from log: %s", got)
 	}
 }
 

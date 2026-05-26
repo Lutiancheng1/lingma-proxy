@@ -69,6 +69,15 @@ flowchart LR
 
 CardKit sequence 管理：同一卡片的所有 API 调用必须使用严格递增的 `sequence` 整数（1–2147483647），否则返回 300317 错误。
 
+CardKit 最终态分层：
+
+- 流式阶段初始创建 `subtitle_md`、`steps_md`、`reply_md`、`hint_md` 等稳定 element，正文只更新 `reply_md`
+- 工具步骤完成后执行一次结构刷新，把已完成工具插入为默认折叠的 `collapsible_panel`，并保留 `reply_md` 继续接收后续正文流
+- 正常完成时先关闭 `/settings.streaming_mode`，再做小尺寸最终卡片更新刷新 header/status，避免标题停留在“正在思考”
+- 长文本或大工具结果走极简最终卡片 + 分段 markdown；极简卡片仍保留最近工具折叠摘要，但压缩数量和正文长度
+
+授权与权限：模型不得直接执行 `lark-cli auth login`。工具结果出现 `need_user_authorization` 或缺少 scope 时，由 Bridge 接管 device flow，回复授权链接并等待用户授权后继续。
+
 **分支定位**：`feat/feishu-bridge-go` 为实验分支，仅通过 GitHub Actions 产出 artifact 供内测下载，不参与 release 发布，不合入 main。
 
 ---
@@ -310,7 +319,7 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 - 展示当前 backend、监听地址、探测结果
 - 持久化：
   - 请求历史
-  - 日志
+  - 日志（包含 `createdAt`，按短窗口 fingerprint 抑制重复写入）
   - Token 统计
 - 编辑配置并保存后按需重启
 
@@ -319,6 +328,13 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 - 配置：`~/.config/lingma-proxy/config.json`
 - 旧配置兼容读取：`~/.config/lingma-ipc-proxy/config.json`
 - GUI 运行状态：`~/.config/lingma-ipc-proxy/app-state.json`
+
+反馈包导出：
+
+- 默认包含 `app-logs.json`、`request-logs.json`、配置摘要、环境摘要和探测信息
+- Feishu Bridge 可用时额外包含 `feishu-bridge-status.json`
+- `app-logs.json` 会保留 Feishu Bridge 的 `source/sessionId/chatId/messageId/level/message`，并对文本做脱敏
+- UI 日志列表基于 `createdAt` 显示 `今天/昨天/MM-DD + 时间`；旧日志缺少 `createdAt` 时回退 `time`
 
 打包要求：
 

@@ -69,6 +69,15 @@ Card streaming architecture (3-tier graceful degradation):
 
 CardKit sequence management: All API calls to the same card must use a strictly increasing `sequence` integer (1–2147483647), otherwise error 300317 is returned.
 
+CardKit final-state layering:
+
+- the initial streaming card creates stable `subtitle_md`, `steps_md`, `reply_md`, and `hint_md` elements; normal text deltas only update `reply_md`
+- when a tool step finishes, the card performs a small structural refresh that inserts completed tools as collapsed `collapsible_panel` blocks while keeping `reply_md` available for later text streaming
+- on normal completion, the bridge first disables `/settings.streaming_mode`, then performs a small final card update so the header/status does not remain in the thinking state
+- long replies or large tool payloads use a compact final card plus chunked markdown; the compact card still keeps recent collapsed tool summaries with bounded count and body size
+
+Authorization and permissions: the model must not run `lark-cli auth login` directly. When tool output reports `need_user_authorization` or missing scopes, the Bridge owns the device-flow login, replies with the authorization URL, and waits for the user to authorize before continuing.
+
 ---
 
 ## 2. Runtime Modes
@@ -308,7 +317,7 @@ Responsibilities:
 - show current backend and resolved endpoints
 - persist:
   - request history
-  - logs
+  - logs (with `createdAt`, plus short-window fingerprint dedupe)
   - token statistics
 - show detected IPC and remote credentials metadata
 - edit config and restart proxy on save
@@ -318,6 +327,13 @@ Persisted local state:
 - config: `~/.config/lingma-proxy/config.json`
 - legacy config fallback: `~/.config/lingma-ipc-proxy/config.json`
 - UI/runtime state: `~/.config/lingma-ipc-proxy/app-state.json`
+
+Feedback bundle export:
+
+- default export includes `app-logs.json`, `request-logs.json`, config summary, environment summary, and detection info
+- when Feishu Bridge is available, the bundle also includes `feishu-bridge-status.json`
+- `app-logs.json` preserves Feishu Bridge `source/sessionId/chatId/messageId/level/message` fields with text redaction
+- the UI log list displays `today/yesterday/MM-DD + time` from `createdAt`; old logs without `createdAt` fall back to `time`
 
 Production packaging rules:
 
