@@ -116,6 +116,7 @@ const bridgeReady = computed(() => {
 const bridgeStatusPending = computed(() => {
   return bridgeInitialStatusLoading.value || !bridgeStatusLoaded.value || (bridgeRefreshing.value && !bridgeStatus.value?.lastCheckedAt)
 })
+const commandHelpPinned = ref(false)
 const bridgeSetupLinkVisible = computed(() => Boolean(bridgeStatus.value?.setupUrl) && !bridgeStatus.value?.config?.configured)
 const bridgeLoginLinkVisible = computed(() => Boolean(bridgeStatus.value?.loginUrl) && !bridgeStatus.value?.auth?.authorized)
 const bridgeBrowserHintVisible = computed(() => bridgeSetupLinkVisible.value || bridgeLoginLinkVisible.value)
@@ -270,6 +271,21 @@ function chooseBridgeModel(modelID) {
   openSelect.value = ''
 }
 
+function toggleCommandHelp(event) {
+  event?.stopPropagation?.()
+  commandHelpPinned.value = !commandHelpPinned.value
+}
+
+function closeCommandHelp() {
+  commandHelpPinned.value = false
+}
+
+function handleDocumentPointerDown(event) {
+  if (!commandHelpPinned.value) return
+  if (event.target?.closest?.('.inline-help--commands')) return
+  commandHelpPinned.value = false
+}
+
 async function refreshAvailableBridgeModels({ background = false } = {}) {
   try {
     const models = background ? await RefreshModels() : await GetModels()
@@ -297,6 +313,7 @@ function formatDateTime(value) {
 }
 
 onMounted(async () => {
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
   try {
     config.value = await GetConfig()
     bridgeConfig.value = await GetFeishuBridgeConfig()
@@ -324,6 +341,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
   safeEventsOff('feishu:status')
   safeEventsOff('models:updated')
   stopBridgeStatusPolling()
@@ -1095,12 +1113,17 @@ async function handleBridgeStepClick(step) {
             <div>
               <div class="panel-title-row">
                 <h2>Feishu Bot Bridge</h2>
-                <div class="inline-help">
-                  <button type="button" class="inline-help-trigger" aria-label="查看会话命令说明">
+                <div class="inline-help inline-help--commands" :class="{ pinned: commandHelpPinned }">
+                  <button type="button" class="inline-help-trigger" aria-label="查看会话命令说明" @click="toggleCommandHelp">
                     <i class="bi bi-question-circle" aria-hidden="true"></i>
                   </button>
-                  <div class="inline-help-popover inline-help-popover--commands">
-                    <strong>飞书会话命令</strong>
+                  <div class="inline-help-popover inline-help-popover--commands" @pointerdown.stop>
+                    <div class="inline-help-popover-head">
+                      <strong>飞书会话命令</strong>
+                      <button type="button" class="inline-help-close" aria-label="关闭命令说明" @click="closeCommandHelp">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                      </button>
+                    </div>
                     <em>在飞书内直接发给机器人，仅对当前会话生效</em>
                     <h5>上下文管理</h5>
                     <span><code>/help</code>：查看完整命令帮助</span>

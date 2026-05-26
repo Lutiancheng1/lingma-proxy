@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -1480,7 +1481,9 @@ conversation:
 			lastToolOutput = content
 			if m.store != nil {
 				if memoryID, err := m.store.SaveToolMemory(ctx, conversationKey, tc.Function.Name, args, content, result.IsError); err == nil && memoryID != "" && len(content) > 1200 {
-					content = summarizeText(content, 1200) + "\n\n[完整工具结果已保存为 " + memoryID + "；如需要完整内容，请基于该引用继续请求。]"
+					if !shouldPreserveToolResultForModel(content) {
+						content = summarizeText(content, 1200) + "\n\n[完整工具结果已保存为 " + memoryID + "；如需要完整内容，请基于该引用继续请求。]"
+					}
 				}
 			}
 			m.logf("info", fmt.Sprintf("Feishu bridge tool result: %s %s", tc.Function.Name, summarizeText(result.Output, 160)), logMeta)
@@ -1561,6 +1564,18 @@ conversation:
 	}
 	card.Finalize(replyText, "")
 	m.logf("info", "Feishu bridge 卡片回复已完成: message="+trimmedID(event.MessageID), logMeta)
+}
+
+func shouldPreserveToolResultForModel(content string) bool {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return false
+	}
+	return strings.TrimSpace(fmt.Sprint(payload["kind"])) == "drive_search"
 }
 
 func toolFailureFingerprint(toolName string, args map[string]any, output string) string {
@@ -2218,6 +2233,11 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 		m.mu.Lock()
 		delete(m.conversations, chatID)
 		m.mu.Unlock()
+		if m.store != nil {
+			if err := m.store.ClearConversation(ctx, chatID); err != nil {
+				m.logf("warn", "Feishu bridge 清理持久化会话失败："+err.Error(), meta)
+			}
+		}
 		m.notifyConversationChanged()
 		m.logf("info", "Feishu bridge 会话命令: "+command, meta)
 		return "当前飞书会话上下文已清空。接下来我会把后续消息当成一个新的任务重新开始。", true
@@ -3701,28 +3721,16 @@ func larkAPICommandWithJSONData(ctx context.Context, method string, endpoint str
 	dataArg := string(body)
 	cleanup := func() {}
 	if goruntime.GOOS == "windows" || len(dataArg) > 6000 {
-		file, err := os.CreateTemp("", "lingma-feishu-api-*.json")
-		if err != nil {
-			return nil, cleanup, fmt.Errorf("create lark api temp body: %w", err)
-		}
-		path := file.Name()
-		if _, err := file.Write(body); err != nil {
-			_ = file.Close()
-			_ = os.Remove(path)
-			return nil, cleanup, fmt.Errorf("write lark api temp body: %w", err)
-		}
-		if err := file.Close(); err != nil {
-			_ = os.Remove(path)
-			return nil, cleanup, fmt.Errorf("close lark api temp body: %w", err)
-		}
-		dataArg = "@" + path
-		cleanup = func() { _ = os.Remove(path) }
+		dataArg = "-"
 	}
 	cmd := commandContextWithEnv(ctx, "lark-cli", "api",
 		method, endpoint,
 		"--as", as,
 		"--data", dataArg,
 	)
+	if dataArg == "-" {
+		cmd.Stdin = bytes.NewReader(body)
+	}
 	return cmd, cleanup, nil
 }
 

@@ -622,7 +622,8 @@ button {
 }
 
 .inline-help:hover .inline-help-popover,
-.inline-help:focus-within .inline-help-popover {
+.inline-help:focus-within .inline-help-popover,
+.inline-help.pinned .inline-help-popover {
   display: block;
 }
 
@@ -637,6 +638,38 @@ button {
   max-width: 380px;
   max-height: 60vh;
   overflow-y: auto;
+}
+
+.inline-help-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.inline-help-popover-head strong {
+  margin-bottom: 0;
+}
+
+.inline-help-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.inline-help-close:hover {
+  color: var(--text);
+  border-color: var(--line);
+  background: rgba(15, 23, 42, 0.06);
 }
 
 .inline-help-popover--commands em {

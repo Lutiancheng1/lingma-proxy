@@ -629,10 +629,88 @@ func normalizeToolOutput(result string) string {
 	if result == "" {
 		return result
 	}
+	if summary := summarizeDriveSearchResult(result); summary != "" {
+		return summary
+	}
 	if summary := summarizeChatListResult(result); summary != "" {
 		return summary
 	}
 	return result
+}
+
+func summarizeDriveSearchResult(result string) string {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		return ""
+	}
+	data, _ := payload["data"].(map[string]any)
+	if data == nil {
+		return ""
+	}
+	rawResults, ok := data["results"].([]any)
+	if !ok {
+		return ""
+	}
+	type driveSearchItem struct {
+		Title     string `json:"title"`
+		Entity    string `json:"entity_type,omitempty"`
+		DocType   string `json:"doc_type,omitempty"`
+		URL       string `json:"url,omitempty"`
+		Token     string `json:"token,omitempty"`
+		Owner     string `json:"owner,omitempty"`
+		UpdatedAt string `json:"updated_at,omitempty"`
+	}
+	items := make([]driveSearchItem, 0, len(rawResults))
+	for _, raw := range rawResults {
+		item, _ := raw.(map[string]any)
+		if item == nil {
+			continue
+		}
+		meta, _ := item["result_meta"].(map[string]any)
+		if meta == nil {
+			continue
+		}
+		title := strings.TrimSpace(fmt.Sprint(item["title_highlighted"]))
+		if title == "" || title == "<nil>" {
+			title = strings.TrimSpace(fmt.Sprint(item["title"]))
+		}
+		url := strings.TrimSpace(fmt.Sprint(meta["url"]))
+		if url == "" || url == "<nil>" {
+			continue
+		}
+		items = append(items, driveSearchItem{
+			Title:     title,
+			Entity:    strings.TrimSpace(fmt.Sprint(item["entity_type"])),
+			DocType:   strings.TrimSpace(fmt.Sprint(meta["doc_types"])),
+			URL:       url,
+			Token:     strings.TrimSpace(fmt.Sprint(meta["token"])),
+			Owner:     strings.TrimSpace(fmt.Sprint(meta["owner_name"])),
+			UpdatedAt: strings.TrimSpace(fmt.Sprint(meta["update_time_iso"])),
+		})
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	total := intFromAny(data["total"])
+	hasMore, _ := data["has_more"].(bool)
+	out := map[string]any{
+		"ok":         payload["ok"],
+		"identity":   payload["identity"],
+		"kind":       "drive_search",
+		"summary":    fmt.Sprintf("当前页返回 %d 个真实云盘结果；total=%d；has_more=%v。回答时只能复制 results[].url，禁止自造链接。", len(items), total, hasMore),
+		"has_more":   hasMore,
+		"page_token": strings.TrimSpace(fmt.Sprint(data["page_token"])),
+		"results":    items,
+		"total":      total,
+	}
+	if out["page_token"] == "<nil>" {
+		out["page_token"] = ""
+	}
+	text, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(text)
 }
 
 func summarizeChatListResult(result string) string {
@@ -697,6 +775,22 @@ func summarizeChatListResult(result string) string {
 		return ""
 	}
 	return string(text)
+}
+
+func intFromAny(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case json.Number:
+		i, _ := v.Int64()
+		return int(i)
+	default:
+		return 0
+	}
 }
 
 func stringArg(args map[string]any, key string) string {

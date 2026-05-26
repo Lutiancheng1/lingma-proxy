@@ -146,25 +146,56 @@ func TestCompactFinalCardStateKeepsCollapsedToolSummary(t *testing.T) {
 	if strings.Contains(state.Reply, "Markdown 补发") {
 		t.Fatalf("compact reply should not mention markdown fallback: %q", state.Reply)
 	}
-	if !strings.Contains(state.Reply, "卡片中保留摘要") {
-		t.Fatalf("compact reply missing compact hint: %q", state.Reply)
+	if strings.Contains(state.Reply, "卡片中保留摘要") {
+		t.Fatalf("compact reply should not duplicate compact hint: %q", state.Reply)
+	}
+	if !strings.Contains(state.Hint, "卡片中保留摘要") {
+		t.Fatalf("compact hint missing compact message: %q", state.Hint)
 	}
 	if len([]rune(state.Reply)) > compactFinalReplyLimit+80 {
 		t.Fatalf("compact reply too long: %d runes", len([]rune(state.Reply)))
 	}
 }
 
-func TestShouldUseCompactFinalDeliveryForLongReply(t *testing.T) {
-	cardJSON, err := renderFinalCardV2(cardState{
+func TestSplitFinalCardStatesKeepsLongReplyComplete(t *testing.T) {
+	reply := strings.Repeat("长回复\n", 5000)
+	parts, err := splitFinalCardStates(cardState{
 		Status:      "done",
 		StatusLabel: "完成",
-		Reply:       strings.Repeat("长回复", 2000),
+		Title:       "aily",
+		Steps: []cardStep{{
+			Kind:  "tool",
+			Title: "lark_cli_exec",
+			Body:  "参数：`{\"argv\":[\"drive\",\"+search\"]}`\n结果：ok",
+			Done:  true,
+		}},
+		Reply: reply,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !shouldUseCompactFinalDelivery(cardJSON, cardState{Reply: strings.Repeat("长回复", 2000)}) {
-		t.Fatal("long final reply should use compact card")
+	if len(parts) < 2 {
+		t.Fatalf("long final reply should be split into multiple cards, got %d", len(parts))
+	}
+	var joined strings.Builder
+	for i, part := range parts {
+		cardJSON, renderErr := renderFinalCardV2(part)
+		if renderErr != nil {
+			t.Fatal(renderErr)
+		}
+		if shouldUseCompactFinalDelivery(cardJSON, part) {
+			t.Fatalf("part %d still exceeds final card budget: %d", i+1, len([]rune(cardJSON)))
+		}
+		joined.WriteString(strings.TrimSpace(part.Reply))
+	}
+	if strings.ReplaceAll(joined.String(), "\n", "") != strings.ReplaceAll(strings.TrimSpace(reply), "\n", "") {
+		t.Fatal("split final cards should preserve the complete reply text")
+	}
+	if len(parts[0].Steps) == 0 {
+		t.Fatal("first split card should preserve tool panels")
+	}
+	if len(parts[1].Steps) != 0 {
+		t.Fatal("continuation cards should not repeat tool panels")
 	}
 }
 
@@ -181,8 +212,11 @@ func TestStreamingReplyContentCapsLongPreview(t *testing.T) {
 	if strings.Contains(preview, longReply) {
 		t.Fatal("streaming card should not embed full long reply")
 	}
-	if strings.Contains(preview, "分段发送") || !strings.Contains(preview, "卡片中保留摘要") {
-		t.Fatalf("streaming preview should not promise markdown fallback: %q", preview)
+	if strings.Contains(preview, "分段发送") || strings.Contains(preview, "卡片中保留摘要") {
+		t.Fatalf("streaming preview should not promise fallback or summary: %q", preview)
+	}
+	if !strings.Contains(preview, "完整内容") {
+		t.Fatalf("streaming preview should tell users final content will be complete: %q", preview)
 	}
 	if len([]rune(preview)) > streamingReplyPreviewLimit+80 {
 		t.Fatalf("streaming preview too long: %d runes", len([]rune(preview)))

@@ -2,7 +2,6 @@ package feishu
 
 import (
 	"context"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -122,7 +121,7 @@ func TestDecodeCommandOutputGBK(t *testing.T) {
 	}
 }
 
-func TestLarkAPICommandWithJSONDataUsesTempFileForLargeBody(t *testing.T) {
+func TestLarkAPICommandWithJSONDataUsesStdinForLargeBody(t *testing.T) {
 	body := []byte(`{"data":"` + strings.Repeat("x", 7000) + `"}`)
 	cmd, cleanup, err := larkAPICommandWithJSONData(context.Background(), "PUT", "/open-apis/test", "bot", body)
 	if err != nil {
@@ -136,11 +135,58 @@ func TestLarkAPICommandWithJSONDataUsesTempFileForLargeBody(t *testing.T) {
 			break
 		}
 	}
-	if !strings.HasPrefix(found, "@") {
-		t.Fatalf("expected @file data arg, got args=%#v", cmd.Args)
+	if found != "-" {
+		t.Fatalf("expected stdin data arg, got args=%#v", cmd.Args)
 	}
-	if _, err := os.Stat(strings.TrimPrefix(found, "@")); err != nil {
-		t.Fatalf("temp body not found: %v", err)
+	if cmd.Stdin == nil {
+		t.Fatal("expected command stdin to contain large body")
+	}
+}
+
+func TestNormalizeToolOutputSummarizesDriveSearchWithRealURLs(t *testing.T) {
+	raw := `{
+  "ok": true,
+  "identity": "user",
+  "data": {
+    "has_more": true,
+    "page_token": "next-token",
+    "total": 31,
+    "results": [
+      {
+        "entity_type": "DOC",
+        "title_highlighted": "AI 日报",
+        "result_meta": {
+          "doc_types": "DOCX",
+          "owner_name": "卢天成",
+          "token": "doc-token",
+          "update_time_iso": "2026-05-26T10:06:49+08:00",
+          "url": "https://my.feishu.cn/docx/doc-token"
+        }
+      }
+    ]
+  }
+}`
+	got := normalizeToolOutput(raw)
+	for _, want := range []string{
+		`"kind": "drive_search"`,
+		`"total": 31`,
+		`"page_token": "next-token"`,
+		`"title": "AI 日报"`,
+		`"url": "https://my.feishu.cn/docx/doc-token"`,
+		"禁止自造链接",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("normalized drive search missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestShouldPreserveDriveSearchToolResultForModel(t *testing.T) {
+	if !shouldPreserveToolResultForModel(`{"kind":"drive_search","results":[]}`) {
+		t.Fatal("drive_search summaries should stay inline for the model")
+	}
+	if shouldPreserveToolResultForModel(`{"kind":"other"}`) {
+		t.Fatal("unrelated large results should still be compactable")
 	}
 }
 

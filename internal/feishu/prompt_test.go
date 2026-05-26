@@ -37,6 +37,26 @@ func TestBuildSystemPromptAppendsMCPSection(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptGuidesIdentityAndDriveQueries(t *testing.T) {
+	prompt := buildSystemPrompt(nil, "", "", "")
+	for _, want := range []string{
+		`["auth","list"]`,
+		"禁止用日历、任务、云盘等无关业务工具",
+		`lark_skill_view {"name":"lark-drive"}`,
+		"has_more/page_token",
+		"任务路由速查",
+		`lark_skill_view {"name":"lark-sheets"}`,
+		"不要猜 Sheet1、0、1",
+		"unknown flag: --as",
+		"只能逐字复制工具结果里真实出现的 url/link 字段",
+		"drive +search 不支持 --limit",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+}
+
 func TestBuildSystemPromptUsesLarkSkillIndexOnly(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "lark-doc")

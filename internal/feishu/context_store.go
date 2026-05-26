@@ -207,6 +207,30 @@ func (s *bridgeStore) SaveSummary(ctx context.Context, key string, model string,
 	return err
 }
 
+func (s *bridgeStore) ClearConversation(ctx context.Context, key string) error {
+	if s == nil || s.db == nil || strings.TrimSpace(key) == "" {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`DELETE FROM conversations WHERE conversation_key = ?`,
+		`DELETE FROM conversation_messages WHERE conversation_key = ?`,
+		`DELETE FROM conversation_summaries WHERE conversation_key = ?`,
+		`DELETE FROM tool_memories WHERE conversation_key = ?`,
+		`DELETE FROM artifacts WHERE conversation_key = ?`,
+		`DELETE FROM skill_invocations WHERE conversation_key = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, key); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *bridgeStore) SaveToolMemory(ctx context.Context, conversationKey, toolName string, args map[string]any, fullResult string, isError bool) (string, error) {
 	if s == nil || s.db == nil {
 		return "", nil

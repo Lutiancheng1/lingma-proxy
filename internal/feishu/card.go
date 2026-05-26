@@ -20,7 +20,6 @@ const (
 	compactFinalStepLimit      = 6
 	compactFinalStepBodyLimit  = 320
 	finalCardJSONSoftLimit     = 12000
-	finalCardReplySoftLimit    = 3500
 	streamingReplyPreviewLimit = 3200
 	cardOperationRetryCount    = 3
 )
@@ -823,6 +822,34 @@ func (c *cardWriter) createAndSendStreamingCardWithRetry(ctx context.Context, st
 	return "", "", lastErr
 }
 
+func (c *cardWriter) createAndSendFinalCardWithRetry(ctx context.Context, state cardState) (string, string, error) {
+	cardJSON, err := renderFinalCardV2(state)
+	if err != nil {
+		return "", "", err
+	}
+	var lastErr error
+	for attempt := 1; attempt <= cardOperationRetryCount; attempt++ {
+		entityID, createErr := c.manager.createCardEntity(ctx, cardJSON)
+		if createErr != nil {
+			lastErr = fmt.Errorf("create final card entity: %w", createErr)
+		} else {
+			msgID, sendErr := c.manager.sendCardEntityMessage(ctx, c.rootMessage, entityID)
+			if sendErr == nil {
+				return entityID, msgID, nil
+			}
+			lastErr = fmt.Errorf("send final card entity message: %w", sendErr)
+		}
+		if ctx.Err() != nil {
+			return "", "", lastErr
+		}
+		c.manager.logf("warn", fmt.Sprintf("Feishu bridge 续卡发送失败，第 %d/%d 次：%v", attempt, cardOperationRetryCount, lastErr), c.logMeta)
+		if attempt < cardOperationRetryCount {
+			sleepBeforeCardRetry(ctx, attempt)
+		}
+	}
+	return "", "", lastErr
+}
+
 func (c *cardWriter) sendLegacyCardWithRetry(ctx context.Context, cardJSON string) (string, error) {
 	var lastErr error
 	for attempt := 1; attempt <= cardOperationRetryCount; attempt++ {
@@ -1016,20 +1043,39 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 
 	if useCardKit && entityID != "" {
 		c.manager.logf("info", "Feishu bridge Finalize: CardKit 关闭流式 card_id="+entityID, c.logMeta)
-		cardJSON, err := renderFinalCardV2(stateCopy)
+		finalStates, err := splitFinalCardStates(stateCopy)
 		if err != nil {
 			if legacyErr := c.finalizeLegacyCard(ctx, stateCopy, ""); legacyErr != nil {
 				c.manager.logf("warn", "Feishu bridge legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
 			}
 			return
 		}
-		if shouldUseCompactFinalDelivery(cardJSON, stateCopy) {
-			c.manager.logf("info", "Feishu bridge Finalize: 最终内容较长，使用极简卡片", c.logMeta)
-			if err := c.updateCompactFinalCard(ctx, entityID, stateCopy); err != nil {
-				c.manager.logf("warn", "Feishu bridge 极简最终卡片更新重试失败，降级 legacy card："+err.Error(), c.logMeta)
+		cardJSON, err := renderFinalCardV2(finalStates[0])
+		if err != nil {
+			if legacyErr := c.finalizeLegacyCard(ctx, stateCopy, ""); legacyErr != nil {
+				c.manager.logf("warn", "Feishu bridge legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
+			}
+			return
+		}
+		if len(finalStates) > 1 {
+			c.manager.logf("info", fmt.Sprintf("Feishu bridge Finalize: 最终内容较长，拆分为 %d 张卡片完整发送", len(finalStates)), c.logMeta)
+			if err := c.updateCardEntityWithRetry(ctx, entityID, cardJSON, "最终卡片分片更新"); err != nil {
+				c.manager.logf("warn", "Feishu bridge 最终卡片分片更新失败，降级 legacy card："+err.Error(), c.logMeta)
 				if legacyErr := c.finalizeLegacyCard(ctx, stateCopy, ""); legacyErr != nil {
 					c.manager.logf("warn", "Feishu bridge legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
 				}
+				return
+			}
+			for i := 1; i < len(finalStates); i++ {
+				_, msgID, sendErr := c.createAndSendFinalCardWithRetry(ctx, finalStates[i])
+				if sendErr != nil {
+					c.manager.logf("warn", fmt.Sprintf("Feishu bridge 第 %d 张续卡发送失败，降级 legacy card：%v", i+1, sendErr), c.logMeta)
+					if legacyErr := c.finalizeLegacyCard(ctx, finalStates[i], ""); legacyErr != nil {
+						c.manager.logf("warn", "Feishu bridge legacy card 续卡兜底失败："+legacyErr.Error(), c.logMeta)
+					}
+					continue
+				}
+				c.manager.logf("info", fmt.Sprintf("Feishu bridge 续卡已发送: part=%d/%d msg_id=%s", i+1, len(finalStates), msgID), c.logMeta)
 			}
 			return
 		}
@@ -1140,10 +1186,98 @@ func shouldUseCompactFinalDelivery(cardJSON string, state cardState) bool {
 	if len([]rune(cardJSON)) > finalCardJSONSoftLimit {
 		return true
 	}
-	if len([]rune(strings.TrimSpace(state.Reply))) > finalCardReplySoftLimit {
-		return true
-	}
 	return false
+}
+
+func splitFinalCardStates(state cardState) ([]cardState, error) {
+	reply := strings.TrimSpace(state.Reply)
+	if reply == "" {
+		return []cardState{state}, nil
+	}
+	cardJSON, err := renderFinalCardV2(state)
+	if err != nil {
+		return nil, err
+	}
+	if !shouldUseCompactFinalDelivery(cardJSON, state) {
+		return []cardState{state}, nil
+	}
+
+	runes := []rune(reply)
+	parts := []cardState{}
+	offset := 0
+	for offset < len(runes) {
+		base := state
+		base.Reply = ""
+		base.Hint = ""
+		if len(parts) > 0 {
+			base.Steps = nil
+			base.Title = continuationTitle(state.Title, len(parts)+1)
+			base.Status = "done"
+			base.StatusLabel = fmt.Sprintf("已完成（续 %d）", len(parts)+1)
+		}
+		best := largestReplyChunk(base, runes[offset:])
+		if best <= 0 {
+			// Tool panels or fixed metadata alone exceeded the budget. Keep the
+			// answer complete by compacting only tool panels, never reply text.
+			base.Steps = compactFinalSteps(base.Steps)
+			best = largestReplyChunk(base, runes[offset:])
+			if best <= 0 {
+				return nil, fmt.Errorf("final card fixed content exceeds budget")
+			}
+		}
+		best = preferTextBoundary(runes[offset:], best)
+		part := base
+		part.Reply = strings.TrimSpace(string(runes[offset : offset+best]))
+		if part.Reply == "" {
+			part.Reply = string(runes[offset : offset+best])
+		}
+		parts = append(parts, part)
+		offset += best
+		for offset < len(runes) && (runes[offset] == '\n' || runes[offset] == ' ') {
+			offset++
+		}
+	}
+	return parts, nil
+}
+
+func largestReplyChunk(base cardState, runes []rune) int {
+	low, high := 1, len(runes)
+	best := 0
+	for low <= high {
+		mid := (low + high) / 2
+		candidate := base
+		candidate.Reply = strings.TrimSpace(string(runes[:mid]))
+		cardJSON, err := renderFinalCardV2(candidate)
+		if err == nil && !shouldUseCompactFinalDelivery(cardJSON, candidate) {
+			best = mid
+			low = mid + 1
+			continue
+		}
+		high = mid - 1
+	}
+	return best
+}
+
+func preferTextBoundary(runes []rune, limit int) int {
+	if limit >= len(runes) {
+		return len(runes)
+	}
+	min := limit * 2 / 3
+	for i := limit; i > min; i-- {
+		switch runes[i-1] {
+		case '\n', '。', '！', '？', ';', '；':
+			return i
+		}
+	}
+	return limit
+}
+
+func continuationTitle(title string, part int) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return fmt.Sprintf("续 %d", part)
+	}
+	return fmt.Sprintf("%s 续 %d", title, part)
 }
 
 func streamingReplyContent(reply string) string {
@@ -1155,7 +1289,7 @@ func streamingReplyContent(reply string) string {
 	if len(runes) <= streamingReplyPreviewLimit {
 		return reply
 	}
-	return strings.TrimSpace(string(runes[:streamingReplyPreviewLimit])) + "\n\n（回复较长，完成后将在卡片中保留摘要。）"
+	return strings.TrimSpace(string(runes[:streamingReplyPreviewLimit])) + "\n\n（回复较长，完成后会更新为完整内容。）"
 }
 
 func compactFinalCardState(state cardState) cardState {
@@ -1163,7 +1297,7 @@ func compactFinalCardState(state cardState) cardState {
 	state.Hint = strings.TrimSpace(firstNonEmptyString(state.Hint, "完整回复较长，已在卡片中保留摘要。"))
 	reply := strings.TrimSpace(state.Reply)
 	if reply != "" {
-		state.Reply = summarizeText(reply, compactFinalReplyLimit) + "\n\n完整回复较长，已在卡片中保留摘要。"
+		state.Reply = summarizeText(reply, compactFinalReplyLimit)
 	}
 	return state
 }
