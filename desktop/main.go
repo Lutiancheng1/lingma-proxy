@@ -26,7 +26,7 @@ func main() {
 	err := wails.Run(&options.App{
 		Title:             "Lingma Proxy",
 		Width:             1160,
-		Height:            740,
+		Height:            defaultWindowHeight(),
 		MinWidth:          900,
 		MinHeight:         600,
 		HideWindowOnClose: goruntime.GOOS != "linux",
@@ -70,6 +70,13 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+func defaultWindowHeight() int {
+	if goruntime.GOOS == "darwin" {
+		return 725
+	}
+	return 743
 }
 
 func appMenu(app *App) *menu.Menu {
