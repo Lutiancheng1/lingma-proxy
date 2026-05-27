@@ -245,7 +245,7 @@ func TestShouldPreserveDriveSearchToolResultForModel(t *testing.T) {
 
 func TestWindowsCmdQuoteKeepsArgumentAtomic(t *testing.T) {
 	got := windowsCmdQuote(`{"as":"bot","text":"命令太长"}`)
-	if !strings.HasPrefix(got, `"`) || !strings.HasSuffix(got, `"`) || !strings.Contains(got, `\"bot\"`) {
+	if !strings.HasPrefix(got, `"`) || !strings.HasSuffix(got, `"`) || !strings.Contains(got, `""bot""`) {
 		t.Fatalf("unexpected windows quote: %s", got)
 	}
 }

@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"lingma-ipc-proxy/internal/feishu"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +156,64 @@ func TestParseDesktopConfigPreservesExplicitGroupOnlyAtBotFalse(t *testing.T) {
 	}
 	if bridgeCfg.MaxToolRounds != 12 {
 		t.Fatalf("explicit maxToolRounds should be preserved, got %d", bridgeCfg.MaxToolRounds)
+	}
+}
+
+func TestSaveConfigPreservesExistingFeishuBridgeConfig(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	configDir := filepath.Join(tmp, ".config", "lingma-proxy")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	initial := []byte(`{
+		"proxyConfig": {
+			"host": "127.0.0.1",
+			"port": 8095,
+			"backend": "remote"
+		},
+		"feishuBridge": {
+			"enabled": true,
+			"brand": "feishu",
+			"model": "kmodel",
+			"botName": "aily",
+			"botIdentity": "custom identity",
+			"mcpEnabled": true,
+			"groupOnlyAtBot": false,
+			"maxToolRounds": 24
+		}
+	}`)
+	if err := os.WriteFile(configPath, initial, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{cfg: defaultConfig(), bridgeCfg: feishu.DefaultConfig()}
+	nextProxy := app.cfg
+	nextProxy.Port = 18095
+	if err := app.saveConfig(nextProxy); err != nil {
+		t.Fatalf("saveConfig failed: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, bridgeCfg, ok := parseDesktopConfig(data, defaultConfig(), feishu.DefaultConfig())
+	if !ok {
+		t.Fatal("saved desktop config should parse")
+	}
+	if bridgeCfg.BotName != "aily" {
+		t.Fatalf("botName was not preserved: %#v", bridgeCfg)
+	}
+	if bridgeCfg.BotIdentity != "custom identity" {
+		t.Fatalf("botIdentity was not preserved: %#v", bridgeCfg)
+	}
+	if !bridgeCfg.MCPEnabled {
+		t.Fatalf("mcpEnabled was not preserved: %#v", bridgeCfg)
+	}
+	if bridgeCfg.GroupOnlyAtBot {
+		t.Fatalf("groupOnlyAtBot=false was not preserved: %#v", bridgeCfg)
 	}
 }
 

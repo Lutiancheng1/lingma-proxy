@@ -107,6 +107,30 @@ func parseDesktopConfig(data []byte, baseProxy service.Config, baseBridge feishu
 	return cfg, bridgeCfg, true
 }
 
+func loadSavedFeishuBridgeConfig(baseBridge feishu.Config) (feishu.Config, bool) {
+	dir, err := lingmaProxyConfigDir()
+	if err != nil {
+		return baseBridge, false
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		return baseBridge, false
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return baseBridge, false
+	}
+	rawBridge, ok := probe["feishuBridge"]
+	if !ok {
+		return baseBridge, false
+	}
+	savedBridge := baseBridge
+	if err := json.Unmarshal(rawBridge, &savedBridge); err != nil {
+		return baseBridge, false
+	}
+	return feishu.NormalizeConfig(savedBridge), true
+}
+
 func applyProxyConfigFile(cfg *service.Config, fileCfg proxyConfigFile) {
 	if fileCfg.Host != "" {
 		cfg.Host = fileCfg.Host
@@ -305,6 +329,15 @@ func (a *App) saveConfig(cfg service.Config) error {
 	a.mu.RLock()
 	bridgeCfg := a.bridgeCfg
 	a.mu.RUnlock()
+	if savedBridge, ok := loadSavedFeishuBridgeConfig(bridgeCfg); ok {
+		bridgeCfg = savedBridge
+		a.mu.Lock()
+		a.bridgeCfg = savedBridge
+		if a.bridge != nil {
+			a.bridge.SetConfig(savedBridge)
+		}
+		a.mu.Unlock()
+	}
 	return a.saveDesktopConfig(cfg, bridgeCfg)
 }
 

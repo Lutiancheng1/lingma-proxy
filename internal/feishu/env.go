@@ -384,6 +384,7 @@ func isPATHEnvItem(item string) bool {
 
 func commandWithEnv(name string, args ...string) *exec.Cmd {
 	executable := resolveCommandName(name)
+	executable = unquoteWindowsExecutable(executable)
 	cmd := exec.Command(executable, args...)
 	if shell, shellArgs, ok := windowsShellCommand(executable, args); ok {
 		cmd = exec.Command(shell, shellArgs...)
@@ -395,6 +396,7 @@ func commandWithEnv(name string, args ...string) *exec.Cmd {
 
 func commandContextWithEnv(ctx context.Context, name string, args ...string) *exec.Cmd {
 	executable := resolveCommandName(name)
+	executable = unquoteWindowsExecutable(executable)
 	cmd := exec.CommandContext(ctx, executable, args...)
 	if shell, shellArgs, ok := windowsShellCommand(executable, args); ok {
 		cmd = exec.CommandContext(ctx, shell, shellArgs...)
@@ -421,6 +423,7 @@ func windowsShellCommand(executable string, args []string) (string, []string, bo
 	if runtime.GOOS != "windows" {
 		return "", nil, false
 	}
+	executable = unquoteWindowsExecutable(executable)
 	ext := strings.ToLower(filepath.Ext(executable))
 	if ext != ".cmd" && ext != ".bat" {
 		return "", nil, false
@@ -430,7 +433,7 @@ func windowsShellCommand(executable string, args []string) (string, []string, bo
 	for _, arg := range args {
 		parts = append(parts, windowsCmdQuote(arg))
 	}
-	shellArgs := []string{"/D", "/S", "/C", strings.Join(parts, " ")}
+	shellArgs := []string{"/D", "/C", strings.Join(parts, " ")}
 	return "cmd.exe", shellArgs, true
 }
 
@@ -438,8 +441,15 @@ func windowsCmdQuote(value string) string {
 	if value == "" {
 		return `""`
 	}
-	escaped := strings.ReplaceAll(value, `"`, `\"`)
+	escaped := strings.ReplaceAll(value, `"`, `""`)
 	return `"` + escaped + `"`
+}
+
+func unquoteWindowsExecutable(value string) string {
+	if runtime.GOOS != "windows" {
+		return value
+	}
+	return strings.Trim(strings.TrimSpace(value), `"`)
 }
 
 func resolveCommandName(name string) string {
