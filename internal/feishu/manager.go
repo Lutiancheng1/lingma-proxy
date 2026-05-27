@@ -271,6 +271,13 @@ func (m *Manager) Probe(ctx context.Context) Status {
 	return m.status
 }
 
+func (m *Manager) RefreshProbe(ctx context.Context) Status {
+	m.refreshStatus(ctx)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.status
+}
+
 func (m *Manager) ImportSkillPath(ctx context.Context, path string) (BridgeSkillImportResult, error) {
 	if m.skillService == nil {
 		return BridgeSkillImportResult{}, fmt.Errorf("Skill 服务未初始化")

@@ -3,6 +3,7 @@
 package feishu
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,7 +44,7 @@ func TestResolvedPATHIncludesWindowsNPMConfigPrefix(t *testing.T) {
 }
 
 func TestWindowsShellCommandUnquotesCmdExecutable(t *testing.T) {
-	_, args, ok := windowsShellCommand(`"C:\Users\47157\AppData\Roaming\nvm\v20.19.6\lark-cli.cmd"`, []string{"auth", "login", "--recommend"})
+	_, args, cmdLine, ok := windowsShellCommand(`"C:\Users\47157\AppData\Roaming\nvm\v20.19.6\lark-cli.cmd"`, []string{"auth", "login", "--recommend"})
 	if !ok {
 		t.Fatal("expected .cmd executable to be wrapped by cmd.exe")
 	}
@@ -56,5 +57,27 @@ func TestWindowsShellCommandUnquotesCmdExecutable(t *testing.T) {
 	}
 	if !strings.Contains(joined, `"C:\Users\47157\AppData\Roaming\nvm\v20.19.6\lark-cli.cmd"`) {
 		t.Fatalf("cmd wrapper missing quoted executable path: %q", joined)
+	}
+	if strings.Contains(cmdLine, `\"`) {
+		t.Fatalf("raw cmd line must not contain backslash-escaped executable quotes: %q", cmdLine)
+	}
+	if !strings.Contains(cmdLine, `call "C:\Users\47157\AppData\Roaming\nvm\v20.19.6\lark-cli.cmd"`) {
+		t.Fatalf("raw cmd line missing callable quoted executable path: %q", cmdLine)
+	}
+}
+
+func TestCommandContextWithEnvUsesRawCmdLineForProgramFilesCmd(t *testing.T) {
+	cmd := commandContextWithEnv(context.Background(), `"C:\Program Files\nodejs\lark-cli.cmd"`, "auth", "login", "--recommend")
+	if !strings.EqualFold(filepath.Base(cmd.Path), "cmd.exe") {
+		t.Fatalf("expected cmd.exe wrapper, got path=%q args=%#v", cmd.Path, cmd.Args)
+	}
+	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CmdLine == "" {
+		t.Fatalf("expected raw cmd line for cmd.exe wrapper, got %#v", cmd.SysProcAttr)
+	}
+	if strings.Contains(cmd.SysProcAttr.CmdLine, `\"`) {
+		t.Fatalf("raw cmd line must not contain Go/backslash escaped quotes: %q", cmd.SysProcAttr.CmdLine)
+	}
+	if !strings.Contains(cmd.SysProcAttr.CmdLine, `call "C:\Program Files\nodejs\lark-cli.cmd"`) {
+		t.Fatalf("raw cmd line missing Program Files lark-cli path: %q", cmd.SysProcAttr.CmdLine)
 	}
 }

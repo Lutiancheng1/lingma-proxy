@@ -26,7 +26,7 @@ func main() {
 	err := wails.Run(&options.App{
 		Title:             "Lingma Proxy",
 		Width:             1160,
-		Height:            725,
+		Height:            defaultWindowHeight(),
 		MinWidth:          900,
 		MinHeight:         600,
 		StartHidden:       true,
@@ -73,15 +73,23 @@ func main() {
 	}
 }
 
+func defaultWindowHeight() int {
+	if goruntime.GOOS == "darwin" {
+		return 725
+	}
+	return 743
+}
+
 func appMenu(app *App) *menu.Menu {
+	if goruntime.GOOS != "darwin" {
+		return menu.NewMenu()
+	}
 	quitAccelerator := keys.OptionOrAlt("f4")
 	closeWindowAccelerator := keys.CmdOrCtrl("w")
 	minimizeWindowAccelerator := keys.CmdOrCtrl("m")
-	if goruntime.GOOS == "darwin" {
-		quitAccelerator = keys.CmdOrCtrl("q")
-		closeWindowAccelerator = keys.CmdOrCtrl("w")
-		minimizeWindowAccelerator = keys.CmdOrCtrl("m")
-	}
+	quitAccelerator = keys.CmdOrCtrl("q")
+	closeWindowAccelerator = keys.CmdOrCtrl("w")
+	minimizeWindowAccelerator = keys.CmdOrCtrl("m")
 
 	appMenu := menu.NewMenu()
 	appMenu.AddText("关闭窗口", closeWindowAccelerator, func(_ *menu.CallbackData) {

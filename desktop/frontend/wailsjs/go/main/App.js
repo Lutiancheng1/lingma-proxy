@@ -14,6 +14,10 @@ export function ChooseFeishuBridgeSkillZip() {
   return window['go']['main']['App']['ChooseFeishuBridgeSkillZip']();
 }
 
+export function CleanupFeishuBridgeArtifacts(arg1) {
+  return window['go']['main']['App']['CleanupFeishuBridgeArtifacts'](arg1);
+}
+
 export function ClearLogs() {
   return window['go']['main']['App']['ClearLogs']();
 }

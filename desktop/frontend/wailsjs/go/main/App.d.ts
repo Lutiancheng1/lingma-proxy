@@ -10,6 +10,8 @@ export function ChooseFeishuBridgeSkillFolder():Promise<string>;
 
 export function ChooseFeishuBridgeSkillZip():Promise<string>;
 
+export function CleanupFeishuBridgeArtifacts(arg1:main.FeishuBridgeCleanupOptions):Promise<Array<string>>;
+
 export function ClearLogs():Promise<void>;
 
 export function ClearRequests():Promise<void>;

@@ -882,6 +882,7 @@ button {
   display: grid;
   align-items: stretch;
   grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr) minmax(300px, 0.95fr);
+  grid-template-rows: 280px auto;
   grid-template-areas:
     'health models config'
     'requests requests usage';
@@ -890,6 +891,7 @@ button {
 
 .area-health {
   grid-area: health;
+  overflow: hidden;
 }
 
 .area-models {
@@ -899,6 +901,7 @@ button {
 
 .area-config {
   grid-area: config;
+  overflow: hidden;
 }
 
 .compact-header {
@@ -960,12 +963,12 @@ button {
 .config-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .config-summary-item {
   min-width: 0;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-soft);
@@ -1001,7 +1004,7 @@ button {
   display: grid;
   grid-template-columns: repeat(36, minmax(3px, 1fr));
   align-items: end;
-  height: 126px;
+  height: 132px;
   gap: 4px;
   padding: 18px 12px 10px;
   min-width: 0;
@@ -1038,7 +1041,7 @@ button {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 0;
-  margin-top: 12px;
+  margin-top: 10px;
   min-width: 0;
   border-top: 1px solid var(--line);
 }
@@ -1066,7 +1069,7 @@ button {
 }
 
 .health-stats div {
-  padding: 12px 8px 2px;
+  padding: 10px 8px 0;
   min-width: 0;
   border-left: 1px solid var(--line);
   cursor: default;
@@ -1116,7 +1119,7 @@ button {
 }
 
 .model-choice {
-  min-height: 48px;
+  min-height: 52px;
   padding: 9px 12px;
   width: 100%;
   border: 1px solid transparent;
@@ -1214,8 +1217,8 @@ button {
 }
 
 .model-card-list {
-  flex: 1 1 auto;
-  max-height: none;
+  flex: 0 0 auto;
+  max-height: calc(52px * 4);
   scrollbar-width: none;
 }
 
@@ -1535,6 +1538,28 @@ button {
   background: transparent;
   box-shadow: none;
   flex: 0 0 auto;
+}
+
+.cleanup-checkbox-grid {
+  margin-top: 14px;
+}
+
+.cleanup-progress-box {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.cleanup-progress-box span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 760px) {
@@ -1876,6 +1901,7 @@ button {
 .secondary-button,
 .ghost-button,
 .danger-button,
+.danger-outline-button,
 .icon-button,
 .segmented button {
   min-height: 32px;
@@ -1910,6 +1936,19 @@ button {
   font-weight: 700;
   background: var(--red-soft);
   border: 1px solid rgba(214, 69, 69, 0.18);
+}
+
+.danger-outline-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 156px;
+  padding: 0 14px;
+  color: #a32727;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(214, 69, 69, 0.26);
+  box-shadow: 0 8px 18px rgba(180, 35, 24, 0.08);
 }
 
 .icon-button {
@@ -3533,6 +3572,13 @@ button:disabled {
   color: #fecaca;
   border-color: rgba(248, 113, 113, 0.32);
   background: rgba(127, 29, 29, 0.42);
+}
+
+:root[data-theme='dark'] .danger-outline-button {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(127, 29, 29, 0.28);
+  box-shadow: none;
 }
 
 :root[data-theme='dark'] .danger-icon-button:hover {

@@ -288,6 +288,14 @@ func (s *bridgeStore) DeleteSkill(ctx context.Context, id string) error {
 	return err
 }
 
+func (s *bridgeStore) DeleteAllSkills(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM skills`)
+	return err
+}
+
 func (s *bridgeStore) SetSkillEnabled(ctx context.Context, id string, enabled bool) error {
 	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
 		return nil

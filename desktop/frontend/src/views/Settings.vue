@@ -11,6 +11,7 @@ import {
   GetModels,
   ChooseFeishuBridgeSkillFolder,
   ChooseFeishuBridgeSkillZip,
+  CleanupFeishuBridgeArtifacts,
   DeleteFeishuBridgeSkill,
   ImportFeishuBridgeSkillPath,
   InstallFeishuCLI,
@@ -71,6 +72,9 @@ const bridgeMCPJSONDraft = ref('')
 const bridgeMCPJSONPath = ref('')
 const bridgeMCPJSONError = ref('')
 const bridgeMCPJSONSaving = ref(false)
+const bridgeCleanupDialogOpen = ref(false)
+const bridgeCleanupImportedSkills = ref(false)
+const bridgeCleanupMCPConfig = ref(false)
 const bridgeSkills = ref([])
 const bridgeSkillsLoading = ref(false)
 const bridgeSkillImporting = ref(false)
@@ -114,7 +118,7 @@ const bridgeReady = computed(() => {
   )
 })
 const bridgeStatusPending = computed(() => {
-  return bridgeInitialStatusLoading.value || !bridgeStatusLoaded.value || (bridgeRefreshing.value && !bridgeStatus.value?.lastCheckedAt)
+  return bridgeInitialStatusLoading.value || !bridgeStatusLoaded.value || bridgeRefreshing.value
 })
 const commandHelpPinned = ref(false)
 const bridgeSetupLinkVisible = computed(() => Boolean(bridgeStatus.value?.setupUrl) && !bridgeStatus.value?.config?.configured)
@@ -329,6 +333,9 @@ onMounted(async () => {
     await refreshBridgeStatus(false)
   } catch (e) {
     emit('log', 'error', '配置加载失败：' + (e.message || String(e)))
+    if (bridgeStatus.value) {
+      bridgeStatusLoaded.value = true
+    }
     bridgeInitialStatusLoading.value = false
   }
 
@@ -764,6 +771,26 @@ async function installBridgeCLI() {
 
 async function reinstallBridgeSkills() {
   await withBridgeAction('飞书 Skills 重新安装已触发', () => ReinstallFeishuSkills())
+}
+
+function openBridgeCleanupDialog() {
+  bridgeCleanupImportedSkills.value = false
+  bridgeCleanupMCPConfig.value = false
+  bridgeAdvancedDialogOpen.value = false
+  bridgeCleanupDialogOpen.value = true
+}
+
+async function cleanupBridgeArtifacts() {
+  await withBridgeAction('飞书 CLI/Skills/授权信息已清理', async () => {
+    const results = await CleanupFeishuBridgeArtifacts({
+      includeImportedSkills: bridgeCleanupImportedSkills.value,
+      includeMcpConfig: bridgeCleanupMCPConfig.value,
+    })
+    if (Array.isArray(results) && results.length > 0) {
+      emit('log', 'info', results.join('；'))
+    }
+  })
+  bridgeCleanupDialogOpen.value = false
 }
 
 async function startBridgeSetupNew() {
@@ -1260,9 +1287,11 @@ async function handleBridgeStepClick(step) {
           <div v-if="bridgeStatus" class="detect-card">
           <div class="detect-title">
             <strong>当前状态</strong>
-            <button type="button" :disabled="bridgeRefreshing" @click="refreshBridgeStatus">
-              {{ bridgeStatusPending ? '检测中...' : (bridgeRefreshing ? '检测中...' : '刷新状态') }}
-            </button>
+            <div class="actions-row compact-actions">
+              <button type="button" :disabled="bridgeRefreshing || bridgeBusy" @click="refreshBridgeStatus">
+                {{ bridgeStatusPending ? '检测中...' : (bridgeRefreshing ? '检测中...' : '刷新状态') }}
+              </button>
+            </div>
           </div>
           <div v-if="bridgeStatusPending" class="status-loading-row">
             <span class="loading-dot"></span>
@@ -1395,6 +1424,46 @@ async function handleBridgeStepClick(step) {
       </section>
     </div>
 
+    <div v-if="bridgeCleanupDialogOpen" class="modal-backdrop" @click.self="bridgeCleanupDialogOpen = false">
+      <section class="modal-card bridge-cleanup-modal">
+        <div class="modal-header">
+          <div>
+            <h2>清理 Feishu Bridge 环境</h2>
+            <p>用于排查 CLI、Skills 或授权异常。默认不动 Node/npm/npx。</p>
+          </div>
+          <button class="secondary-button" type="button" @click="bridgeCleanupDialogOpen = false">关闭</button>
+        </div>
+        <div class="modal-body bridge-cleanup-body">
+          <div class="hint-box compact-hint">
+            <strong>默认清理</strong>
+            <span>会卸载全局 @larksuite/cli，移除官方 lark-* Skills，并清理 ~/.lark-cli 下的配置、授权、事件和缓存。</span>
+          </div>
+          <div class="checkbox-grid cleanup-checkbox-grid">
+            <label class="checkbox-item">
+              <input v-model="bridgeCleanupImportedSkills" type="checkbox" />
+              <span>同时清理用户导入的 Bridge Skills</span>
+            </label>
+            <label class="checkbox-item">
+              <input v-model="bridgeCleanupMCPConfig" type="checkbox" />
+              <span>同时清理自定义 MCP JSON，并关闭 MCP</span>
+            </label>
+          </div>
+          <div v-if="bridgeBusy || bridgeStatus?.lastOutput || bridgeStatus?.lastError" class="cleanup-progress-box">
+            <strong>{{ bridgeBusy ? '清理进度' : '最近清理结果' }}</strong>
+            <span v-if="bridgeStatus?.lastOutput">{{ bridgeStatus.lastOutput }}</span>
+            <span v-if="bridgeStatus?.lastError" class="warn-text">{{ bridgeStatus.lastError }}</span>
+          </div>
+          <p class="identity-note">不会删除 Node.js、npm、npx，也不会修改 Cursor / Claude / Lingma / QoderCN 等外部客户端自己的 MCP 配置。</p>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" @click="bridgeCleanupDialogOpen = false">取消</button>
+          <button class="danger-button" type="button" :disabled="bridgeBusy" @click="cleanupBridgeArtifacts">
+            {{ bridgeBusy ? '清理中...' : '确认清理' }}
+          </button>
+        </div>
+      </section>
+    </div>
+
     <div v-if="bridgeAdvancedDialogOpen" class="modal-backdrop" @click.self="bridgeAdvancedDialogOpen = false">
       <section class="modal-card bridge-advanced-modal">
         <div class="modal-header">
@@ -1423,6 +1492,18 @@ async function handleBridgeStepClick(step) {
               ></textarea>
             </div>
             <p class="identity-note">这段内容不会替代工具调用规则、权限规则和真实数据约束。需要恢复默认时清空后保存。</p>
+          </div>
+
+          <div class="advanced-section">
+            <div class="advanced-section-head">
+              <div>
+                <h3>环境维护</h3>
+                <p>排查飞书 CLI、官方 Skills 或授权异常时使用。默认不动 Node/npm/npx。</p>
+              </div>
+              <button type="button" class="danger-outline-button" :disabled="bridgeBusy || bridgeRefreshing" @click="openBridgeCleanupDialog">
+                清理 CLI/Skills/授权
+              </button>
+            </div>
           </div>
 
           <div class="advanced-section">

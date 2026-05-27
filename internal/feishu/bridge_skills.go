@@ -245,6 +245,36 @@ func (s *BridgeSkillService) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func (s *BridgeSkillService) ClearAll(ctx context.Context) (int, error) {
+	s.mu.Lock()
+	skills := make([]BridgeSkill, 0, len(s.skills))
+	for _, skill := range s.skills {
+		skills = append(skills, skill)
+	}
+	s.skills = map[string]BridgeSkill{}
+	s.mu.Unlock()
+
+	removed := 0
+	for _, skill := range skills {
+		if s.rootDir != "" && isPathInside(s.rootDir, skill.Path) {
+			if err := os.RemoveAll(skill.Path); err != nil {
+				return removed, fmt.Errorf("remove skill %s: %w", skill.Name, err)
+			}
+		}
+		removed++
+	}
+	if s.rootDir != "" {
+		_ = os.RemoveAll(s.rootDir)
+		_ = os.MkdirAll(s.rootDir, 0755)
+	}
+	if s.store != nil {
+		if err := s.store.DeleteAllSkills(ctx); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
 func (s *BridgeSkillService) SkillBody(nameOrID string) (string, BridgeSkill, error) {
 	skill, ok := s.Find(nameOrID)
 	if !ok {

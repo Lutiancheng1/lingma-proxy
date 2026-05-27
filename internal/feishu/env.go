@@ -386,8 +386,9 @@ func commandWithEnv(name string, args ...string) *exec.Cmd {
 	executable := resolveCommandName(name)
 	executable = unquoteWindowsExecutable(executable)
 	cmd := exec.Command(executable, args...)
-	if shell, shellArgs, ok := windowsShellCommand(executable, args); ok {
+	if shell, shellArgs, shellCmdLine, ok := windowsShellCommand(executable, args); ok {
 		cmd = exec.Command(shell, shellArgs...)
+		applyWindowsRawCommandLine(cmd, shellCmdLine)
 	}
 	cmd.Env = resolvedCommandEnv()
 	applyCommandPlatformOptions(cmd)
@@ -398,8 +399,9 @@ func commandContextWithEnv(ctx context.Context, name string, args ...string) *ex
 	executable := resolveCommandName(name)
 	executable = unquoteWindowsExecutable(executable)
 	cmd := exec.CommandContext(ctx, executable, args...)
-	if shell, shellArgs, ok := windowsShellCommand(executable, args); ok {
+	if shell, shellArgs, shellCmdLine, ok := windowsShellCommand(executable, args); ok {
 		cmd = exec.CommandContext(ctx, shell, shellArgs...)
+		applyWindowsRawCommandLine(cmd, shellCmdLine)
 	}
 	cmd.Env = resolvedCommandEnv()
 	applyCommandPlatformOptions(cmd)
@@ -419,22 +421,24 @@ func decodeCommandOutput(output []byte) string {
 	return string(output)
 }
 
-func windowsShellCommand(executable string, args []string) (string, []string, bool) {
+func windowsShellCommand(executable string, args []string) (string, []string, string, bool) {
 	if runtime.GOOS != "windows" {
-		return "", nil, false
+		return "", nil, "", false
 	}
 	executable = unquoteWindowsExecutable(executable)
 	ext := strings.ToLower(filepath.Ext(executable))
 	if ext != ".cmd" && ext != ".bat" {
-		return "", nil, false
+		return "", nil, "", false
 	}
 	parts := make([]string, 0, len(args)+2)
 	parts = append(parts, "call", windowsCmdQuote(executable))
 	for _, arg := range args {
 		parts = append(parts, windowsCmdQuote(arg))
 	}
-	shellArgs := []string{"/D", "/C", strings.Join(parts, " ")}
-	return "cmd.exe", shellArgs, true
+	command := strings.Join(parts, " ")
+	shellArgs := []string{"/D", "/C", command}
+	shellCmdLine := `cmd.exe /D /C ` + command
+	return "cmd.exe", shellArgs, shellCmdLine, true
 }
 
 func windowsCmdQuote(value string) string {

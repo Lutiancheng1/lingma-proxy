@@ -53,6 +53,11 @@ type MCPJSONFile struct {
 type FeishuBridgeSkillImportResult = feishu.BridgeSkillImportResult
 type FeishuBridgeSkill = feishu.BridgeSkill
 
+type FeishuBridgeCleanupOptions struct {
+	IncludeImportedSkills bool `json:"includeImportedSkills"`
+	IncludeMCPConfig      bool `json:"includeMcpConfig"`
+}
+
 func loadDesktopConfig() (service.Config, feishu.Config) {
 	cfg := defaultConfig()
 	bridgeCfg := feishu.DefaultConfig()
@@ -376,12 +381,12 @@ func (a *App) RefreshFeishuBridgeStatus() feishu.Status {
 	if a.bridge == nil {
 		manager := feishu.NewManager(feishu.ManagerOptions{})
 		manager.SetConfig(a.GetFeishuBridgeConfig())
-		status := manager.Probe(context.Background())
+		status := manager.RefreshProbe(context.Background())
 		a.logFeishuProbeStatus(status)
 		return status
 	}
 	a.bridge.SetConfig(a.GetFeishuBridgeConfig())
-	status := a.bridge.Probe(context.Background())
+	status := a.bridge.RefreshProbe(context.Background())
 	a.logFeishuProbeStatus(status)
 	return status
 }
@@ -426,6 +431,63 @@ func (a *App) ReinstallFeishuSkills() error {
 		return fmt.Errorf("feishu bridge manager not initialized")
 	}
 	return a.bridge.ReinstallSkills(context.Background())
+}
+
+func (a *App) CleanupFeishuBridgeArtifacts(opts FeishuBridgeCleanupOptions) ([]string, error) {
+	if a.bridge == nil {
+		return nil, fmt.Errorf("feishu bridge manager not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	results, err := a.bridge.CleanupArtifacts(ctx, feishu.CleanupOptions{
+		IncludeImportedSkills: opts.IncludeImportedSkills,
+	})
+	if opts.IncludeMCPConfig {
+		if mcpResults, mcpErr := a.cleanupFeishuBridgeMCPConfig(); mcpErr != nil {
+			if err != nil {
+				err = fmt.Errorf("%v; %w", err, mcpErr)
+			} else {
+				err = mcpErr
+			}
+		} else {
+			results = append(results, mcpResults...)
+		}
+	}
+	if err == nil {
+		a.emitLogWithSource("feishu-bridge", "info", "Feishu Bridge CLI/Skills/授权信息已清理")
+	}
+	return results, err
+}
+
+func (a *App) cleanupFeishuBridgeMCPConfig() ([]string, error) {
+	path, err := customMCPConfigFilePath()
+	if err != nil {
+		return nil, err
+	}
+	removed := false
+	if err := os.Remove(path); err == nil {
+		removed = true
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("清理自定义 MCP JSON 失败：%w", err)
+	}
+
+	a.mu.Lock()
+	a.bridgeCfg.MCPEnabled = false
+	a.bridgeCfg.MCPServers = nil
+	bridgeCfg := a.bridgeCfg
+	proxyCfg := a.cfg
+	if a.bridge != nil {
+		a.bridge.SetConfig(bridgeCfg)
+	}
+	a.mu.Unlock()
+	if err := a.saveDesktopConfig(proxyCfg, bridgeCfg); err != nil {
+		return nil, err
+	}
+	feishu.SetCustomMCPConfigPath(path)
+	if removed {
+		return []string{"已清理自定义 MCP JSON，并关闭 MCP"}, nil
+	}
+	return []string{"未发现自定义 MCP JSON，已关闭 MCP"}, nil
 }
 
 func (a *App) StartFeishuCLISetupNew() error {

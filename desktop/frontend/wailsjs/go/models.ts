@@ -530,6 +530,20 @@ export namespace main {
 	        this.requestCount = source["requestCount"];
 	    }
 	}
+	export class FeishuBridgeCleanupOptions {
+	    includeImportedSkills: boolean;
+	    includeMcpConfig: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new FeishuBridgeCleanupOptions(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.includeImportedSkills = source["includeImportedSkills"];
+	        this.includeMcpConfig = source["includeMcpConfig"];
+	    }
+	}
 	export class MCPJSONFile {
 	    path: string;
 	    content: string;
