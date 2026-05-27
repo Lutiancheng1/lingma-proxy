@@ -85,6 +85,7 @@ type RequestRecord struct {
 }
 
 type AppLog struct {
+	ID        string `json:"id,omitempty"`
 	CreatedAt string `json:"createdAt,omitempty"`
 	Time      string `json:"time"`
 	Source    string `json:"source,omitempty"`
@@ -416,7 +417,8 @@ func (a *App) emitLogWithSourceMeta(source string, level string, message string,
 	fingerprint := logFingerprint(source, level, message, sessionID, chatID, messageID)
 	now := time.Now()
 	entry := AppLog{
-		CreatedAt: now.Format(time.RFC3339),
+		ID:        uuid.NewString(),
+		CreatedAt: now.Format(time.RFC3339Nano),
 		Time:      now.Format("15:04:05"),
 		Source:    source,
 		SessionID: strings.TrimSpace(sessionID),
@@ -760,15 +762,15 @@ func (a *App) GetLogSummaries() []AppLog {
 	return out
 }
 
-func (a *App) GetLogDetail(createdAt string) (AppLog, error) {
-	target := strings.TrimSpace(createdAt)
+func (a *App) GetLogDetail(idOrCreatedAt string) (AppLog, error) {
+	target := strings.TrimSpace(idOrCreatedAt)
 	if target == "" {
-		return AppLog{}, fmt.Errorf("log createdAt is required")
+		return AppLog{}, fmt.Errorf("log id or createdAt is required")
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	for i := len(a.logs) - 1; i >= 0; i-- {
-		if a.logs[i].CreatedAt == target {
+		if a.logs[i].ID == target || a.logs[i].CreatedAt == target {
 			return a.logs[i], nil
 		}
 	}
@@ -1283,6 +1285,9 @@ func (a *App) loadAppState() error {
 		if backfillLogCreatedAt(state.Logs, info.ModTime()) {
 			migrated = true
 		}
+		if backfillLogIDs(state.Logs) {
+			migrated = true
+		}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1719,6 +1724,21 @@ func backfillLogCreatedAt(records []AppLog, anchor time.Time) bool {
 	}, func(i int, value string) {
 		records[i].CreatedAt = value
 	})
+}
+
+func backfillLogIDs(records []AppLog) bool {
+	if len(records) == 0 {
+		return false
+	}
+	mutated := false
+	for i := range records {
+		if strings.TrimSpace(records[i].ID) != "" {
+			continue
+		}
+		records[i].ID = uuid.NewString()
+		mutated = true
+	}
+	return mutated
 }
 
 func backfillCreatedAt(anchor time.Time, length int, getCreatedAt func(int) string, getTime func(int) string, setCreatedAt func(int, string)) bool {

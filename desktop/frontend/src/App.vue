@@ -72,6 +72,13 @@ function addLog(level, message, source = 'app') {
   pushLogEntry({ time, createdAt: now.toISOString(), level, source, message })
 }
 
+function normalizeLogMessageKey(message) {
+  return String(message || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\[[0-9:. -]+\]\s*/g, '')
+    .trim()
+}
+
 function logEntryKey(entry) {
   return [
     entry?.source || 'app',
@@ -79,7 +86,7 @@ function logEntryKey(entry) {
     entry?.sessionId || '',
     entry?.chatId || '',
     entry?.messageId || '',
-    entry?.message || ''
+    normalizeLogMessageKey(entry?.message)
   ].join('\u0000')
 }
 

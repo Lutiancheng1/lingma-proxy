@@ -58,6 +58,8 @@ export namespace feishu {
 	    enabled: boolean;
 	    error?: string;
 	    scripts?: string[];
+	    allowedTools?: string[];
+	    disableModelInvocation?: boolean;
 	    createdAt?: string;
 	    updatedAt?: string;
 
@@ -78,6 +80,8 @@ export namespace feishu {
 	        this.enabled = source["enabled"];
 	        this.error = source["error"];
 	        this.scripts = source["scripts"];
+	        this.allowedTools = source["allowedTools"];
+	        this.disableModelInvocation = source["disableModelInvocation"];
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	    }
@@ -397,6 +401,7 @@ export namespace feishu {
 export namespace main {
 
 	export class AppLog {
+	    id?: string;
 	    createdAt?: string;
 	    time: string;
 	    source?: string;
@@ -412,6 +417,7 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.createdAt = source["createdAt"];
 	        this.time = source["time"];
 	        this.source = source["source"];

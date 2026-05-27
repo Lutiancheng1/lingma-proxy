@@ -43,7 +43,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_cli_exec",
-				"description": "通用飞书 CLI 执行入口。适用于当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；已知飞书业务域命令如果未显式指定 --as，则会自动追加 --as user；auth、--help/-h 和未知根命令不会追加 --as。\n\n强制规则：\n- 如果准备使用某个业务域但不确定命令/参数，先调用 lark_skill_view 阅读对应官方 Skill（如 lark-sheets、lark-doc、lark-drive），再执行本工具；不要凭经验猜 Sheet1/0/1、docs/file/list 等命令\n- 授权不要通过本工具执行 auth login；遇到 need_user_authorization 时 Bridge 会自动发起登录并返回授权链接\n- 查询当前身份优先用 argv：[\"auth\", \"status\"]；查看已登录用户用 argv：[\"auth\", \"list\"]\n- lark-cli 的子命令分两类：原生子命令（如 drive file list）和 skill 快捷命令（带 + 前缀，如 im +chat-list、im +messages-send）\n- IM 相关操作必须使用 + 前缀快捷命令：im +chat-list、im +chat-create、im +messages-send、im +messages-search、im +messages-reply\n- 示例 argv：[\"im\", \"+chat-list\", \"--limit\", \"10\"]、[\"drive\", \"file\", \"list\"]、[\"calendar\", \"+agenda\"]",
+				"description": "通用飞书 CLI 执行入口。适用于当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；已知飞书业务域命令如果未显式指定 --as，则会自动追加 --as user；auth、--help/-h 和未知根命令不会追加 --as。\n\n强制规则：\n- 如果准备使用某个业务域但不确定命令/参数，先调用 lark_skill_view 阅读对应官方 Skill（如 lark-sheets、lark-doc、lark-drive），再执行本工具；不要凭经验猜 Sheet1/0/1、docs/file/list 等命令\n- 本工具返回 Usage/unknown flag/invalid value 后，下一步必须先查 lark_skill_view、--help 或 schema，不能原样重复或换相似命令盲试\n- 授权不要通过本工具执行 auth login；遇到 need_user_authorization 时 Bridge 会自动发起登录并返回授权链接\n- 查询当前身份优先用 argv：[\"auth\", \"status\"]；查看已登录用户用 argv：[\"auth\", \"list\"]\n- 设置文档互联网公开权限使用 drive permission.public get/patch；不要使用 drive +apply-permission，它只申请 view/edit 权限\n- lark-cli 的子命令分两类：原生子命令（如 drive file list）和 skill 快捷命令（带 + 前缀，如 im +chat-list、im +messages-send）\n- IM 相关操作必须使用 + 前缀快捷命令：im +chat-list、im +chat-create、im +messages-send、im +messages-search、im +messages-reply\n- 示例 argv：[\"im\", \"+chat-list\", \"--limit\", \"10\"]、[\"drive\", \"permission.public\", \"get\", \"--params\", \"{...}\"]、[\"calendar\", \"+agenda\"]",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -572,7 +572,7 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	if result == "" && err == nil {
 		result = "[no output]"
 	}
-	if len(result) > 4000 {
+	if len(result) > 4000 && !isDriveSearchSummary(result) {
 		result = result[:4000] + "\n... (truncated; do not infer unseen content)"
 	}
 	if ctx.Err() == context.DeadlineExceeded {
@@ -580,6 +580,7 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && result != "" {
+			result = appendLarkCLICorrection(cmdArgs, result)
 			return ToolExecutionResult{
 				Output:        fmt.Sprintf("[error] %s (exit=%d)", result, exitErr.ExitCode()),
 				MissingScopes: perm.Scopes,
@@ -601,6 +602,64 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	return ToolExecutionResult{Output: result}
 }
 
+func appendLarkCLICorrection(cmdArgs []string, result string) string {
+	if len(cmdArgs) < 2 || cmdArgs[0] != "lark-cli" {
+		return result
+	}
+	argv := cmdArgs[1:]
+	lower := strings.ToLower(result)
+	hints := []string{}
+	if len(argv) >= 2 && argv[0] == "drive" && argv[1] == "file" && strings.Contains(lower, "available commands") {
+		hints = append(hints, "纠偏：云盘搜索/列文件优先先调用 lark_skill_view {\"name\":\"lark-drive\"}，再使用 drive +search；不要继续尝试 drive file list。")
+	}
+	if len(argv) >= 2 && argv[0] == "drive" && argv[1] == "+search" && containsArg(argv, "--limit") {
+		hints = append(hints, "纠偏：drive +search 不支持 --limit；需要更多结果时使用返回的 page_token 继续分页。类型过滤使用 --doc-types。")
+	}
+	if len(argv) >= 2 && argv[0] == "drive" && argv[1] == "+apply-permission" {
+		if strings.Contains(lower, "invalid value \"public\"") || strings.Contains(lower, "pointless authorized request") || strings.Contains(lower, "permission-apply") {
+			hints = append(hints, "纠偏：drive +apply-permission 只是向 owner 申请 view/edit 权限，不能设置“互联网所有人可见”。公开可阅读必须使用 drive permission.public patch：先 drive +inspect 确认 token/type，再 permission.public get 查看当前设置，最后 permission.public patch --params {\"token\":\"...\",\"type\":\"docx\"} --data {\"external_access\":true,\"link_share_entity\":\"anyone_readable\"} --yes，并再次 get 验证。")
+		}
+	}
+	if len(argv) >= 3 && argv[0] == "drive" && argv[1] == "permission.public" && argv[2] == "patch" {
+		switch {
+		case strings.Contains(result, "91009"):
+			hints = append(hints, "纠偏：91009 表示对外分享被租户安全策略管控，无法通过 API 或当前用户直接开启；应明确告知用户需要联系租户管理员调整组织级对外分享策略。")
+		case strings.Contains(result, "91010"):
+			hints = append(hints, "纠偏：91010 表示当前文档尚未打开对外分享；应提示用户先在文档权限设置中打开对外分享，再重试 permission.public patch。")
+		case strings.Contains(result, "91011") || strings.Contains(result, "91012"):
+			hints = append(hints, "纠偏：该错误表示对外分享或权限设置被文档密级策略拦截；应给出目标文档 URL，并提示用户在文档内发起密级豁免或降级后再重试。")
+		}
+	}
+	if len(argv) >= 2 && argv[0] == "drive" && (argv[1] == "permission" || argv[1] == "file") && strings.Contains(strings.Join(argv, " "), "permission") && strings.Contains(lower, "available commands") {
+		hints = append(hints, "纠偏：设置文档公开权限的真实命令组是 drive permission.public get/patch，不是 drive permission set 或 drive file permission set。")
+	}
+	if len(argv) >= 1 && argv[0] == "auth" && containsArg(argv, "--as") {
+		hints = append(hints, "纠偏：auth/help/version/config 类命令不要添加 --as；查本人身份优先使用 auth list。")
+	}
+	if len(argv) >= 2 && argv[0] == "sheets" && strings.Contains(lower, "usage:") {
+		hints = append(hints, "纠偏：电子表格任务先调用 lark_skill_view {\"name\":\"lark-sheets\"}；表格链接先用 lark_sheets_info 得到 sheet_id，再用 lark_sheets_read 读取明确范围，不要猜 Sheet1/0/1。")
+	}
+	if len(argv) >= 1 && (argv[0] == "docs" || argv[0] == "docx") && strings.Contains(lower, "--content is required") {
+		hints = append(hints, "纠偏：创建文档必须带 content/markdown；不要只传 title。")
+	}
+	if len(hints) == 0 && (strings.Contains(lower, "usage:") || strings.Contains(lower, "available commands") || strings.Contains(lower, "unknown flag")) {
+		hints = append(hints, "纠偏：不要原样重复失败命令；先调用对应 lark_skill_view 或 --help 确认真命令/参数后再重试。")
+	}
+	if len(hints) == 0 {
+		return result
+	}
+	return strings.TrimSpace(result) + "\n\n" + strings.Join(hints, "\n") + "\n下一步要求：不要原样重复失败命令；按上面的纠偏先查 Skill/help/schema 或执行指定验证命令。"
+}
+
+func containsArg(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func executeToolContextWithRuntime(parent context.Context, cfg Config, runtime *MCPRuntime, toolName string, args map[string]any) ToolExecutionResult {
 	if runtime != nil && runtime.IsMCPFunction(toolName) {
 		if !cfg.MCPEnabled {
@@ -612,14 +671,14 @@ func executeToolContextWithRuntime(parent context.Context, cfg Config, runtime *
 		if err != nil {
 			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 		}
-		result = strings.TrimSpace(result)
-		if result == "" {
-			result = "[no output]"
+		text := strings.TrimSpace(result.Text)
+		if text == "" {
+			text = "[no output]"
 		}
-		if len(result) > 4000 {
-			result = result[:4000] + "\n... (truncated; do not infer unseen content)"
+		if len(text) > 4000 {
+			text = text[:4000] + "\n... (truncated; do not infer unseen content)"
 		}
-		return ToolExecutionResult{Output: result}
+		return ToolExecutionResult{Output: text, IsError: result.IsError}
 	}
 	return executeToolContextWithConfig(parent, cfg, toolName, args)
 }
@@ -711,6 +770,14 @@ func summarizeDriveSearchResult(result string) string {
 		return ""
 	}
 	return string(text)
+}
+
+func isDriveSearchSummary(result string) bool {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(result)), &payload); err != nil {
+		return false
+	}
+	return strings.TrimSpace(fmt.Sprint(payload["kind"])) == "drive_search"
 }
 
 func summarizeChatListResult(result string) string {

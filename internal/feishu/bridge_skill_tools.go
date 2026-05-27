@@ -220,11 +220,13 @@ func renderSkillViewOutput(skill BridgeSkill, body string) string {
 		body = "[empty SKILL.md]"
 	}
 	return fmt.Sprintf(
-		"Skill: %s\nID: %s\nPath: %s\nScripts: %s\n\n结构化摘要：\n- Base URL: %s\n- 推荐端点/路径: %s\n- 必须请求头: %s\n- 执行约束: 后续 skill_http_request 的 URL 必须来自本 SKILL.md；不要自造域名、路径或把站点域名改成 API 子域。\n\nSKILL.md：\n%s",
+		"Skill: %s\nID: %s\nPath: %s\nScripts: %s\nAllowed tools: %s\nDisable model invocation: %t\n\n结构化摘要：\n- Base URL: %s\n- 推荐端点/路径: %s\n- 必须请求头: %s\n- 执行约束: 后续 skill_http_request 的 URL 必须来自本 SKILL.md；不要自造域名、路径或把站点域名改成 API 子域。执行脚本前必须确认 scripts 列表中实际存在该脚本。\n\nSKILL.md：\n%s",
 		skill.Name,
 		skill.ID,
 		skill.Path,
 		scripts,
+		joinOrNone(skill.AllowedTools),
+		skill.DisableModelInvocation,
 		joinOrNone(baseURLs),
 		joinOrNone(endpoints),
 		requiredHeaders,

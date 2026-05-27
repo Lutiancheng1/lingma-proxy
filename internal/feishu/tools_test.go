@@ -114,6 +114,29 @@ func TestDocsCreateRequiresMarkdown(t *testing.T) {
 	}
 }
 
+func TestAppendLarkCLICorrectionForKnownFailures(t *testing.T) {
+	got := appendLarkCLICorrection([]string{"lark-cli", "drive", "+search", "--limit", "100"}, "Usage: lark-cli drive +search")
+	if !strings.Contains(got, "不支持 --limit") || !strings.Contains(got, "page_token") {
+		t.Fatalf("missing drive correction: %s", got)
+	}
+	got = appendLarkCLICorrection([]string{"lark-cli", "auth", "status", "--as", "user"}, "unknown flag: --as")
+	if !strings.Contains(got, "auth/help/version/config") || !strings.Contains(got, "auth list") {
+		t.Fatalf("missing auth correction: %s", got)
+	}
+	got = appendLarkCLICorrection([]string{"lark-cli", "drive", "+apply-permission", "--perm", "public"}, `invalid value "public" for --perm, allowed: view, edit`)
+	if !strings.Contains(got, "不能设置“互联网所有人可见”") || !strings.Contains(got, "permission.public patch") || !strings.Contains(got, "anyone_readable") || !strings.Contains(got, "下一步要求") {
+		t.Fatalf("missing public permission correction: %s", got)
+	}
+	got = appendLarkCLICorrection([]string{"lark-cli", "drive", "permission", "set"}, "Usage: lark-cli drive [flags]\nAvailable Commands:")
+	if !strings.Contains(got, "permission.public get/patch") {
+		t.Fatalf("missing permission command correction: %s", got)
+	}
+	got = appendLarkCLICorrection([]string{"lark-cli", "drive", "permission.public", "patch"}, `{"code":91011,"msg":"blocked"}`)
+	if !strings.Contains(got, "密级策略") || !strings.Contains(got, "目标文档 URL") {
+		t.Fatalf("missing permission policy correction: %s", got)
+	}
+}
+
 func TestDecodeCommandOutputGBK(t *testing.T) {
 	gbk := []byte{0xc3, 0xfc, 0xc1, 0xee, 0xcc, 0xab, 0xb3, 0xa4}
 	if got := decodeCommandOutput(gbk); got != "命令太长" {
@@ -178,6 +201,36 @@ func TestNormalizeToolOutputSummarizesDriveSearchWithRealURLs(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("normalized drive search missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestDriveSearchSummaryBypassesGenericTruncation(t *testing.T) {
+	items := make([]string, 0, 25)
+	for i := 0; i < 25; i++ {
+		items = append(items, `{
+        "entity_type": "DOC",
+        "title_highlighted": "文档 `+string(rune('A'+i))+`",
+        "result_meta": {
+          "doc_types": "DOCX",
+          "owner_name": "卢天成",
+          "token": "doc-token-`+string(rune('A'+i))+`",
+          "url": "https://my.feishu.cn/docx/doc-token-`+string(rune('A'+i))+`"
+        }
+      }`)
+	}
+	raw := `{"ok":true,"identity":"user","data":{"has_more":false,"total":25,"results":[` + strings.Join(items, ",") + `]}}`
+	normalized := normalizeToolOutput(raw)
+	if len(normalized) <= 4000 {
+		t.Fatalf("test fixture should produce a long normalized summary, got %d", len(normalized))
+	}
+	if !isDriveSearchSummary(normalized) {
+		t.Fatal("normalized drive search should be recognized for truncation bypass")
+	}
+	if strings.Contains(normalized, "truncated") {
+		t.Fatalf("drive search summaries must not be generically truncated:\n%s", normalized)
+	}
+	if !strings.Contains(normalized, "doc-token-Y") {
+		t.Fatalf("last real URL should remain visible to the model:\n%s", normalized)
 	}
 }
 

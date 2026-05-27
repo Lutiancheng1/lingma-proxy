@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased (target: v1.6.6)
+## Unreleased (target: v1.6.7)
+
+## v1.6.7 - 2026-05-27
+
+- Feishu Bridge branch only; no GitHub Release assets are published from this branch.
+- Hardened Feishu Bridge card delivery with serialized CardKit updates, retry/fallback handling, long-reply continuation behavior, and safer final-state updates so replies are less likely to be lost or duplicated.
+- Improved Feishu Bridge context handling with reset boundaries, safer history backfill, context-budget tests, and prompt-too-long recovery paths.
+- Improved MCP support with paginated `tools/list`, `tools/call` error recognition, tool-cache refresh handling, and tests for protocol edge cases.
+- Strengthened Skill support with structured skill summaries, safer HTTP sanity checks, URL guidance, zip/folder import hardening, and clearer script execution behavior.
+- Added Feishu CLI guidance and correction hints for common drive/sheets/docs/auth mistakes, reducing repeated invalid command attempts from weaker models.
+- Added complete desktop log detail and range-copy support for Feishu logs, preserving full Session ID / Chat ID fields and full backend log messages for feedback collection.
+- Fixed Logs page layout and dark-mode polish: long messages stay inside the table, clear-selection stays on one line, detail timestamps are formatted, and Feishu Bridge setting buttons inherit dark theme colors.
+- 仅 Feishu Bridge 分支使用；本分支不发布 GitHub Release assets。
+- 加固飞书 Bridge 卡片投递：CardKit 更新串行化、失败重试 / 兜底、长回复续卡、最终状态更新更稳，降低回复丢失或重复补发概率。
+- 优化上下文管理：加入 reset boundary、回填历史受边界约束、补充上下文预算测试，并增加 prompt 过长后的恢复路径。
+- 优化 MCP 支持：`tools/list` 分页、`tools/call` 错误识别、工具缓存刷新和协议边界测试补齐。
+- 增强 Skill 支持：结构化 skill 摘要、HTTP 响应 sanity check、URL 使用约束、zip / 文件夹导入加固，以及脚本执行行为说明更清晰。
+- 增加飞书 CLI 常见 drive / sheets / docs / auth 场景提示和纠偏，减少弱模型连续乱试无效命令。
+- 飞书日志页新增完整详情和区间复制，保留完整 Session ID / Chat ID 与后端完整日志，方便反馈排障。
+- 修复日志页布局和暗色模式细节：长消息不再撑出表格，“清除选择”不换行，详情时间格式化，Bridge 设置按钮适配夜间模式。
 
 ## v1.6.6 - 2026-05-25
 

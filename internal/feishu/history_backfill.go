@@ -13,7 +13,7 @@ const (
 	feishuHistoryBackfillLimit   = 12
 )
 
-func (m *Manager) fetchFeishuConversationBackfill(ctx context.Context, chatID string, currentMessageID string, meta LogMeta) string {
+func (m *Manager) fetchFeishuConversationBackfill(ctx context.Context, chatID string, currentMessageID string, resetAt time.Time, resetMessageID string, meta LogMeta) string {
 	chatID = strings.TrimSpace(chatID)
 	if chatID == "" {
 		return ""
@@ -36,7 +36,7 @@ func (m *Manager) fetchFeishuConversationBackfill(ctx context.Context, chatID st
 		m.logf("info", "Feishu bridge 历史消息回填不可用，跳过："+summarizeText(decodeCommandOutput(output), 160), meta)
 		return ""
 	}
-	text := renderFeishuHistoryBackfill(decodeCommandOutput(output), currentMessageID)
+	text := renderFeishuHistoryBackfill(decodeCommandOutput(output), currentMessageID, resetAt, resetMessageID)
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
@@ -44,11 +44,14 @@ func (m *Manager) fetchFeishuConversationBackfill(ctx context.Context, chatID st
 	return text
 }
 
-func renderFeishuHistoryBackfill(output string, currentMessageID string) string {
+func renderFeishuHistoryBackfill(output string, currentMessageID string, resetAt time.Time, resetMessageID string) string {
 	items := extractFeishuHistoryMessages(output)
 	if len(items) == 0 {
 		trimmed := strings.TrimSpace(output)
 		if trimmed == "" {
+			return ""
+		}
+		if !resetAt.IsZero() {
 			return ""
 		}
 		return "飞书历史回填（来自 lark-cli 最近消息，解析失败，仅供参考）：\n" + summarizeText(trimmed, 2200)
@@ -64,6 +67,12 @@ func renderFeishuHistoryBackfill(output string, currentMessageID string) string 
 		}
 		messageID := firstMapString(msg, "message_id", "messageId", "id")
 		if messageID != "" && messageID == currentMessageID {
+			continue
+		}
+		if messageID != "" && messageID == strings.TrimSpace(resetMessageID) {
+			continue
+		}
+		if !historyMessageAfterReset(msg, resetAt) {
 			continue
 		}
 		sender := senderDisplayName(msg)
@@ -86,6 +95,58 @@ func renderFeishuHistoryBackfill(output string, currentMessageID string) string 
 		return ""
 	}
 	return truncatePreserveLines(strings.Join(lines, "\n"), 3200)
+}
+
+func historyMessageAfterReset(msg map[string]any, resetAt time.Time) bool {
+	if resetAt.IsZero() {
+		return true
+	}
+	created := firstMapString(msg, "create_time", "createTime", "created_at", "createdAt")
+	if created == "" {
+		return false
+	}
+	t, ok := parseFeishuHistoryTime(created)
+	if !ok {
+		return false
+	}
+	// Feishu CLI history timestamps are often second-precision while ResetAt is
+	// recorded with sub-second precision. Compare against the second boundary so
+	// a message sent immediately after /reset in the same second is not dropped.
+	return !t.Before(resetAt.Truncate(time.Second))
+}
+
+func parseFeishuHistoryTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	if n, err := parseFeishuHistoryUnix(value); err == nil {
+		switch {
+		case n > 1_000_000_000_000_000:
+			return time.Unix(0, n), true
+		case n > 1_000_000_000_000:
+			return time.UnixMilli(n), true
+		default:
+			return time.Unix(n, 0), true
+		}
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05"} {
+		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func parseFeishuHistoryUnix(value string) (int64, error) {
+	for _, r := range strings.TrimSpace(value) {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("not a unix timestamp")
+		}
+	}
+	var n int64
+	_, err := fmt.Sscan(value, &n)
+	return n, err
 }
 
 func extractFeishuHistoryMessages(output string) []any {

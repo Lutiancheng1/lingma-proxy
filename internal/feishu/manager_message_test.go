@@ -709,7 +709,7 @@ func mustReadFileEventually(t *testing.T, path string) []byte {
 
 func mustReadFileContainingEventually(t *testing.T, path string, needle string) []byte {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	var last []byte
 	var lastErr error
 	for {

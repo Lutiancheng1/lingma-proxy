@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderFinalCardV2UsesCollapsedToolPanels(t *testing.T) {
@@ -149,8 +150,11 @@ func TestCompactFinalCardStateKeepsCollapsedToolSummary(t *testing.T) {
 	if strings.Contains(state.Reply, "卡片中保留摘要") {
 		t.Fatalf("compact reply should not duplicate compact hint: %q", state.Reply)
 	}
-	if !strings.Contains(state.Hint, "卡片中保留摘要") {
-		t.Fatalf("compact hint missing compact message: %q", state.Hint)
+	if strings.Contains(state.Hint, "卡片中保留摘要") || strings.Contains(state.Hint, "完整回复较长") {
+		t.Fatalf("compact hint should not claim summary delivery: %q", state.Hint)
+	}
+	if !strings.Contains(state.Hint, "平台限制") {
+		t.Fatalf("compact hint missing platform limit message: %q", state.Hint)
 	}
 	if len([]rune(state.Reply)) > compactFinalReplyLimit+80 {
 		t.Fatalf("compact reply too long: %d runes", len([]rune(state.Reply)))
@@ -184,7 +188,7 @@ func TestSplitFinalCardStatesKeepsLongReplyComplete(t *testing.T) {
 			t.Fatal(renderErr)
 		}
 		if shouldUseCompactFinalDelivery(cardJSON, part) {
-			t.Fatalf("part %d still exceeds final card budget: %d", i+1, len([]rune(cardJSON)))
+			t.Fatalf("part %d still exceeds final card budget: %d", i+1, len([]byte(cardJSON)))
 		}
 		joined.WriteString(strings.TrimSpace(part.Reply))
 	}
@@ -203,6 +207,27 @@ func TestShouldUseCompactFinalDeliveryForLargeCardJSON(t *testing.T) {
 	cardJSON := strings.Repeat("x", finalCardJSONSoftLimit+1)
 	if !shouldUseCompactFinalDelivery(cardJSON, cardState{Reply: "短回复"}) {
 		t.Fatal("oversized final card JSON should use compact delivery")
+	}
+}
+
+func TestShouldUseCompactFinalDeliveryUsesByteBudget(t *testing.T) {
+	cardJSON := strings.Repeat("你", finalCardJSONSoftLimit/2)
+	if !shouldUseCompactFinalDelivery(cardJSON, cardState{Reply: "短回复"}) {
+		t.Fatal("multibyte card JSON should be checked by bytes, not runes")
+	}
+}
+
+func TestFinalCardOperationTimeoutScalesForLongReplies(t *testing.T) {
+	short := finalCardOperationTimeout(cardState{Reply: "短回复"})
+	long := finalCardOperationTimeout(cardState{Reply: strings.Repeat("长回复", 4000)})
+	if short != 42*time.Second {
+		t.Fatalf("short final card timeout = %s", short)
+	}
+	if long <= short {
+		t.Fatalf("long final card timeout should grow, short=%s long=%s", short, long)
+	}
+	if long > 3*time.Minute {
+		t.Fatalf("long final card timeout should be capped, got %s", long)
 	}
 }
 

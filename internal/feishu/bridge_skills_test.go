@@ -48,6 +48,43 @@ func TestBridgeSkillImportFolder(t *testing.T) {
 	}
 }
 
+func TestBridgeSkillYAMLFrontmatterParsesListsAndBooleans(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "yaml-skill")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	body := `---
+name: yaml-skill
+description: |
+  Multi-line description
+version: 2.0.0
+when_to_use: |
+  Use for YAML frontmatter
+allowed-tools:
+  - skill_http_request
+  - skill_run_script
+disable-model-invocation: true
+---
+# YAML Skill
+`
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	skill, err := parseBridgeSkillDir(source, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skill.Name != "yaml-skill" || skill.Version != "2.0.0" {
+		t.Fatalf("basic frontmatter not parsed: %#v", skill)
+	}
+	if !strings.Contains(skill.Description, "Multi-line description") || !strings.Contains(skill.WhenToUse, "YAML frontmatter") {
+		t.Fatalf("multiline fields not parsed: %#v", skill)
+	}
+	if len(skill.AllowedTools) != 2 || skill.AllowedTools[0] != "skill_http_request" || !skill.DisableModelInvocation {
+		t.Fatalf("list/bool fields not parsed: %#v", skill)
+	}
+}
+
 func TestBridgeSkillZipRejectsTraversal(t *testing.T) {
 	zipPath := filepath.Join(t.TempDir(), "bad.zip")
 	file, err := os.Create(zipPath)

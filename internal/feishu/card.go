@@ -1023,7 +1023,7 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), finalCardOperationTimeout(stateCopy))
 	defer cancel()
 
 	if useCardKit && entityID == "" {
@@ -1183,10 +1183,25 @@ func (c *cardWriter) updateCompactFinalCard(ctx context.Context, entityID string
 }
 
 func shouldUseCompactFinalDelivery(cardJSON string, state cardState) bool {
-	if len([]rune(cardJSON)) > finalCardJSONSoftLimit {
+	if len([]byte(cardJSON)) > finalCardJSONSoftLimit {
 		return true
 	}
 	return false
+}
+
+func finalCardOperationTimeout(state cardState) time.Duration {
+	replyRunes := len([]rune(strings.TrimSpace(state.Reply)))
+	if replyRunes == 0 {
+		return 30 * time.Second
+	}
+	// Continuation cards are sent sequentially. Slow Windows/company networks
+	// can exceed a fixed 30s timeout, so reserve extra time for long answers.
+	estimatedParts := replyRunes/2500 + 1
+	timeout := 30*time.Second + time.Duration(estimatedParts)*12*time.Second
+	if timeout > 3*time.Minute {
+		return 3 * time.Minute
+	}
+	return timeout
 }
 
 func splitFinalCardStates(state cardState) ([]cardState, error) {
@@ -1294,7 +1309,7 @@ func streamingReplyContent(reply string) string {
 
 func compactFinalCardState(state cardState) cardState {
 	state.Steps = compactFinalSteps(state.Steps)
-	state.Hint = strings.TrimSpace(firstNonEmptyString(state.Hint, "完整回复较长，已在卡片中保留摘要。"))
+	state.Hint = strings.TrimSpace(firstNonEmptyString(state.Hint, "卡片更新遇到平台限制，Bridge 已保留可发送的最长内容；不会补写或编造未发送内容。"))
 	reply := strings.TrimSpace(state.Reply)
 	if reply != "" {
 		state.Reply = summarizeText(reply, compactFinalReplyLimit)

@@ -13,24 +13,28 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const maxSkillFileBytes = 512 * 1024
 
 type BridgeSkill struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Version     string   `json:"version,omitempty"`
-	WhenToUse   string   `json:"whenToUse,omitempty"`
-	Path        string   `json:"path"`
-	Source      string   `json:"source,omitempty"`
-	Hash        string   `json:"hash"`
-	Enabled     bool     `json:"enabled"`
-	Error       string   `json:"error,omitempty"`
-	Scripts     []string `json:"scripts,omitempty"`
-	CreatedAt   string   `json:"createdAt,omitempty"`
-	UpdatedAt   string   `json:"updatedAt,omitempty"`
+	ID                     string   `json:"id"`
+	Name                   string   `json:"name"`
+	Description            string   `json:"description,omitempty"`
+	Version                string   `json:"version,omitempty"`
+	WhenToUse              string   `json:"whenToUse,omitempty"`
+	Path                   string   `json:"path"`
+	Source                 string   `json:"source,omitempty"`
+	Hash                   string   `json:"hash"`
+	Enabled                bool     `json:"enabled"`
+	Error                  string   `json:"error,omitempty"`
+	Scripts                []string `json:"scripts,omitempty"`
+	AllowedTools           []string `json:"allowedTools,omitempty"`
+	DisableModelInvocation bool     `json:"disableModelInvocation,omitempty"`
+	CreatedAt              string   `json:"createdAt,omitempty"`
+	UpdatedAt              string   `json:"updatedAt,omitempty"`
 }
 
 type BridgeSkillImportResult struct {
@@ -307,16 +311,18 @@ func parseBridgeSkillDir(dir string, source string) (BridgeSkill, error) {
 	hash := hashSkillDir(dir)
 	id := normalizedSkillID(name, hash)
 	return BridgeSkill{
-		ID:          id,
-		Name:        name,
-		Description: desc,
-		Version:     strings.TrimSpace(frontmatter["version"]),
-		WhenToUse:   strings.TrimSpace(frontmatter["when_to_use"]),
-		Path:        dir,
-		Source:      source,
-		Hash:        hash,
-		Enabled:     true,
-		Scripts:     listSkillScripts(dir),
+		ID:                     id,
+		Name:                   name,
+		Description:            desc,
+		Version:                strings.TrimSpace(frontmatter["version"]),
+		WhenToUse:              strings.TrimSpace(firstNonEmptyString(frontmatter["when_to_use"], frontmatter["when-to-use"])),
+		Path:                   dir,
+		Source:                 source,
+		Hash:                   hash,
+		Enabled:                true,
+		Scripts:                listSkillScripts(dir),
+		AllowedTools:           splitSkillListValue(firstNonEmptyString(frontmatter["allowed-tools"], frontmatter["allowed_tools"])),
+		DisableModelInvocation: parseSkillBool(firstNonEmptyString(frontmatter["disable-model-invocation"], frontmatter["disable_model_invocation"])),
 	}, nil
 }
 
@@ -328,6 +334,17 @@ func parseSkillFrontmatter(text string) (map[string]string, string) {
 	parts := strings.SplitN(text, "---", 3)
 	if len(parts) != 3 {
 		return out, text
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(parts[1]), &parsed); err == nil {
+		for key, value := range parsed {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			out[key] = skillFrontmatterValue(value)
+		}
+		return out, parts[2]
 	}
 	for _, raw := range strings.Split(parts[1], "\n") {
 		line := strings.TrimSpace(raw)
@@ -343,6 +360,52 @@ func parseSkillFrontmatter(text string) (map[string]string, string) {
 		out[strings.TrimSpace(key)] = value
 	}
 	return out, parts[2]
+}
+
+func skillFrontmatterValue(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, ",")
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func splitSkillListValue(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == '\n'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func parseSkillBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "yes", "1", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func firstMarkdownParagraph(text string) string {

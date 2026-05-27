@@ -43,6 +43,9 @@ func TestBuildSystemPromptGuidesIdentityAndDriveQueries(t *testing.T) {
 		`["auth","list"]`,
 		"禁止用日历、任务、云盘等无关业务工具",
 		`lark_skill_view {"name":"lark-drive"}`,
+		"drive permission.public patch",
+		"anyone_readable",
+		"不要使用 drive +apply-permission",
 		"has_more/page_token",
 		"任务路由速查",
 		`lark_skill_view {"name":"lark-sheets"}`,
@@ -50,6 +53,9 @@ func TestBuildSystemPromptGuidesIdentityAndDriveQueries(t *testing.T) {
 		"unknown flag: --as",
 		"只能逐字复制工具结果里真实出现的 url/link 字段",
 		"drive +search 不支持 --limit",
+		"工具失败恢复协议",
+		"下一步只允许调用 lark_skill_view",
+		"drive +inspect 成功只说明文档存在",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q", want)

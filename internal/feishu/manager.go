@@ -32,6 +32,7 @@ const (
 	maxFeishuImageBytes              = 8 * 1024 * 1024
 	feishuImageDownloadTimeout       = 90 * time.Second
 	feishuVisionResponseTimeout      = 120 * time.Second
+	feishuCardOperationMinInterval   = 220 * time.Millisecond
 )
 
 var (
@@ -75,6 +76,8 @@ type conversationState struct {
 	UsageByModel      map[string]*conversationUsage
 	EstimatorScale    float64
 	LastBudget        ContextBudgetSnapshot
+	ResetAt           time.Time
+	ResetMessageID    string
 }
 
 type conversationUsage struct {
@@ -124,6 +127,8 @@ type ConversationSnapshot struct {
 	UsageByModel      map[string]*conversationUsage `json:"usage_by_model,omitempty"`
 	EstimatorScale    float64                       `json:"estimator_scale,omitempty"`
 	LastBudget        ContextBudgetSnapshot         `json:"last_budget,omitempty"`
+	ResetAt           string                        `json:"reset_at,omitempty"`
+	ResetMessageID    string                        `json:"reset_message_id,omitempty"`
 }
 
 func (u conversationUsage) MarshalJSON() ([]byte, error) {
@@ -154,6 +159,10 @@ func (s conversationState) toSnapshot() ConversationSnapshot {
 	if !s.LastCompactedAt.IsZero() {
 		lastCompacted = s.LastCompactedAt.Format(time.RFC3339)
 	}
+	resetAt := ""
+	if !s.ResetAt.IsZero() {
+		resetAt = s.ResetAt.Format(time.RFC3339)
+	}
 	return ConversationSnapshot{
 		History:           cloneMessages(s.History),
 		CompactBoundary:   s.CompactBoundary,
@@ -172,6 +181,8 @@ func (s conversationState) toSnapshot() ConversationSnapshot {
 		UsageByModel:      usageCopy,
 		EstimatorScale:    s.EstimatorScale,
 		LastBudget:        s.LastBudget,
+		ResetAt:           resetAt,
+		ResetMessageID:    strings.TrimSpace(s.ResetMessageID),
 	}
 }
 
@@ -200,6 +211,8 @@ type Manager struct {
 	// polls every ~2.5s; without serialization, a slow `npx skills ls` causes
 	// queued probes to pile up and saturate npm's cache lock.
 	refreshGuard sync.Mutex
+	cardOpsMu    sync.Mutex
+	lastCardOp   time.Time
 }
 
 func NewManager(opts ManagerOptions) *Manager {
@@ -1222,7 +1235,7 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 		})
 	}
 	if len(state.History) == 0 {
-		if backfill := m.fetchFeishuConversationBackfill(ctx, event.ChatID, event.MessageID, logMeta); strings.TrimSpace(backfill) != "" {
+		if backfill := m.fetchFeishuConversationBackfill(ctx, event.ChatID, event.MessageID, state.ResetAt, state.ResetMessageID, logMeta); strings.TrimSpace(backfill) != "" {
 			messages = append(messages, map[string]any{
 				"role":    "system",
 				"content": backfill,
@@ -1317,6 +1330,17 @@ conversation:
 				break
 			}
 			m.logf("info", "Feishu bridge 流式调用失败，回退非流式："+err.Error(), logMeta)
+			if plainVisionTurn {
+				visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
+				resp, err = callLLMPlain(visionCtx, proxyURL, model, requestMessages)
+				visionCancel()
+			} else {
+				resp, err = callLLMForConversation(ctx, proxyURL, model, requestMessages, forceToolUse, toolDefs)
+			}
+		}
+		if err != nil && isPromptTooLongError(err) {
+			m.logf("warn", "Feishu bridge 检测到 prompt 过长，自动压缩旧工具结果后重试："+err.Error(), logMeta)
+			requestMessages = forcePromptTooLongCompaction(messages, cfg.Context, budget)
 			if plainVisionTurn {
 				visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
 				resp, err = callLLMPlain(visionCtx, proxyURL, model, requestMessages)
@@ -1486,7 +1510,7 @@ conversation:
 					}
 				}
 			}
-			m.logf("info", fmt.Sprintf("Feishu bridge tool result: %s %s", tc.Function.Name, summarizeText(result.Output, 160)), logMeta)
+			m.logf("info", fmt.Sprintf("Feishu bridge tool result: %s %s", tc.Function.Name, strings.TrimSpace(result.Output)), logMeta)
 			card.UpdateLastStep(func(step *cardStep) {
 				step.Done = true
 				step.Body = step.Body + "\n结果：" + summarizeText(result.Output, 1200)
@@ -1712,6 +1736,8 @@ func (m *Manager) getConversationState(chatID string) conversationState {
 		UsageByModel:      state.UsageByModel,
 		EstimatorScale:    state.EstimatorScale,
 		LastBudget:        state.LastBudget,
+		ResetAt:           state.ResetAt,
+		ResetMessageID:    state.ResetMessageID,
 	}
 }
 
@@ -1994,7 +2020,10 @@ func (m *Manager) buildMultimodalConversationInput(ctx context.Context, event in
 		}
 		return conversationInput{Text: text, Content: text}
 	}
+	meta := LogMeta{ChatID: event.ChatID, MessageID: event.MessageID}
+	m.logf("info", fmt.Sprintf("Feishu bridge 图片消息已识别: count=%d keys=%s", len(imageKeys), strings.Join(imageKeys, ",")), meta)
 	if len(imageKeys) > maxFeishuImageAttachments {
+		m.logf("warn", fmt.Sprintf("Feishu bridge 图片数量超过上限: count=%d limit=%d，已截断", len(imageKeys), maxFeishuImageAttachments), meta)
 		imageKeys = imageKeys[:maxFeishuImageAttachments]
 	}
 	parts := make([]map[string]any, 0, len(imageKeys)+1)
@@ -2006,23 +2035,18 @@ func (m *Manager) buildMultimodalConversationInput(ctx context.Context, event in
 	for _, imageKey := range imageKeys {
 		dataURL, err := m.downloadFeishuImageDataURL(ctx, event.MessageID, imageKey)
 		if err != nil {
-			m.logf("warn", fmt.Sprintf("Feishu bridge 图片下载失败: key=%s err=%s", imageKey, err.Error()), LogMeta{
-				ChatID:    event.ChatID,
-				MessageID: event.MessageID,
-			})
+			m.logf("warn", fmt.Sprintf("Feishu bridge 图片下载失败: key=%s err=%s", imageKey, err.Error()), meta)
 			parts[0]["text"] = strings.TrimSpace(parts[0]["text"].(string) + fmt.Sprintf("\n\n[图片 %s 下载失败：%s]", imageKey, err.Error()))
 			continue
 		}
-		m.logf("info", fmt.Sprintf("Feishu bridge 图片下载成功: key=%s payload=%d chars", imageKey, len(dataURL)), LogMeta{
-			ChatID:    event.ChatID,
-			MessageID: event.MessageID,
-		})
+		m.logf("info", fmt.Sprintf("Feishu bridge 图片下载成功: key=%s payload=%d chars", imageKey, len(dataURL)), meta)
 		parts = append(parts, map[string]any{
 			"type": "image_url",
 			"image_url": map[string]any{
 				"url": dataURL,
 			},
 		})
+		m.logf("info", fmt.Sprintf("Feishu bridge 图片已加入视觉请求: key=%s", imageKey), meta)
 	}
 	if len(parts) == 1 {
 		return conversationInput{Text: parts[0]["text"].(string), Content: parts[0]["text"], HasImages: true}
@@ -2230,12 +2254,19 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 			"- /stop：停止当前正在处理的任务\n\n" +
 			"默认可以直接自然语言使用我；只有在你想手动管理上下文时再使用这些命令。", true
 	case "/reset", "/clear", "/new":
+		resetState := conversationState{
+			ResetAt:        time.Now(),
+			ResetMessageID: strings.TrimSpace(meta.MessageID),
+		}
 		m.mu.Lock()
-		delete(m.conversations, chatID)
+		m.conversations[chatID] = resetState
 		m.mu.Unlock()
 		if m.store != nil {
 			if err := m.store.ClearConversation(ctx, chatID); err != nil {
 				m.logf("warn", "Feishu bridge 清理持久化会话失败："+err.Error(), meta)
+			}
+			if err := m.store.SaveConversationSnapshot(ctx, chatID, resetState.toSnapshot()); err != nil {
+				m.logf("warn", "Feishu bridge 保存 reset 边界失败："+err.Error(), meta)
 			}
 		}
 		m.notifyConversationChanged()
@@ -2734,10 +2765,17 @@ func (m *Manager) commandContextText(chatID string) string {
 	if !state.LastCompactedAt.IsZero() {
 		lastCompact = state.LastCompactedAt.Format("2006-01-02 15:04:05")
 	}
-	return fmt.Sprintf("上下文状态：\n- 模型：%s\n- 估算占用：%d%%（约 %d / %d tokens）\n- 剩余额度：%d tokens\n- 工具结果占用：约 %d tokens\n- Skill 占用：约 %d tokens\n- 水位：%s\n- 下一步策略：%s\n- 摘要：%s（范围：%s）\n- 最近压缩：%s",
+	resetBoundary := "无"
+	if !state.ResetAt.IsZero() {
+		resetBoundary = state.ResetAt.Format("2006-01-02 15:04:05")
+		if strings.TrimSpace(state.ResetMessageID) != "" {
+			resetBoundary += "（message=" + trimmedID(state.ResetMessageID) + "）"
+		}
+	}
+	return fmt.Sprintf("上下文状态：\n- 模型：%s\n- 估算占用：%d%%（约 %d / %d tokens）\n- 剩余额度：%d tokens\n- 工具结果占用：约 %d tokens\n- Skill 占用：约 %d tokens\n- 水位：%s\n- 下一步策略：%s\n- 摘要：%s（范围：%s）\n- 最近压缩：%s\n- Reset 边界：%s",
 		budget.Model, budget.UsedPercent, budget.EstimatedTokens, budget.ContextWindow,
 		budget.RemainingTokens, budget.ToolResultTokens, budget.SkillTokens,
-		budget.Watermark, budget.NextAction, summaryState, fallbackText(state.SummaryRange, "未记录"), lastCompact)
+		budget.Watermark, budget.NextAction, summaryState, fallbackText(state.SummaryRange, "未记录"), lastCompact, resetBoundary)
 }
 
 func (m *Manager) commandSkillsText() string {
@@ -3205,6 +3243,8 @@ func (m *Manager) ConversationSnapshot() map[string]ConversationSnapshot {
 		next.History = history
 		next.CompactBoundary = boundary
 		next.Summary = summary
+		next.ResetAt = state.toSnapshot().ResetAt
+		next.ResetMessageID = strings.TrimSpace(state.ResetMessageID)
 		out[chatID] = next
 	}
 	return out
@@ -3244,6 +3284,10 @@ func (m *Manager) LoadConversationSnapshot(snapshot map[string]ConversationSnaps
 		if strings.TrimSpace(state.LastCompactedAt) != "" {
 			lastCompacted, _ = time.Parse(time.RFC3339, strings.TrimSpace(state.LastCompactedAt))
 		}
+		var resetAt time.Time
+		if strings.TrimSpace(state.ResetAt) != "" {
+			resetAt, _ = time.Parse(time.RFC3339, strings.TrimSpace(state.ResetAt))
+		}
 		m.conversations[chatID] = conversationState{
 			History:           history,
 			CompactBoundary:   boundary,
@@ -3262,6 +3306,8 @@ func (m *Manager) LoadConversationSnapshot(snapshot map[string]ConversationSnaps
 			UsageByModel:      usageCopy,
 			EstimatorScale:    state.EstimatorScale,
 			LastBudget:        state.LastBudget,
+			ResetAt:           resetAt,
+			ResetMessageID:    strings.TrimSpace(state.ResetMessageID),
 		}
 	}
 }
@@ -3393,6 +3439,26 @@ func isDeadlineError(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded")
 }
 
+func isPromptTooLongError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{"context length", "context_length", "maximum context", "prompt too long", "too many tokens", "tokens exceed"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func forcePromptTooLongCompaction(messages []map[string]any, cfg ContextConfig, budget ContextBudgetSnapshot) []map[string]any {
+	if budget.Watermark != "critical" && budget.Watermark != "compact" {
+		budget.Watermark = "critical"
+	}
+	return applyBudgetCompaction(messages, cfg, budget)
+}
+
 func firstJSONStringField(data []byte, field string) string {
 	var value any
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -3435,15 +3501,46 @@ func (m *Manager) replyToMessage(ctx context.Context, messageID string, reply st
 		if sendCtx == nil || sendCtx.Err() != nil {
 			sendCtx = context.Background()
 		}
-		cmdCtx, cancel := context.WithTimeout(sendCtx, 30*time.Second)
-		cmd := commandContextWithEnv(cmdCtx, "lark-cli", "im", "+messages-reply", "--as", "bot", "--message-id", messageID, "--markdown", part)
-		output, err := cmd.CombinedOutput()
-		cancel()
+		var output []byte
+		err := m.runFeishuCardOperation(sendCtx, "markdown reply", func(opCtx context.Context) error {
+			cmdCtx, cancel := context.WithTimeout(opCtx, 30*time.Second)
+			defer cancel()
+			cmd := commandContextWithEnv(cmdCtx, "lark-cli", "im", "+messages-reply", "--as", "bot", "--message-id", messageID, "--markdown", part)
+			var runErr error
+			output, runErr = cmd.CombinedOutput()
+			return runErr
+		})
 		if err != nil {
 			return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 		}
 	}
 	return nil
+}
+
+func (m *Manager) runFeishuCardOperation(ctx context.Context, label string, run func(context.Context) error) error {
+	if m == nil || run == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.cardOpsMu.Lock()
+	defer m.cardOpsMu.Unlock()
+	if !m.lastCardOp.IsZero() {
+		wait := feishuCardOperationMinInterval - time.Since(m.lastCardOp)
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	err := run(ctx)
+	m.lastCardOp = time.Now()
+	return err
 }
 
 func splitMarkdownReply(reply string, limit int) []string {
@@ -3503,13 +3600,18 @@ func (m *Manager) sendCardReply(ctx context.Context, rootMessageID string, cardJ
 	if rootMessageID == "" {
 		return "", fmt.Errorf("send card reply: empty root message id")
 	}
-	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "+messages-reply",
-		"--as", "bot",
-		"--message-id", rootMessageID,
-		"--msg-type", "interactive",
-		"--content", cardJSON,
-	)
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	err := m.runFeishuCardOperation(ctx, "legacy card reply", func(opCtx context.Context) error {
+		cmd := commandContextWithEnv(opCtx, "lark-cli", "im", "+messages-reply",
+			"--as", "bot",
+			"--message-id", rootMessageID,
+			"--msg-type", "interactive",
+			"--content", cardJSON,
+		)
+		var runErr error
+		output, runErr = cmd.CombinedOutput()
+		return runErr
+	})
 	if err != nil {
 		if id := strings.TrimSpace(firstJSONStringField(output, "message_id")); id != "" {
 			m.logf("warn", "Feishu bridge send card reply 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{MessageID: rootMessageID})
@@ -3540,12 +3642,17 @@ func (m *Manager) patchCardMessage(ctx context.Context, cardMessageID string, ca
 		return fmt.Errorf("patch card: marshal body: %w", err)
 	}
 	endpoint := "/open-apis/im/v1/messages/" + cardMessageID
-	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "PATCH", endpoint, "bot", body)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	err = m.runFeishuCardOperation(ctx, "legacy card patch", func(opCtx context.Context) error {
+		cmd, cleanup, err := larkAPICommandWithJSONData(opCtx, "PATCH", endpoint, "bot", body)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		var runErr error
+		output, runErr = cmd.CombinedOutput()
+		return runErr
+	})
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
@@ -3583,12 +3690,17 @@ func (m *Manager) createCardEntity(ctx context.Context, cardJSON string) (string
 	if err != nil {
 		return "", fmt.Errorf("marshal create card body: %w", err)
 	}
-	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "POST", "/open-apis/cardkit/v1/cards", "bot", body)
-	if err != nil {
-		return "", err
-	}
-	defer cleanup()
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	err = m.runFeishuCardOperation(ctx, "cardkit create card", func(opCtx context.Context) error {
+		cmd, cleanup, err := larkAPICommandWithJSONData(opCtx, "POST", "/open-apis/cardkit/v1/cards", "bot", body)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		var runErr error
+		output, runErr = cmd.CombinedOutput()
+		return runErr
+	})
 	if err != nil {
 		if id := strings.TrimSpace(firstJSONStringField(output, "card_id")); id != "" {
 			m.logf("warn", "Feishu bridge create card entity 进程异常但已返回 card_id，按成功处理："+err.Error())
@@ -3613,13 +3725,18 @@ func (m *Manager) sendCardEntityMessage(ctx context.Context, rootMessageID strin
 	if err != nil {
 		return "", fmt.Errorf("marshal card entity content: %w", err)
 	}
-	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "+messages-reply",
-		"--as", "bot",
-		"--message-id", rootMessageID,
-		"--msg-type", "interactive",
-		"--content", string(content),
-	)
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	err = m.runFeishuCardOperation(ctx, "cardkit send card message", func(opCtx context.Context) error {
+		cmd := commandContextWithEnv(opCtx, "lark-cli", "im", "+messages-reply",
+			"--as", "bot",
+			"--message-id", rootMessageID,
+			"--msg-type", "interactive",
+			"--content", string(content),
+		)
+		var runErr error
+		output, runErr = cmd.CombinedOutput()
+		return runErr
+	})
 	if err != nil {
 		if id := strings.TrimSpace(firstJSONStringField(output, "message_id")); id != "" {
 			m.logf("warn", "Feishu bridge send card entity message 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{MessageID: rootMessageID})
@@ -3646,12 +3763,17 @@ func (m *Manager) streamUpdateCardContent(ctx context.Context, cardEntityID stri
 		return fmt.Errorf("marshal stream update body: %w", err)
 	}
 	endpoint := fmt.Sprintf("/open-apis/cardkit/v1/cards/%s/elements/%s/content", cardEntityID, elementID)
-	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "PUT", endpoint, "bot", body)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	err = m.runFeishuCardOperation(ctx, "cardkit stream update", func(opCtx context.Context) error {
+		cmd, cleanup, err := larkAPICommandWithJSONData(opCtx, "PUT", endpoint, "bot", body)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		var runErr error
+		output, runErr = cmd.CombinedOutput()
+		return runErr
+	})
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
@@ -3672,12 +3794,17 @@ func (m *Manager) updateCardEntity(ctx context.Context, cardEntityID string, car
 		return fmt.Errorf("marshal update card body: %w", err)
 	}
 	endpoint := "/open-apis/cardkit/v1/cards/" + cardEntityID
-	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "PUT", endpoint, "bot", body)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	err = m.runFeishuCardOperation(ctx, "cardkit full update", func(opCtx context.Context) error {
+		cmd, cleanup, err := larkAPICommandWithJSONData(opCtx, "PUT", endpoint, "bot", body)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		var runErr error
+		output, runErr = cmd.CombinedOutput()
+		return runErr
+	})
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}
@@ -3705,12 +3832,17 @@ func (m *Manager) updateCardSettings(ctx context.Context, cardEntityID string, s
 		return fmt.Errorf("marshal update card settings body: %w", err)
 	}
 	endpoint := "/open-apis/cardkit/v1/cards/" + cardEntityID + "/settings"
-	cmd, cleanup, err := larkAPICommandWithJSONData(ctx, "PATCH", endpoint, "bot", body)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	err = m.runFeishuCardOperation(ctx, "cardkit settings update", func(opCtx context.Context) error {
+		cmd, cleanup, err := larkAPICommandWithJSONData(opCtx, "PATCH", endpoint, "bot", body)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		var runErr error
+		output, runErr = cmd.CombinedOutput()
+		return runErr
+	})
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
 	}

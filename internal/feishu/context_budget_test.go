@@ -48,3 +48,20 @@ func TestApplyBudgetCompactionRespectsWatermark(t *testing.T) {
 		t.Fatalf("compact watermark should compact older tool results, got %q", content)
 	}
 }
+
+func TestForcePromptTooLongCompactionForcesCriticalPath(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "system", "content": "rules"},
+		{"role": "tool", "content": strings.Repeat("old tool ", 80)},
+		{"role": "tool", "content": strings.Repeat("mid tool ", 80)},
+		{"role": "tool", "content": strings.Repeat("new tool ", 80)},
+		{"role": "user", "content": "继续"},
+	}
+	cfg := DefaultContextConfig()
+	cfg.ToolResultRetention = 1
+	compacted := forcePromptTooLongCompaction(messages, cfg, ContextBudgetSnapshot{Watermark: "ok"})
+	oldContent, _ := compacted[1]["content"].(string)
+	if !strings.Contains(oldContent, "old tool result compacted") {
+		t.Fatalf("prompt-too-long retry should force compaction, got %q", oldContent)
+	}
+}

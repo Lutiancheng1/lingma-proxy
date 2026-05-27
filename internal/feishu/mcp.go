@@ -73,15 +73,21 @@ type mcpRPCMessage struct {
 	} `json:"error,omitempty"`
 }
 
+type mcpToolCallResult struct {
+	Text    string
+	IsError bool
+}
+
 type mcpClient struct {
-	mu     sync.Mutex
-	cmd    string
-	args   []string
-	env    map[string]string
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	close  func()
-	nextID int64
+	mu           sync.Mutex
+	cmd          string
+	args         []string
+	env          map[string]string
+	stdin        io.WriteCloser
+	stdout       *bufio.Reader
+	close        func()
+	nextID       int64
+	toolsChanged atomic.Bool
 }
 
 func NewMCPRuntime() *MCPRuntime {
@@ -215,16 +221,16 @@ func (r *MCPRuntime) Statuses() []MCPServerStatus {
 	return cloneMCPStatuses(r.statuses)
 }
 
-func (r *MCPRuntime) CallTool(ctx context.Context, function string, arguments map[string]any) (string, error) {
+func (r *MCPRuntime) CallTool(ctx context.Context, function string, arguments map[string]any) (mcpToolCallResult, error) {
 	if r == nil {
-		return "", fmt.Errorf("mcp runtime not initialized")
+		return mcpToolCallResult{}, fmt.Errorf("mcp runtime not initialized")
 	}
 	r.mu.Lock()
 	tool, ok := r.tools[function]
 	session := r.sessions[tool.Server]
 	r.mu.Unlock()
 	if !ok || session == nil || session.client == nil {
-		return "", fmt.Errorf("mcp tool not found or unavailable: %s", function)
+		return mcpToolCallResult{}, fmt.Errorf("mcp tool not found or unavailable: %s", function)
 	}
 	return session.callTool(ctx, tool.Name, arguments)
 }
@@ -863,14 +869,14 @@ func executeMCPToolContext(parent context.Context, cfg Config, args map[string]a
 	if err != nil {
 		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 	}
-	result = strings.TrimSpace(result)
-	if result == "" {
-		result = "[no output]"
+	text := strings.TrimSpace(result.Text)
+	if text == "" {
+		text = "[no output]"
 	}
-	if len(result) > 4000 {
-		result = result[:4000] + "\n... (truncated; do not infer unseen content)"
+	if len(text) > 4000 {
+		text = text[:4000] + "\n... (truncated; do not infer unseen content)"
 	}
-	return ToolExecutionResult{Output: result}
+	return ToolExecutionResult{Output: text, IsError: result.IsError}
 }
 
 func listMCPTools(ctx context.Context, server MCPServerConfig) ([]mcpTool, error) {
@@ -908,51 +914,64 @@ func (s *mcpSession) listTools(ctx context.Context) ([]mcpTool, error) {
 	return s.client.listTools(ctx, s.server.Name)
 }
 
-func (s *mcpSession) callTool(ctx context.Context, toolName string, arguments map[string]any) (string, error) {
+func (s *mcpSession) callTool(ctx context.Context, toolName string, arguments map[string]any) (mcpToolCallResult, error) {
 	if s == nil || s.client == nil {
-		return "", fmt.Errorf("mcp session not connected")
+		return mcpToolCallResult{}, fmt.Errorf("mcp session not connected")
 	}
 	var result any
 	if err := s.client.request(ctx, "tools/call", map[string]any{
 		"name":      toolName,
 		"arguments": arguments,
 	}, &result); err != nil {
-		return "", err
+		return mcpToolCallResult{}, err
 	}
 	return stringifyMCPResult(result), nil
 }
 
 func (c *mcpClient) listTools(ctx context.Context, serverName string) ([]mcpTool, error) {
-	var parsed struct {
-		Tools []struct {
-			Name        string         `json:"name"`
-			Description string         `json:"description"`
-			InputSchema map[string]any `json:"inputSchema"`
-		} `json:"tools"`
-	}
-	if err := c.request(ctx, "tools/list", nil, &parsed); err != nil {
-		return nil, err
-	}
-	tools := make([]mcpTool, 0, len(parsed.Tools))
-	for _, item := range parsed.Tools {
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			continue
+	const maxPages = 20
+	var tools []mcpTool
+	cursor := ""
+	for page := 0; page < maxPages; page++ {
+		params := any(nil)
+		if cursor != "" {
+			params = map[string]any{"cursor": cursor}
 		}
-		tools = append(tools, mcpTool{
-			Server:      serverName,
-			Name:        name,
-			Description: strings.TrimSpace(item.Description),
-			InputSchema: item.InputSchema,
-		})
+		var parsed struct {
+			Tools []struct {
+				Name        string         `json:"name"`
+				Description string         `json:"description"`
+				InputSchema map[string]any `json:"inputSchema"`
+			} `json:"tools"`
+			NextCursor string `json:"nextCursor"`
+		}
+		if err := c.request(ctx, "tools/list", params, &parsed); err != nil {
+			return nil, err
+		}
+		for _, item := range parsed.Tools {
+			name := strings.TrimSpace(item.Name)
+			if name == "" {
+				continue
+			}
+			tools = append(tools, mcpTool{
+				Server:      serverName,
+				Name:        name,
+				Description: strings.TrimSpace(item.Description),
+				InputSchema: item.InputSchema,
+			})
+		}
+		cursor = strings.TrimSpace(parsed.NextCursor)
+		if cursor == "" {
+			return tools, nil
+		}
 	}
 	return tools, nil
 }
 
-func callMCPTool(ctx context.Context, server MCPServerConfig, toolName string, arguments map[string]any) (string, error) {
+func callMCPTool(ctx context.Context, server MCPServerConfig, toolName string, arguments map[string]any) (mcpToolCallResult, error) {
 	client, _, err := connectMCPServer(ctx, server)
 	if err != nil {
-		return "", err
+		return mcpToolCallResult{}, err
 	}
 	defer client.close()
 	var result any
@@ -960,7 +979,7 @@ func callMCPTool(ctx context.Context, server MCPServerConfig, toolName string, a
 		"name":      toolName,
 		"arguments": arguments,
 	}, &result); err != nil {
-		return "", err
+		return mcpToolCallResult{}, err
 	}
 	return stringifyMCPResult(result), nil
 }
@@ -1039,6 +1058,13 @@ func (c *mcpClient) request(ctx context.Context, method string, params any, out 
 		if err != nil {
 			return err
 		}
+		if strings.TrimSpace(resp.Method) == "notifications/tools/list_changed" {
+			c.toolsChanged.Store(true)
+			continue
+		}
+		if resp.ID == nil {
+			continue
+		}
 		if fmt.Sprint(resp.ID) != fmt.Sprint(id) {
 			continue
 		}
@@ -1102,32 +1128,57 @@ func (c *mcpClient) read(ctx context.Context) (mcpRPCMessage, error) {
 	}
 }
 
-func stringifyMCPResult(result any) string {
+func stringifyMCPResult(result any) mcpToolCallResult {
 	if result == nil {
-		return ""
+		return mcpToolCallResult{}
 	}
 	if payload, ok := result.(map[string]any); ok {
-		if content, ok := payload["content"].([]any); ok {
-			parts := make([]string, 0, len(content))
-			for _, raw := range content {
-				item, _ := raw.(map[string]any)
-				if item == nil {
-					continue
+		isError, _ := payload["isError"].(bool)
+		if structured, ok := payload["structuredContent"]; ok {
+			if data, err := json.MarshalIndent(structured, "", "  "); err == nil && len(data) > 0 {
+				text := string(data)
+				if contentText := mcpContentText(payload); contentText != "" {
+					text = contentText + "\n\nstructuredContent:\n" + text
 				}
-				if text := strings.TrimSpace(fmt.Sprint(item["text"])); text != "" && text != "<nil>" {
-					parts = append(parts, text)
-				}
-			}
-			if len(parts) > 0 {
-				return strings.Join(parts, "\n")
+				return mcpToolCallResult{Text: text, IsError: isError}
 			}
 		}
+		if text := mcpContentText(payload); text != "" {
+			return mcpToolCallResult{Text: text, IsError: isError}
+		}
+		data, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return mcpToolCallResult{Text: fmt.Sprint(result), IsError: isError}
+		}
+		return mcpToolCallResult{Text: string(data), IsError: isError}
 	}
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return fmt.Sprint(result)
+		return mcpToolCallResult{Text: fmt.Sprint(result)}
 	}
-	return string(data)
+	return mcpToolCallResult{Text: string(data)}
+}
+
+func mcpContentText(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if content, ok := payload["content"].([]any); ok {
+		parts := make([]string, 0, len(content))
+		for _, raw := range content {
+			item, _ := raw.(map[string]any)
+			if item == nil {
+				continue
+			}
+			if text := strings.TrimSpace(fmt.Sprint(item["text"])); text != "" && text != "<nil>" {
+				parts = append(parts, text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
+		}
+	}
+	return ""
 }
 
 func safeMCPName(name string) string {
