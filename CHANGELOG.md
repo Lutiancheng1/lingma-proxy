@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased (target: v1.6.6)
+## Unreleased (target: v1.6.7)
+
+## v1.6.7 - 2026-05-27
+
+- Added complete log detail inspection in the desktop Logs page, including ID-based lookup so same-second log records no longer open the wrong entry.
+- Added full-log copy for filtered results and a single continuous range selection/copy workflow, making feedback collection easier without relying on truncated table text.
+- Fixed Logs page layout regressions: long messages now wrap inside the table instead of pushing content off-screen, the clear-selection button stays on one line, and detail timestamps use the same relative date format as the list.
+- Synced the Dashboard configuration copy and reduced the Models panel height so the first screen keeps only key configuration and avoids extra wrapping.
+- Added the Feishu Bridge artifact workflow registration to main so the branch packaging workflow is tracked with the repository.
+- 桌面日志页新增完整日志详情，按日志 ID 精准读取，避免同秒多条日志打开到错误记录。
+- 新增筛选结果完整复制和单段连续区间复制，收集反馈日志时不再依赖列表里的截断文本。
+- 修复日志页布局问题：长消息在表格内换行，不再撑出右侧内容；“清除选择”保持单行；详情弹窗时间使用与列表一致的相对日期格式。
+- 同步首页配置说明文案，并调低 Models 面板高度，让首页只保留关键配置且减少换行。
+- 主分支纳入 Feishu Bridge artifact workflow 配置，便于后续分支包打包流程随仓库追踪。
 
 ## v1.6.6 - 2026-05-25
 

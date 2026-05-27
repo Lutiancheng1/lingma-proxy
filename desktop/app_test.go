@@ -97,3 +97,20 @@ func TestBackfillRequestCreatedAtAcrossDays(t *testing.T) {
 		t.Fatalf("oldest request date = %s, want %s", got, want)
 	}
 }
+
+func TestGetLogDetailUsesIDForSameSecondLogs(t *testing.T) {
+	app := &App{}
+	createdAt := "2026-05-27T10:47:35+08:00"
+	app.logs = []AppLog{
+		{ID: "first", CreatedAt: createdAt, Time: "10:47:35", Source: "app", Level: "info", Message: "first full message"},
+		{ID: "second", CreatedAt: createdAt, Time: "10:47:35", Source: "app", Level: "info", Message: "second full message"},
+	}
+
+	got, err := app.GetLogDetail("first")
+	if err != nil {
+		t.Fatalf("GetLogDetail by id failed: %v", err)
+	}
+	if got.Message != "first full message" {
+		t.Fatalf("GetLogDetail returned wrong same-second log: %#v", got)
+	}
+}

@@ -340,7 +340,7 @@ onUnmounted(() => {
         <div class="panel-header compact-header">
           <div>
             <h2>Configuration</h2>
-            <p>首页只展示关键配置，完整项在设置页查看。</p>
+            <p>仅展示关键项，完整配置见设置页。</p>
           </div>
           <span class="status-chip ok">Valid</span>
         </div>
