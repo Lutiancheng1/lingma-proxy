@@ -371,4 +371,6 @@ jobs:
             echo "Cloudflare Pages deploy skipped: Pages secrets are not configured."
             exit 0
           fi
-          npx wrangler@latest pages deploy site --project-name "$CLOUDFLARE_PAGES_PROJECT" --branch stable
+          if ! npx wrangler@latest pages deploy site --project-name "$CLOUDFLARE_PAGES_PROJECT" --branch stable; then
+            echo "::warning::Cloudflare Pages deploy failed. R2 release assets and manifests were already published."
+          fi
