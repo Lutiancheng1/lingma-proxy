@@ -118,6 +118,56 @@ export namespace feishu {
 		    return a;
 		}
 	}
+	export class SafeFilePathConfig {
+	    path: string;
+	    mode: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SafeFilePathConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.mode = source["mode"];
+	    }
+	}
+	export class SafeFilesConfig {
+	    configured?: boolean;
+	    enabled: boolean;
+	    workspaceDir: string;
+	    extraPaths?: SafeFilePathConfig[];
+
+	    static createFrom(source: any = {}) {
+	        return new SafeFilesConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configured = source["configured"];
+	        this.enabled = source["enabled"];
+	        this.workspaceDir = source["workspaceDir"];
+	        this.extraPaths = this.convertValues(source["extraPaths"], SafeFilePathConfig);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ContextConfig {
 	    contextWindowOverride?: number;
 	    autoCompact: boolean;
@@ -174,6 +224,7 @@ export namespace feishu {
 	    mcpEnabled: boolean;
 	    mcpServers?: MCPServerConfig[];
 	    context?: ContextConfig;
+	    safeFiles?: SafeFilesConfig;
 	    maxToolRounds: number;
 	    groupOnlyAtBot: boolean;
 
@@ -192,6 +243,7 @@ export namespace feishu {
 	        this.mcpEnabled = source["mcpEnabled"];
 	        this.mcpServers = this.convertValues(source["mcpServers"], MCPServerConfig);
 	        this.context = this.convertValues(source["context"], ContextConfig);
+	        this.safeFiles = this.convertValues(source["safeFiles"], SafeFilesConfig);
 	        this.maxToolRounds = source["maxToolRounds"];
 	        this.groupOnlyAtBot = source["groupOnlyAtBot"];
 	    }
@@ -235,6 +287,38 @@ export namespace feishu {
 	    }
 	}
 
+	export class MCPPromptStatus {
+	    name: string;
+	    description?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MCPPromptStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	    }
+	}
+	export class MCPResourceStatus {
+	    uri: string;
+	    name: string;
+	    description?: string;
+	    mimeType?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MCPResourceStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.uri = source["uri"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.mimeType = source["mimeType"];
+	    }
+	}
 
 	export class MCPToolStatus {
 	    name: string;
@@ -262,6 +346,10 @@ export namespace feishu {
 	    available: boolean;
 	    toolCount: number;
 	    tools?: MCPToolStatus[];
+	    resourceCount: number;
+	    resources?: MCPResourceStatus[];
+	    promptCount: number;
+	    prompts?: MCPPromptStatus[];
 	    message?: string;
 
 	    static createFrom(source: any = {}) {
@@ -279,6 +367,10 @@ export namespace feishu {
 	        this.available = source["available"];
 	        this.toolCount = source["toolCount"];
 	        this.tools = this.convertValues(source["tools"], MCPToolStatus);
+	        this.resourceCount = source["resourceCount"];
+	        this.resources = this.convertValues(source["resources"], MCPResourceStatus);
+	        this.promptCount = source["promptCount"];
+	        this.prompts = this.convertValues(source["prompts"], MCPPromptStatus);
 	        this.message = source["message"];
 	    }
 
@@ -300,6 +392,36 @@ export namespace feishu {
 		    return a;
 		}
 	}
+
+	export class PromptPackStatus {
+	    enabled: boolean;
+	    channel: string;
+	    version: string;
+	    source: string;
+	    manifestUrl?: string;
+	    lastCheckedAt?: string;
+	    lastAppliedAt?: string;
+	    lastError?: string;
+	    notes?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new PromptPackStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.channel = source["channel"];
+	        this.version = source["version"];
+	        this.source = source["source"];
+	        this.manifestUrl = source["manifestUrl"];
+	        this.lastCheckedAt = source["lastCheckedAt"];
+	        this.lastAppliedAt = source["lastAppliedAt"];
+	        this.lastError = source["lastError"];
+	        this.notes = source["notes"];
+	    }
+	}
+
 
 	export class SkillStatus {
 	    name: string;
@@ -573,6 +695,88 @@ export namespace main {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	    }
+	}
+	export class OnlineUpdateAsset {
+	    platform: string;
+	    url: string;
+	    sha256: string;
+	    signature: string;
+	    size: number;
+	    kind: string;
+	    filename?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new OnlineUpdateAsset(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.platform = source["platform"];
+	        this.url = source["url"];
+	        this.sha256 = source["sha256"];
+	        this.signature = source["signature"];
+	        this.size = source["size"];
+	        this.kind = source["kind"];
+	        this.filename = source["filename"];
+	    }
+	}
+	export class OnlineUpdateStatus {
+	    enabled: boolean;
+	    channel: string;
+	    current: string;
+	    latest?: string;
+	    available: boolean;
+	    mandatory: boolean;
+	    state: string;
+	    manifestUrl?: string;
+	    lastCheckedAt?: string;
+	    lastError?: string;
+	    releaseNotes?: string;
+	    asset?: OnlineUpdateAsset;
+	    downloadedTo?: string;
+	    progress?: number;
+	    promptPack: feishu.PromptPackStatus;
+
+	    static createFrom(source: any = {}) {
+	        return new OnlineUpdateStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.channel = source["channel"];
+	        this.current = source["current"];
+	        this.latest = source["latest"];
+	        this.available = source["available"];
+	        this.mandatory = source["mandatory"];
+	        this.state = source["state"];
+	        this.manifestUrl = source["manifestUrl"];
+	        this.lastCheckedAt = source["lastCheckedAt"];
+	        this.lastError = source["lastError"];
+	        this.releaseNotes = source["releaseNotes"];
+	        this.asset = this.convertValues(source["asset"], OnlineUpdateAsset);
+	        this.downloadedTo = source["downloadedTo"];
+	        this.progress = source["progress"];
+	        this.promptPack = this.convertValues(source["promptPack"], feishu.PromptPackStatus);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ProxyStatus {
 	    running: boolean;

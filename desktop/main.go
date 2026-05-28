@@ -17,6 +17,10 @@ import (
 var assets embed.FS
 
 var devtoolsBuild = "false"
+var updateManifestURL = ""
+var updatePublicKey = ""
+var promptPackManifestURL = ""
+var promptPackPublicKey = ""
 
 func main() {
 	app := NewApp()

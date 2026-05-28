@@ -24,6 +24,13 @@ const rangeAnchorIndex = ref(-1)
 const rangeEndIndex = ref(-1)
 const detailCache = new Map()
 
+const LIST_MESSAGE_LIMIT = 240
+
+function truncateMessage(text) {
+  if (!text) return ''
+  return text.length > LIST_MESSAGE_LIMIT ? text.slice(0, LIST_MESSAGE_LIMIT) + '...' : text
+}
+
 const visibleLogs = computed(() => {
   return props.logs.filter((log) => (log.source || 'app') !== 'boot')
 })
@@ -332,7 +339,7 @@ function proceedClearLogs() {
           <strong :class="levelClass(log.level)">{{ levelLabel(log.level) }}</strong>
           <span class="log-meta-cell">{{ shortID(log.sessionId) || '' }}</span>
           <span class="log-meta-cell">{{ shortID(log.chatId) || '' }}</span>
-          <span class="log-message-cell">{{ log.message }}</span>
+          <span class="log-message-cell">{{ truncateMessage(log.message) }}</span>
           <button class="ghost-button log-detail-button" type="button" @click="openLogDetail(log)">详情</button>
         </div>
       </div>

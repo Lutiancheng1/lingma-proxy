@@ -12,7 +12,7 @@ func TestMicrocompactToolResults_BelowKeepRecent(t *testing.T) {
 		{"role": "tool", "tool_call_id": "1", "content": long},
 		{"role": "tool", "tool_call_id": "2", "content": long},
 	}
-	got := microcompactToolResults(msgs)
+	got := microcompactToolResults(msgs, nil)
 	if got[1]["content"] != long || got[2]["content"] != long {
 		t.Fatalf("expected verbatim retention when tool count <= keepRecent")
 	}
@@ -27,7 +27,7 @@ func TestMicrocompactToolResults_TruncatesOldKeepsRecent(t *testing.T) {
 		{"role": "tool", "tool_call_id": "4", "content": long},
 		{"role": "tool", "tool_call_id": "5", "content": long},
 	}
-	got := microcompactToolResults(msgs)
+	got := microcompactToolResults(msgs, nil)
 	// First two should be stubbed, last three kept verbatim.
 	if got[0]["content"] == long || got[1]["content"] == long {
 		t.Fatalf("expected first two tool messages to be compressed")
@@ -54,7 +54,7 @@ func TestMicrocompactToolResults_DoesNotMutateInput(t *testing.T) {
 		{"role": "tool", "tool_call_id": "3", "content": long},
 		{"role": "tool", "tool_call_id": "4", "content": long},
 	}
-	_ = microcompactToolResults(msgs)
+	_ = microcompactToolResults(msgs, nil)
 	if msgs[0]["content"] != long {
 		t.Fatalf("original slice was mutated")
 	}

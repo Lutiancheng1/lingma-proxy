@@ -11,6 +11,9 @@ import (
 const (
 	feishuHistoryBackfillTimeout = 7 * time.Second
 	feishuHistoryBackfillLimit   = 12
+
+	feishuHistorySearchTimeout = 10 * time.Second
+	feishuHistorySearchLimit   = 10
 )
 
 func (m *Manager) fetchFeishuConversationBackfill(ctx context.Context, chatID string, currentMessageID string, resetAt time.Time, resetMessageID string, meta LogMeta) string {
@@ -33,7 +36,7 @@ func (m *Manager) fetchFeishuConversationBackfill(ctx context.Context, chatID st
 			m.logf("warn", "Feishu bridge 历史消息回填超时，跳过本轮回填", meta)
 			return ""
 		}
-		m.logf("info", "Feishu bridge 历史消息回填不可用，跳过："+summarizeText(decodeCommandOutput(output), 160), meta)
+		m.logf("info", "Feishu bridge 历史消息回填不可用，跳过："+decodeCommandOutput(output), meta)
 		return ""
 	}
 	text := renderFeishuHistoryBackfill(decodeCommandOutput(output), currentMessageID, resetAt, resetMessageID)
@@ -233,4 +236,135 @@ func firstMapString(values map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func searchFeishuHistory(ctx context.Context, chatID string, query string, limit int) string {
+	chatID = strings.TrimSpace(chatID)
+	query = strings.TrimSpace(query)
+	if chatID == "" || query == "" {
+		return ""
+	}
+	if limit <= 0 {
+		limit = feishuHistorySearchLimit
+	}
+	runCtx, cancel := context.WithTimeout(ctx, feishuHistorySearchTimeout)
+	defer cancel()
+	cmd := commandContextWithEnv(runCtx, "lark-cli", "im", "+messages-search",
+		"--as", "bot",
+		"--chat-id", chatID,
+		"--query", query,
+		"--page-size", fmt.Sprint(limit),
+		"--format", "json",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if runCtx.Err() == context.DeadlineExceeded {
+			return ""
+		}
+		return ""
+	}
+	return renderFeishuHistorySearch(decodeCommandOutput(output), query)
+}
+
+func renderFeishuHistorySearch(output string, query string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	messages := extractFeishuHistoryMessages(output)
+	if len(messages) == 0 {
+		return ""
+	}
+	lines := []string{fmt.Sprintf("飞书历史消息搜索「%s」结果（%d 条）：", query, len(messages))}
+	for _, raw := range messages {
+		msg, _ := raw.(map[string]any)
+		if msg == nil {
+			continue
+		}
+		sender := extractHistorySender(msg)
+		content := extractHistoryContent(msg)
+		ts := extractHistoryTimestamp(msg)
+		content = summarizeText(content, 200)
+		line := fmt.Sprintf("- [%s] %s: %s", ts, sender, content)
+		lines = append(lines, line)
+	}
+	result := strings.Join(lines, "\n")
+	runes := []rune(result)
+	if len(runes) > 3000 {
+		result = string(runes[:3000]) + "\n...(截断)"
+	}
+	return result
+}
+
+func extractHistorySender(msg map[string]any) string {
+	if sender, ok := msg["sender"].(map[string]any); ok {
+		if name, ok := sender["name"].(string); ok && name != "" {
+			return name
+		}
+		if id, ok := sender["id"].(string); ok {
+			return id
+		}
+	}
+	if name, ok := msg["sender_name"].(string); ok {
+		return name
+	}
+	return "unknown"
+}
+
+func extractHistoryContent(msg map[string]any) string {
+	if content, ok := msg["content"].(string); ok {
+		return content
+	}
+	if body, ok := msg["body"].(map[string]any); ok {
+		if content, ok := body["content"].(string); ok {
+			return content
+		}
+	}
+	return ""
+}
+
+func extractHistoryTimestamp(msg map[string]any) string {
+	if ts, ok := msg["create_time"].(string); ok {
+		return ts
+	}
+	if ts, ok := msg["timestamp"].(string); ok {
+		return ts
+	}
+	return ""
+}
+
+func isHistoryReference(text string) bool {
+	patterns := []string{
+		"上次", "之前", "我们讨论过", "你提到过", "记得吗",
+		"那个文档", "那个链接", "那个表格", "那个文件",
+		"之前说的", "前面提到", "聊过的",
+	}
+	lower := strings.ToLower(strings.TrimSpace(text))
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractHistoryQuery(text string) string {
+	text = strings.TrimSpace(text)
+	prefixes := []string{
+		"上次我们讨论的", "上次说的", "之前讨论的", "之前提到的",
+		"我们讨论过的", "你提到过的", "记得吗",
+		"那个", "帮我找一下", "帮我搜一下",
+	}
+	for _, p := range prefixes {
+		if idx := strings.Index(text, p); idx >= 0 {
+			rest := strings.TrimSpace(text[idx+len(p):])
+			if rest != "" {
+				return rest
+			}
+		}
+	}
+	if len([]rune(text)) > 30 {
+		return string([]rune(text)[:30])
+	}
+	return text
 }

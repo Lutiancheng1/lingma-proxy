@@ -78,6 +78,10 @@ CardKit 最终态分层：
 
 授权与权限：模型不得直接执行 `lark-cli auth login`。工具结果出现 `need_user_authorization` 或缺少 scope 时，由 Bridge 接管 device flow，回复授权链接并等待用户授权后继续。
 
+本机文件访问系统：内置 `safe_file_read`、`safe_file_write`、`safe_file_list`、`safe_file_delete` 等文件工具。默认只开放应用自己的 workspace 目录用于读写；其他本机目录默认不可写、不可删。用户可在 Feishu Bridge 高级设置的“本机文件访问”中为额外路径配置 `read`、`write` 或 `delete` 权限。聊天中的 `授权目录 /path/to/dir` 或 `授权文件 /path/to/file` 只会追加只读白名单，不会授予写入或删除权限；白名单持久化到应用配置目录下的 `allowed_paths.json`。
+
+文件写入/删除物理安全防线：`safe_file_write` 覆盖已有文件时要求用户最新消息精确包含 `确认覆盖 <文件名或绝对路径>`；`safe_file_delete` 禁止删除目录，且删除单个文件时必须同时满足 `confirmed: true` 与用户最新消息精确包含 `确认删除 <文件名或绝对路径>`。路径判断使用真实路径和子路径关系，避免字符串前缀和软链逃逸问题。
+
 **分支定位**：`feat/feishu-bridge-go` 为实验分支，仅通过 GitHub Actions 产出 artifact 供内测下载，不参与 release 发布，不合入 main。
 
 ---
@@ -364,16 +368,87 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 
 ---
 
-## 8. 当前边界
+## 8. Feishu Bridge 上下文管理
+
+Feishu Bridge 的上下文管理不再只是“保留最近几轮”。当前实现由预算估算、工具结果分类、结构化摘要、工具记忆检索和飞书历史检索共同组成。
+
+### 8.1 水位策略
+
+每次请求前会估算当前模型上下文占用，并按水位决定处理方式：
+
+| 水位 | 阈值 | 处理 |
+|------|------|------|
+| `ok` | < 60% | 不压缩 |
+| `microcompact` | 60–74% | 旧工具结果转为短 stub，保留最近工具结果 |
+| `compact` | 75–84% | 生成结构化摘要，保留必要工具引用 |
+| `critical` | 85–91% | 强制摘要 + 最小工具结果 |
+| `blocking` | ≥ 92% | 阻断继续堆上下文，提示 compact |
+
+核心文件：`internal/feishu/context_budget.go`、`internal/feishu/manager.go`。
+
+### 8.2 工具结果分类
+
+`classifyToolResult` 会把工具结果分为四级：
+
+| 分类 | 含义 | 典型场景 |
+|------|------|----------|
+| `preserve` | 保留完整内容 | 文档分块、表格分块、云盘搜索、网页读取 |
+| `summarize` | 保留结构化摘要 | 日历、任务、多维表格、MCP、通用 CLI 输出 |
+| `stub` | 只保留 1-2 行元数据 | 发送消息、创建文档、权限操作、文件列表 |
+| `discard` | 空结果或无价值结果 | 空输出 |
+
+对应摘要函数：
+
+- `extractToolResultSummary`：提取标题、URL、数量、关键字段。
+- `extractToolResultStub`：提取 token、message_id、spreadsheet_token 等最小定位信息。
+- `smartToolSummary`：写入 SQLite 时生成工具记忆摘要，替代固定长度截断。
+
+### 8.3 结构化摘要
+
+`sanitizeMessagesForSummary` 会在摘要前清理历史消息：
+
+- 工具消息用结构化摘要替代完整输出。
+- 非工具消息保留首尾边界，避免丢失用户意图和上下文转折。
+- 压缩 prompt 强调保留目标、决策、待办、错误恢复、文档 token、URL 和工具记忆 ID。
+
+这保证用户说“继续”时，Bridge 仍能恢复未完成任务，而不是只保留一段自然语言摘要。
+
+### 8.4 工具记忆检索
+
+`context_store.go` 会把工具结果写入 SQLite：
+
+- `tool_memories` 保存完整工具结果、摘要、工具名和参数 hash。
+- `tool_memories_fts` 使用 FTS5 全文索引。
+- `SearchToolMemory` 支持 BM25 搜索。
+- `FetchToolMemory` 支持按 `tool_xxx` ID 精确取回完整结果。
+- 模型侧暴露 `fetch_tool_memory` 工具，支持 `search` 和 `get` 两种模式。
+
+当上下文中的工具结果被压缩为 `[完整工具结果已保存为 tool_xxx]` 后，模型可以主动取回完整结果。
+
+### 8.5 飞书历史长期记忆
+
+`history_backfill.go` 提供飞书聊天历史搜索：
+
+- `feishu_history_search` 调用 `lark-cli im +messages-search` 搜索当前聊天历史。
+- `feishu_history_cache` 缓存查询结果，TTL 约 10 分钟，避免同一问题反复打 CLI。
+- `isHistoryReference` / `extractHistoryQuery` 会识别“上次”“之前讨论的”“那个链接/文档”等历史引用，并主动搜索当前上下文窗口之外的消息。
+
+这部分依赖飞书 CLI 权限和本机登录态；如果 CLI 不支持对应命令或缺权限，会按普通工具错误返回给模型。
+
+---
+
+## 9. 当前边界
 
 - IPC 模式仍然受本地 Lingma 插件运行态影响
 - Remote 登录态探测依赖本地 Lingma 缓存结构
 - 图片类请求在本地持久化时会做裁剪/脱敏，避免状态文件过大
 - Remote 模式下如果启用了 fallback，最近一次“聊天模型”可能与客户端最初指定模型不同
+- 飞书历史搜索依赖当前 `lark-cli im +messages-search` 能力和授权范围；不是所有租户/账号都一定可用
+- FTS5 工具记忆在 SQLite 不可用时会降级，Bridge 仍能运行，但长期检索能力会减弱
 
 ---
 
-## 9. 代码入口建议
+## 10. 代码入口建议
 
 如果要继续扩展，优先看这些文件：
 
@@ -385,6 +460,9 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 - `internal/feishu/manager.go`
 - `internal/feishu/card.go`
 - `internal/feishu/prompt.go`
+- `internal/feishu/context_budget.go`
+- `internal/feishu/context_store.go`
+- `internal/feishu/history_backfill.go`
 - `desktop/app.go`
 - `desktop/main.go`
 

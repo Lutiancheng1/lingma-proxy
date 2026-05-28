@@ -872,6 +872,68 @@ button {
   align-items: start;
 }
 
+.update-panel {
+  margin-bottom: 18px;
+}
+
+.update-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.update-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.76);
+}
+
+:root[data-theme='dark'] .update-card {
+  background: rgba(15, 23, 42, 0.64);
+}
+
+.update-card strong,
+.update-card span,
+.update-card small,
+.update-card em {
+  display: block;
+}
+
+.update-card strong {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.update-card span {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.update-card small {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.update-card em {
+  margin-top: 5px;
+  color: var(--red);
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.update-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+}
+
 .grid-3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

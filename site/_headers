@@ -1,0 +1,11 @@
+/*
+  X-Content-Type-Options: nosniff
+
+/config.js
+  Cache-Control: no-store
+
+/download.js
+  Cache-Control: public, max-age=300
+
+/*.html
+  Cache-Control: public, max-age=300

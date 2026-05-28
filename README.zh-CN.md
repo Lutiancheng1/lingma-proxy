@@ -107,6 +107,7 @@ GitHub Actions 会在 Release 中产出：
 | Windows Named Pipe / WebSocket 探测 | 支持 |
 | 日间 / 夜间 / 跟随系统主题 | 桌面端支持 |
 | macOS 窗口生命周期 | 关闭隐藏、Dock 重新打开、Cmd+W、Cmd+M、Cmd+Q |
+| 本地路径授权与文件 CRUD | 支持。内置 safe_file_* 安全文件工具，默认只开放应用 workspace；额外路径在高级设置中按 read/write/delete 分级授权，聊天口述授权只提供只读访问。 |
 | GitHub Release 打包 | macOS + Windows 桌面端；macOS + Windows + Linux CLI；Docker 镜像发布到 GHCR |
 
 ## 桌面 App
@@ -170,6 +171,8 @@ GitHub Actions 会在 Release 中产出：
 - **图片自动压缩**：大图会自动缩放并转 JPEG，避免 Lingma 被超大 base64 卡死。
 - **日志图片脱敏**：桌面端请求详情会把图片 base64 标记为图片载荷，不再把巨大字符串撑爆 UI。
 - **更完整的参数兼容**：接收 `temperature`、`top_p`、`stop`、`max_tokens`、`response_format`、`reasoning_effort` 等客户端常用字段。
+- **本机文件安全 CRUD 与分级授权**：为飞书 Bot 提供了 `safe_file_read`、`safe_file_write`、`safe_file_list`、`safe_file_delete` 等文件工具。默认只开放应用自己的 workspace；其他路径需要在 Feishu Bridge 高级设置中按 `read`、`write`、`delete` 分级配置。聊天中发送 `授权目录 /path` 或 `授权文件 /path` 只会授予只读访问，不会放开写入或删除。覆盖文件要求用户明确发送 `确认覆盖 <文件名>`，删除文件要求 `confirmed: true` 且用户明确发送 `确认删除 <文件名>`，并禁止删除目录。
+- **Feishu Bridge 上下文管理**：飞书 Bot 会按模型窗口做上下文水位估算，旧工具结果按 `preserve / summarize / stub / discard` 分级处理；完整工具结果落 SQLite 并建 FTS5 索引，模型可用 `fetch_tool_memory` 搜索或按 ID 取回；当用户提到“上次/之前/那个文档”时，可通过 `feishu_history_search` 搜索当前飞书聊天历史。
 - **完整请求 / 响应观测**：桌面端可以查看完整请求体、响应体、状态码、耗时和错误日志，便于排查 Claude Code / Hermes 等客户端的 400、500 问题。
 - **跨平台桌面 App**：提供启动、停止、重启、模型探测、设置、日志、主题、窗口生命周期等完整桌面能力。
 - **跨平台 Release**：GitHub Actions 同时打包 macOS / Windows 的 CLI 和桌面 App。

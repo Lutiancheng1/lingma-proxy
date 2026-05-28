@@ -55,7 +55,7 @@ ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 Dev
 - `internal/ipc/` — Lingma IPC 传输层（pipe/stdio）
 - `internal/service/` — 业务逻辑（prompt 构建、session 管理、图片处理）
 - `internal/toolemulation/` — Tool Emulation（prompt 注入 + action block 解析）
-- `internal/feishu/` — Feishu Bridge（飞书 Bot 收发 + CardKit 流式卡片 + lark-cli 集成 + 系统提示词构建）
+- `internal/feishu/` — Feishu Bridge（飞书 Bot 收发 + CardKit 流式卡片 + lark-cli 集成 + MCP 客户端 + 上下文管理 + 系统提示词构建）
 
 ## Feishu Bridge 踩坑警示
 
@@ -76,6 +76,15 @@ ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 Dev
 - **工具调用**：Prompt Injection 方式，模型输出 `{"tool":"NAME","parameters":{...}}` 格式 action block
 - **Session 复用**：首次请求创建 session，后续请求复用以保持对话上下文
 - **流式输出**：SSE 格式，Anthropic 使用 `content_block_start/delta/stop` 事件序列
+
+## Feishu Bridge 工具与 MCP
+
+- **MCP 客户端**：支持 tools/resources/prompts 三大能力域，配置在 `config.toml` 的 `[mcp_servers]` 或 JSON。资源和提示词通过 `mcp_resource_read`/`mcp_prompt_get` 伪工具暴露给 LLM
+- **工具结果分类**：`classifyToolResult` 按工具类型分为 preserve/summarize/stub/discard 四级，不再一刀切截断。修改分类逻辑在 `context_budget.go`
+- **工具记忆**：所有工具结果存入 SQLite（FTS5 全文索引），LLM 可通过 `fetch_tool_memory` 工具搜索或按 ID 获取历史结果
+- **飞书历史搜索**：`feishu_history_search` 工具调用 `lark-cli im +messages-search` 搜索当前群聊历史消息，带 10 分钟 SQLite 缓存
+- **上下文压缩**：4 级水位线（ok/microcompact/compact/critical/blocking），超 75% 自动触发 LLM 结构化摘要。修改在 `manager.go` 的 `summarizeConversation`/`applyBudgetCompaction`
+- **不要在工具结果处理中使用 `summarizeText` 做盲截断**：用 `classifyToolResult` + `extractToolResultSummary`/`extractToolResultStub` 替代
 
 ## 已知限制
 

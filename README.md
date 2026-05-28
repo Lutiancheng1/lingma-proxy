@@ -131,6 +131,7 @@ Narrow window layout:
 | OpenAI Chat Alias | `POST /api/v1/chat/completions` | supported |
 | OpenAI Responses | `POST /v1/responses`, `POST /api/v1/responses` | streaming and non-streaming; required for Codex CLI |
 | Anthropic Messages | `POST /v1/messages` | streaming and non-streaming |
+| Local Path Auth & File CRUD | - | Supported. Built-in safe_file_* tools. The app workspace is writable by default; extra paths are configured in advanced settings with read/write/delete levels, and chat-based authorization is read-only. |
 
 ## What This Fork Adds
 
@@ -146,6 +147,8 @@ Compared with the original protocol proof of concept, this repository focuses on
 - **Request log image redaction** so large base64 payloads are visible as image markers instead of breaking the desktop log view.
 - **More request parameter compatibility** so stricter clients can connect without custom patches.
 - **Full request and response recording** in the desktop app for debugging 400/500 errors.
+- **Local file CRUD with tiered authorization** using `safe_file_read`, `safe_file_write`, `safe_file_list`, and `safe_file_delete`. Only the app workspace is writable by default. Extra paths must be configured in Feishu Bridge advanced settings as `read`, `write`, or `delete`. Chat-based `授权目录 /path` or `授权文件 /path` only grants read access. Overwriting requires an exact `确认覆盖 <filename>` confirmation, and deletion requires both `confirmed: true` and an exact `确认删除 <filename>` confirmation. Directory deletion is blocked.
+- **Feishu Bridge context management** with model-window watermarks, classified tool-result handling (`preserve`, `summarize`, `stub`, `discard`), SQLite + FTS5 tool memory, `fetch_tool_memory` recall, and `feishu_history_search` for older Feishu chat references outside the active context window.
 - **macOS and Windows desktop app** with start/stop/restart, settings, logs, model discovery, themes, and window lifecycle handling.
 - **Cross-platform release packaging** for CLI and desktop builds.
 

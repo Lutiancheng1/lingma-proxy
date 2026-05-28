@@ -197,7 +197,7 @@ func TestRenderLarkSkillViewReadsOfficialSkill(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: lark-sheets\n---\n# Sheets\n\nUse `lark-cli sheets +info` before `lark-cli sheets +read`.\n"), 0o644); err != nil {
 		t.Fatalf("write skill body: %v", err)
 	}
-	got, err := renderLarkSkillView("sheets")
+	got, err := renderLarkSkillView("sheets", nil)
 	if err != nil {
 		t.Fatalf("renderLarkSkillView: %v", err)
 	}

@@ -12,7 +12,11 @@ import {
   ChooseFeishuBridgeSkillFolder,
   ChooseFeishuBridgeSkillZip,
   CleanupFeishuBridgeArtifacts,
+  CheckForUpdates,
+  CheckPromptPackUpdate,
   DeleteFeishuBridgeSkill,
+  DownloadAndInstallUpdate,
+  GetOnlineUpdateStatus,
   ImportFeishuBridgeSkillPath,
   InstallFeishuCLI,
   RefreshFeishuBridgeStatus,
@@ -52,6 +56,12 @@ const bridgeConfig = ref({
     skillHttpTimeout: 60,
     skillHttpMaxBytes: 5242880,
   },
+  safeFiles: {
+    configured: true,
+    enabled: true,
+    workspaceDir: '',
+    extraPaths: [],
+  },
   maxToolRounds: 0,
 })
 const bridgeStatus = ref(null)
@@ -78,6 +88,9 @@ const bridgeCleanupMCPConfig = ref(false)
 const bridgeSkills = ref([])
 const bridgeSkillsLoading = ref(false)
 const bridgeSkillImporting = ref(false)
+const updateStatus = ref(null)
+const updateBusy = ref(false)
+const promptPackBusy = ref(false)
 const bridgeContextDraft = ref({
   autoCompact: true,
   compactWatermark: 75,
@@ -86,11 +99,18 @@ const bridgeContextDraft = ref({
   skillHttpTimeout: 60,
   skillHttpMaxBytes: 5242880,
 })
+const bridgeSafeFilesDraft = ref({
+  enabled: true,
+  workspaceDir: '',
+  extraPathsText: '',
+})
 const openSelect = ref('')
 const fallbackModelsText = ref('')
 const availableBridgeModels = ref([])
 const isIPCBackend = computed(() => (config.value.Backend || 'ipc') === 'ipc')
 const formattedTokenExpireAt = computed(() => formatDateTime(detection.value?.remoteTokenExpireAt))
+const updateLastCheckedAt = computed(() => formatDateTime(updateStatus.value?.lastCheckedAt))
+const promptPackLastCheckedAt = computed(() => formatDateTime(updateStatus.value?.promptPack?.lastCheckedAt))
 const bridgeCurrentModel = computed(() => bridgeConfig.value.model || bridgeStatus.value?.currentModel || 'kmodel')
 const bridgeModelOptions = computed(() => {
   const items = Array.isArray(availableBridgeModels.value) ? [...availableBridgeModels.value] : []
@@ -301,6 +321,54 @@ async function refreshAvailableBridgeModels({ background = false } = {}) {
   }
 }
 
+async function refreshUpdateStatus() {
+  try {
+    updateStatus.value = await GetOnlineUpdateStatus()
+  } catch (e) {
+    emit('log', 'warn', '更新状态读取失败：' + (e.message || String(e)))
+  }
+}
+
+async function checkOnlineUpdate() {
+  updateBusy.value = true
+  try {
+    updateStatus.value = await CheckForUpdates()
+    emit('notice', updateStatus.value?.available ? `发现新版本 ${updateStatus.value.latest}` : '当前已是最新版本')
+  } catch (e) {
+    await refreshUpdateStatus()
+    emit('notice', '检查更新失败：' + (e.message || String(e)))
+  } finally {
+    updateBusy.value = false
+  }
+}
+
+async function installOnlineUpdate() {
+  updateBusy.value = true
+  try {
+    updateStatus.value = await DownloadAndInstallUpdate()
+    emit('notice', '更新包已下载，已打开所在位置。请手动覆盖安装后重启应用。')
+  } catch (e) {
+    await refreshUpdateStatus()
+    emit('notice', '下载更新失败：' + (e.message || String(e)))
+  } finally {
+    updateBusy.value = false
+  }
+}
+
+async function checkPromptPack() {
+  promptPackBusy.value = true
+  try {
+    await CheckPromptPackUpdate()
+    await refreshUpdateStatus()
+    emit('notice', `Prompt Pack 已更新到 ${updateStatus.value?.promptPack?.version || '最新版本'}`)
+  } catch (e) {
+    await refreshUpdateStatus()
+    emit('notice', 'Prompt Pack 更新失败：' + (e.message || String(e)))
+  } finally {
+    promptPackBusy.value = false
+  }
+}
+
 function formatDateTime(value) {
   if (!value) return ''
   const date = new Date(value)
@@ -329,6 +397,7 @@ onMounted(async () => {
       ? config.value.RemoteFallbackModels.join('\n')
       : ''
     await refreshDetection()
+    await refreshUpdateStatus()
     bridgeStatus.value = await GetFeishuBridgeStatus()
     await refreshBridgeStatus(false)
   } catch (e) {
@@ -345,12 +414,16 @@ onMounted(async () => {
   safeEventsOn('models:updated', (models) => {
     availableBridgeModels.value = Array.isArray(models) ? models : []
   })
+  safeEventsOn('updates:status', (status) => {
+    updateStatus.value = status
+  })
 })
 
 onUnmounted(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   safeEventsOff('feishu:status')
   safeEventsOff('models:updated')
+  safeEventsOff('updates:status')
   stopBridgeStatusPolling()
 })
 
@@ -519,6 +592,11 @@ function openBridgeAdvancedDialog() {
     skillHttpTimeout: Number(bridgeConfig.value.context?.skillHttpTimeout || 60),
     skillHttpMaxBytes: Number(bridgeConfig.value.context?.skillHttpMaxBytes || 5242880),
   }
+  bridgeSafeFilesDraft.value = {
+    enabled: bridgeConfig.value.safeFiles?.enabled !== false,
+    workspaceDir: String(bridgeConfig.value.safeFiles?.workspaceDir || ''),
+    extraPathsText: formatSafeFilePaths(bridgeConfig.value.safeFiles?.extraPaths || []),
+  }
   refreshBridgeSkills()
   bridgeAdvancedDialogOpen.value = true
 }
@@ -668,6 +746,36 @@ function bridgeMCPServerMeta(server) {
   return bridgeRefreshing.value ? '检测中...' : '待检测'
 }
 
+function formatSafeFilePaths(paths) {
+  return (Array.isArray(paths) ? paths : [])
+    .map((item) => {
+      const path = String(item?.path || '').trim()
+      if (!path) return ''
+      const mode = String(item?.mode || 'read').trim() || 'read'
+      return `${mode} ${path}`
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function parseSafeFilePaths(text) {
+  const items = []
+  const seen = new Set()
+  for (const rawLine of String(text || '').split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const match = line.match(/^(read|write|delete)\s+(.+)$/i)
+    const mode = match ? match[1].toLowerCase() : 'read'
+    const path = (match ? match[2] : line).trim()
+    if (!path) continue
+    const key = `${mode}\u0000${path}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    items.push({ mode, path })
+  }
+  return items
+}
+
 async function saveBridgeAdvancedSettings() {
   bridgeConfig.value = {
     ...bridgeConfig.value,
@@ -681,6 +789,12 @@ async function saveBridgeAdvancedSettings() {
       contextWindowOverride: Number(bridgeContextDraft.value.contextWindowOverride || 0),
       skillHttpTimeout: Number(bridgeContextDraft.value.skillHttpTimeout || 60),
       skillHttpMaxBytes: Number(bridgeContextDraft.value.skillHttpMaxBytes || 5242880),
+    },
+    safeFiles: {
+      configured: true,
+      enabled: bridgeSafeFilesDraft.value.enabled !== false,
+      workspaceDir: bridgeSafeFilesDraft.value.workspaceDir.trim(),
+      extraPaths: parseSafeFilePaths(bridgeSafeFilesDraft.value.extraPathsText),
     },
     mcpServers: bridgeMCPServersDraft.value.map((server) => ({
       name: server.name,
@@ -883,6 +997,45 @@ async function handleBridgeStepClick(step) {
         {{ saving ? '保存中...' : '保存并重启' }}
       </button>
     </div>
+
+    <section class="glass-panel update-panel">
+      <div class="panel-header">
+        <div>
+          <h2>在线更新</h2>
+          <p>Feishu Bridge 专用通道。App 只读取公开 manifest，下载前会校验 sha256 和签名，安装由你手动完成。</p>
+        </div>
+        <span class="status-chip" :class="updateStatus?.available ? 'warn' : 'ok'">
+          {{ updateStatus?.available ? `发现 ${updateStatus.latest}` : '已就绪' }}
+        </span>
+      </div>
+      <div class="update-grid">
+        <div class="update-card">
+          <strong>应用版本</strong>
+          <span>当前 {{ updateStatus?.current || 'dev' }}</span>
+          <small v-if="updateLastCheckedAt">上次检查：{{ updateLastCheckedAt }}</small>
+          <small v-else>尚未检查更新</small>
+          <em v-if="updateStatus?.lastError">{{ updateStatus.lastError }}</em>
+        </div>
+        <div class="update-card">
+          <strong>Prompt Pack</strong>
+          <span>{{ updateStatus?.promptPack?.version || 'embedded' }} · {{ updateStatus?.promptPack?.source || 'embedded' }}</span>
+          <small v-if="promptPackLastCheckedAt">上次检查：{{ promptPackLastCheckedAt }}</small>
+          <small v-else>使用内置规则</small>
+          <em v-if="updateStatus?.promptPack?.lastError">{{ updateStatus.promptPack.lastError }}</em>
+        </div>
+        <div class="update-actions">
+          <button class="secondary-button" type="button" :disabled="updateBusy" @click="checkOnlineUpdate">
+            {{ updateBusy ? '检查中...' : '检查 App 更新' }}
+          </button>
+          <button class="primary-button" type="button" :disabled="updateBusy || !updateStatus?.available" @click="installOnlineUpdate">
+            {{ updateStatus?.progress > 0 && updateStatus?.progress < 100 ? `下载 ${updateStatus.progress}%` : '下载更新包' }}
+          </button>
+          <button class="secondary-button" type="button" :disabled="promptPackBusy" @click="checkPromptPack">
+            {{ promptPackBusy ? '更新中...' : '更新 Prompt Pack' }}
+          </button>
+        </div>
+      </div>
+    </section>
 
     <section class="grid-2 settings-grid">
       <div class="glass-panel">
@@ -1174,6 +1327,12 @@ async function handleBridgeStepClick(step) {
                     <span><code>/skill &lt;name&gt;</code>：查看某个 Skill 摘要</span>
                     <span><code>/reload-skills</code>：重新扫描用户导入 Skills</span>
                     <span><code>/skill-run &lt;skill&gt; &lt;script&gt; confirm</code>：确认执行脚本</span>
+                    <h5>定时任务</h5>
+                    <span><code>/schedule</code>：列出本群所有定时任务</span>
+                    <span><code>/schedule delete &lt;id&gt;</code>：删除指定定时任务</span>
+                    <span><code>/schedule pause &lt;id&gt;</code>：暂停定时任务</span>
+                    <span><code>/schedule resume &lt;id&gt;</code>：恢复已暂停的任务</span>
+                    <span><code>/schedule run &lt;id&gt;</code>：手动立即执行一次</span>
                   </div>
                 </div>
               </div>
@@ -1504,6 +1663,35 @@ async function handleBridgeStepClick(step) {
                 清理 CLI/Skills/授权
               </button>
             </div>
+          </div>
+
+          <div class="advanced-section">
+            <div class="advanced-section-head">
+              <div>
+                <h3>本机文件访问</h3>
+                <p>默认只允许应用 workspace 可读写；其他目录读取需授权，写入和删除必须在这里显式配置。</p>
+              </div>
+              <label class="switch">
+                <input v-model="bridgeSafeFilesDraft.enabled" type="checkbox" />
+                <span></span>
+              </label>
+            </div>
+            <div class="field">
+              <label>默认 workspace</label>
+              <input
+                v-model="bridgeSafeFilesDraft.workspaceDir"
+                placeholder="留空使用应用默认 workspace"
+              />
+            </div>
+            <div class="field">
+              <label>额外授权路径</label>
+              <textarea
+                v-model="bridgeSafeFilesDraft.extraPathsText"
+                class="safe-files-textarea"
+                placeholder="每行一条：read /绝对路径&#10;write /绝对路径&#10;delete /绝对路径"
+              ></textarea>
+            </div>
+            <p class="identity-note">read 只允许读取；write 允许创建/覆盖文件；delete 允许删除文件。覆盖仍需用户发送“确认覆盖 文件名”，删除仍需“确认删除 文件名”。</p>
           </div>
 
           <div class="advanced-section">

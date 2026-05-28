@@ -30,17 +30,33 @@ type MCPToolStatus struct {
 	Description string `json:"description,omitempty"`
 }
 
+type MCPResourceStatus struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
+type MCPPromptStatus struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
 type MCPServerStatus struct {
-	Name         string          `json:"name"`
-	Source       string          `json:"source,omitempty"`
-	SourceClient string          `json:"sourceClient,omitempty"`
-	Command      string          `json:"command,omitempty"`
-	Args         []string        `json:"args,omitempty"`
-	Enabled      bool            `json:"enabled"`
-	Available    bool            `json:"available"`
-	ToolCount    int             `json:"toolCount"`
-	Tools        []MCPToolStatus `json:"tools,omitempty"`
-	Message      string          `json:"message,omitempty"`
+	Name          string              `json:"name"`
+	Source        string              `json:"source,omitempty"`
+	SourceClient  string              `json:"sourceClient,omitempty"`
+	Command       string              `json:"command,omitempty"`
+	Args          []string            `json:"args,omitempty"`
+	Enabled       bool                `json:"enabled"`
+	Available     bool                `json:"available"`
+	ToolCount     int                 `json:"toolCount"`
+	Tools         []MCPToolStatus     `json:"tools,omitempty"`
+	ResourceCount int                 `json:"resourceCount"`
+	Resources     []MCPResourceStatus `json:"resources,omitempty"`
+	PromptCount   int                 `json:"promptCount"`
+	Prompts       []MCPPromptStatus   `json:"prompts,omitempty"`
+	Message       string              `json:"message,omitempty"`
 }
 
 type ConfigStatus struct {

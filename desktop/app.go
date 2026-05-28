@@ -217,6 +217,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.logBootMilestone("startup:config-loaded")
 	bridgeDataDir, _ := lingmaProxyConfigDir()
+	a.configureOnlineUpdates(bridgeDataDir)
 	a.bridge = feishu.NewManager(feishu.ManagerOptions{
 		ProxyURL: func() string {
 			a.mu.RLock()
@@ -252,6 +253,7 @@ func (a *App) startup(ctx context.Context) {
 		runtime.LogWarningf(a.ctx, "failed to save default config: %v", err)
 	}
 	a.logBootMilestone("startup:config-saved")
+	a.startOnlineUpdateChecks()
 
 	// Auto-start proxy so the app is usable immediately
 	go func() {
@@ -459,7 +461,7 @@ func (a *App) emitLogWithSourceMeta(source string, level string, message string,
 	a.saveAppStateLocked()
 	a.mu.Unlock()
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "log", summarizeLogEntry(entry))
+		runtime.EventsEmit(a.ctx, "log", entry)
 	}
 }
 
@@ -1373,10 +1375,7 @@ func trimPersistedRequests(records []RequestRecord) []RequestRecord {
 	}
 	out := make([]RequestRecord, 0, len(records)-start)
 	for _, record := range records[start:] {
-		cloned := record
-		cloned.ReqBody = trimStatePayload(record.ReqBody)
-		cloned.RespBody = trimStatePayload(record.RespBody)
-		out = append(out, cloned)
+		out = append(out, record)
 	}
 	return out
 }

@@ -100,6 +100,8 @@ func (s *bridgeStore) migrate(ctx context.Context) error {
 			expires_at TEXT,
 			created_at TEXT NOT NULL
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_memories_conversation ON tool_memories(conversation_key, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_memories_tool_name ON tool_memories(tool_name, created_at)`,
 		`CREATE TABLE IF NOT EXISTS artifacts (
 			id TEXT PRIMARY KEY,
 			conversation_key TEXT,
@@ -132,12 +134,86 @@ func (s *bridgeStore) migrate(ctx context.Context) error {
 			tool_call_id TEXT,
 			created_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS scheduled_tasks (
+			id TEXT PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			schedule_kind TEXT NOT NULL,
+			at TEXT,
+			every_seconds INTEGER DEFAULT 0,
+			timezone TEXT,
+			model TEXT,
+			enabled INTEGER DEFAULT 1,
+			delete_after_run INTEGER DEFAULT 0,
+			next_run_at TEXT,
+			last_run_at TEXT,
+			last_status TEXT,
+			last_error TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_chat ON scheduled_tasks(chat_id, created_at)`,
+		`CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			started_at TEXT NOT NULL,
+			finished_at TEXT,
+			status TEXT,
+			output TEXT,
+			error TEXT
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
+
+	// FTS5 virtual table + triggers for tool_memories full-text search
+	ftsStmts := []string{
+		`CREATE VIRTUAL TABLE IF NOT EXISTS tool_memories_fts USING fts5(
+			id, tool_name, summary, full_result,
+			content='tool_memories',
+			content_rowid='rowid'
+		)`,
+		`CREATE TRIGGER IF NOT EXISTS tool_memories_ai AFTER INSERT ON tool_memories BEGIN
+			INSERT INTO tool_memories_fts(rowid, id, tool_name, summary, full_result)
+			VALUES (new.rowid, new.id, new.tool_name, new.summary, new.full_result);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS tool_memories_ad AFTER DELETE ON tool_memories BEGIN
+			INSERT INTO tool_memories_fts(tool_memories_fts, rowid, id, tool_name, summary, full_result)
+			VALUES ('delete', old.rowid, old.id, old.tool_name, old.summary, old.full_result);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS tool_memories_au AFTER UPDATE ON tool_memories BEGIN
+			INSERT INTO tool_memories_fts(tool_memories_fts, rowid, id, tool_name, summary, full_result)
+			VALUES ('delete', old.rowid, old.id, old.tool_name, old.summary, old.full_result);
+			INSERT INTO tool_memories_fts(rowid, id, tool_name, summary, full_result)
+			VALUES (new.rowid, new.id, new.tool_name, new.summary, new.full_result);
+		END`,
+		`CREATE TABLE IF NOT EXISTS feishu_history_cache (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id TEXT NOT NULL,
+			query TEXT NOT NULL,
+			result TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_feishu_history_cache_lookup ON feishu_history_cache(chat_id, created_at)`,
+	}
+	for _, stmt := range ftsStmts {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+
+	// Backfill FTS index from existing tool_memories rows
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO tool_memories_fts(rowid, id, tool_name, summary, full_result)
+		 SELECT rowid, id, tool_name, summary, full_result FROM tool_memories`); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -245,12 +321,120 @@ func (s *bridgeStore) SaveToolMemory(ctx context.Context, conversationKey, toolN
 	if isError {
 		errFlag = 1
 	}
-	summary := summarizeText(fullResult, 500)
+	summary := smartToolSummary(toolName, fullResult, isError)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO tool_memories
 		(id, conversation_key, tool_name, args_hash, args_json, summary, full_result, is_error, replayable, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
 		id, conversationKey, toolName, argsHash, string(argsJSON), summary, fullResult, errFlag, time.Now().Format(time.RFC3339))
 	return id, err
+}
+
+type ToolMemorySearchResult struct {
+	ID         string  `json:"id"`
+	ToolName   string  `json:"tool_name"`
+	Summary    string  `json:"summary"`
+	FullResult string  `json:"full_result,omitempty"`
+	CreatedAt  string  `json:"created_at"`
+	Rank       float64 `json:"rank"`
+}
+
+func (s *bridgeStore) SearchToolMemory(ctx context.Context, conversationKey string, query string, limit int) ([]ToolMemorySearchResult, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	safeQuery := sanitizeFTSQuery(query)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT m.id, m.tool_name, m.summary, m.created_at, rank
+		 FROM tool_memories_fts fts
+		 JOIN tool_memories m ON m.rowid = fts.rowid
+		 WHERE tool_memories_fts MATCH ? AND m.conversation_key = ?
+		 ORDER BY rank
+		 LIMIT ?`, safeQuery, conversationKey, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []ToolMemorySearchResult
+	for rows.Next() {
+		var r ToolMemorySearchResult
+		if err := rows.Scan(&r.ID, &r.ToolName, &r.Summary, &r.CreatedAt, &r.Rank); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+func (s *bridgeStore) FetchToolMemory(ctx context.Context, id string) (ToolMemorySearchResult, error) {
+	if s == nil || s.db == nil {
+		return ToolMemorySearchResult{}, fmt.Errorf("store not initialized")
+	}
+	var r ToolMemorySearchResult
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, tool_name, summary, full_result, created_at FROM tool_memories WHERE id = ?`,
+		id).Scan(&r.ID, &r.ToolName, &r.Summary, &r.FullResult, &r.CreatedAt)
+	return r, err
+}
+
+func sanitizeFTSQuery(query string) string {
+	query = strings.TrimSpace(query)
+	query = strings.NewReplacer(
+		`"`, `""`,
+		`*`, ``,
+		`(`, ``,
+		`)`, ``,
+		`:`, ` `,
+	).Replace(query)
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return `""`
+	}
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = `"` + w + `"`
+	}
+	return strings.Join(quoted, " OR ")
+}
+
+func (s *bridgeStore) SaveFeishuHistoryCache(ctx context.Context, chatID, query, result string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO feishu_history_cache (chat_id, query, result, created_at) VALUES (?, ?, ?, ?)`,
+		chatID, query, result, time.Now().Format(time.RFC3339))
+	return err
+}
+
+func (s *bridgeStore) LoadFeishuHistoryCache(ctx context.Context, chatID, query string, maxAge time.Duration) (string, bool) {
+	if s == nil || s.db == nil {
+		return "", false
+	}
+	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339)
+	var result string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT result FROM feishu_history_cache WHERE chat_id = ? AND query = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1`,
+		chatID, query, cutoff).Scan(&result)
+	if err != nil {
+		return "", false
+	}
+	return result, true
+}
+
+func (s *bridgeStore) CleanupStaleHistoryCache(ctx context.Context, maxAge time.Duration) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM feishu_history_cache WHERE created_at < ?`, cutoff)
+	return err
 }
 
 func (s *bridgeStore) UpsertSkill(ctx context.Context, skill BridgeSkill) error {
@@ -339,4 +523,180 @@ func (s *bridgeStore) SaveSkillInvocation(ctx context.Context, conversationKey, 
 		VALUES (?, ?, ?, ?, ?)`,
 		conversationKey, skillID, skillName, toolCallID, time.Now().Format(time.RFC3339))
 	return err
+}
+
+func (s *bridgeStore) SaveScheduledTask(ctx context.Context, task ScheduledTask) error {
+	if s == nil || s.db == nil || strings.TrimSpace(task.ID) == "" {
+		return nil
+	}
+	now := time.Now().Format(time.RFC3339)
+	if strings.TrimSpace(task.CreatedAt) == "" {
+		task.CreatedAt = now
+	}
+	task.UpdatedAt = now
+	enabled := 0
+	if task.Enabled {
+		enabled = 1
+	}
+	deleteAfterRun := 0
+	if task.DeleteAfterRun {
+		deleteAfterRun = 1
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO scheduled_tasks
+		(id, chat_id, name, prompt, schedule_kind, at, every_seconds, timezone, model, enabled, delete_after_run, next_run_at, last_run_at, last_status, last_error, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			chat_id=excluded.chat_id,
+			name=excluded.name,
+			prompt=excluded.prompt,
+			schedule_kind=excluded.schedule_kind,
+			at=excluded.at,
+			every_seconds=excluded.every_seconds,
+			timezone=excluded.timezone,
+			model=excluded.model,
+			enabled=excluded.enabled,
+			delete_after_run=excluded.delete_after_run,
+			next_run_at=excluded.next_run_at,
+			last_run_at=excluded.last_run_at,
+			last_status=excluded.last_status,
+			last_error=excluded.last_error,
+			updated_at=excluded.updated_at`,
+		task.ID, task.ChatID, task.Name, task.Prompt, task.ScheduleKind, task.At, task.EverySeconds, task.Timezone, task.Model,
+		enabled, deleteAfterRun, task.NextRunAt, task.LastRunAt, task.LastStatus, task.LastError, task.CreatedAt, task.UpdatedAt)
+	return err
+}
+
+func (s *bridgeStore) ListScheduledTasks(ctx context.Context, chatID string, includeDisabled bool) ([]ScheduledTask, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	query := `SELECT id, chat_id, name, prompt, schedule_kind, at, every_seconds, timezone, model, enabled, delete_after_run, next_run_at, last_run_at, last_status, last_error, created_at, updated_at
+		FROM scheduled_tasks`
+	var args []any
+	var filters []string
+	if strings.TrimSpace(chatID) != "" {
+		filters = append(filters, "chat_id = ?")
+		args = append(args, strings.TrimSpace(chatID))
+	}
+	if !includeDisabled {
+		filters = append(filters, "enabled = 1")
+	}
+	if len(filters) > 0 {
+		query += " WHERE " + strings.Join(filters, " AND ")
+	}
+	query += " ORDER BY next_run_at IS NULL, next_run_at, created_at"
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScheduledTasks(rows)
+}
+
+func (s *bridgeStore) GetScheduledTask(ctx context.Context, id string) (ScheduledTask, error) {
+	if s == nil || s.db == nil {
+		return ScheduledTask{}, sql.ErrNoRows
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, chat_id, name, prompt, schedule_kind, at, every_seconds, timezone, model, enabled, delete_after_run, next_run_at, last_run_at, last_status, last_error, created_at, updated_at
+		FROM scheduled_tasks WHERE id = ?`, strings.TrimSpace(id))
+	if err != nil {
+		return ScheduledTask{}, err
+	}
+	defer rows.Close()
+	tasks, err := scanScheduledTasks(rows)
+	if err != nil {
+		return ScheduledTask{}, err
+	}
+	if len(tasks) == 0 {
+		return ScheduledTask{}, sql.ErrNoRows
+	}
+	return tasks[0], nil
+}
+
+func (s *bridgeStore) DeleteScheduledTask(ctx context.Context, id string) error {
+	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM scheduled_tasks WHERE id = ?`, strings.TrimSpace(id))
+	return err
+}
+
+func (s *bridgeStore) SetScheduledTaskEnabled(ctx context.Context, id string, enabled bool) error {
+	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
+		return nil
+	}
+	value := 0
+	if enabled {
+		value = 1
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE scheduled_tasks SET enabled = ?, updated_at = ? WHERE id = ?`, value, time.Now().Format(time.RFC3339), strings.TrimSpace(id))
+	return err
+}
+
+func (s *bridgeStore) DueScheduledTasks(ctx context.Context, now time.Time, limit int) ([]ScheduledTask, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, chat_id, name, prompt, schedule_kind, at, every_seconds, timezone, model, enabled, delete_after_run, next_run_at, last_run_at, last_status, last_error, created_at, updated_at
+		FROM scheduled_tasks
+		WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+		ORDER BY next_run_at
+		LIMIT ?`, now.Format(time.RFC3339), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScheduledTasks(rows)
+}
+
+func (s *bridgeStore) FinishScheduledTaskRun(ctx context.Context, task ScheduledTask, status string, output string, errText string, finishedAt time.Time, nextRunAt string, enabled bool) error {
+	if s == nil || s.db == nil || strings.TrimSpace(task.ID) == "" {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO scheduled_task_runs
+		(task_id, started_at, finished_at, status, output, error)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		task.ID, task.LastRunAt, finishedAt.Format(time.RFC3339), status, summarizeText(output, 4000), summarizeText(errText, 2000)); err != nil {
+		return err
+	}
+	enabledValue := 0
+	if enabled {
+		enabledValue = 1
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE scheduled_tasks SET
+		enabled = ?,
+		next_run_at = ?,
+		last_run_at = ?,
+		last_status = ?,
+		last_error = ?,
+		updated_at = ?
+		WHERE id = ?`,
+		enabledValue, nextRunAt, finishedAt.Format(time.RFC3339), status, summarizeText(errText, 1000), finishedAt.Format(time.RFC3339), task.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func scanScheduledTasks(rows *sql.Rows) ([]ScheduledTask, error) {
+	var out []ScheduledTask
+	for rows.Next() {
+		var task ScheduledTask
+		var enabled int
+		var deleteAfterRun int
+		if err := rows.Scan(&task.ID, &task.ChatID, &task.Name, &task.Prompt, &task.ScheduleKind, &task.At, &task.EverySeconds, &task.Timezone, &task.Model, &enabled, &deleteAfterRun, &task.NextRunAt, &task.LastRunAt, &task.LastStatus, &task.LastError, &task.CreatedAt, &task.UpdatedAt); err != nil {
+			return nil, err
+		}
+		task.Enabled = enabled != 0
+		task.DeleteAfterRun = deleteAfterRun != 0
+		out = append(out, task)
+	}
+	return out, rows.Err()
 }

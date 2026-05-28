@@ -53,7 +53,7 @@ func (m *Manager) executeBridgeSkillTool(ctx context.Context, conversationKey, t
 		}
 		return ToolExecutionResult{Output: "匹配 Skills：\n" + strings.Join(lines, "\n")}
 	case "skill_view":
-		body, skill, err := m.skillService.SkillBody(stringArg(args, "name"))
+		fullBody, skill, err := m.skillService.SkillBody(stringArg(args, "name"))
 		if err != nil {
 			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 		}
@@ -61,10 +61,8 @@ func (m *Manager) executeBridgeSkillTool(ctx context.Context, conversationKey, t
 			_ = m.store.SaveSkillInvocation(ctx, conversationKey, skill.ID, skill.Name, toolCallID)
 		}
 		m.markTurnSkillViewed(conversationKey, skill)
-		if len(body) > 12000 {
-			body = body[:12000] + "\n... [truncated]"
-		}
-		return ToolExecutionResult{Output: renderSkillViewOutput(skill, body)}
+		chunked := chunkAndAnnotateSkillBody(fullBody, args)
+		return ToolExecutionResult{Output: renderSkillViewOutput(skill, chunked)}
 	case "skill_run_script":
 		skillName := stringArg(args, "skill")
 		script := filepath.Base(stringArg(args, "script"))
@@ -198,11 +196,59 @@ func (m *Manager) executeSkillHTTPRequest(ctx context.Context, conversationKey s
 	return ToolExecutionResult{Output: prefix + text}
 }
 
-func renderSkillViewOutput(skill BridgeSkill, body string) string {
+const (
+	defaultSkillViewChunkChars = 6000
+	maxSkillViewChunkChars     = 12000
+	minSkillViewChunkChars     = 1000
+)
+
+type skillChunkResult struct {
+	text    string
+	total   int
+	offset  int
+	end     int
+	hasMore bool
+}
+
+func chunkAndAnnotateSkillBody(body string, args map[string]any) skillChunkResult {
+	runes := []rune(body)
+	total := len(runes)
+	offset := intFromAny(args["offset"])
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	chunkSize := intFromAny(args["chunk_size"])
+	if chunkSize <= 0 {
+		chunkSize = defaultSkillViewChunkChars
+	}
+	if chunkSize < minSkillViewChunkChars {
+		chunkSize = minSkillViewChunkChars
+	}
+	if chunkSize > maxSkillViewChunkChars {
+		chunkSize = maxSkillViewChunkChars
+	}
+	end := offset + chunkSize
+	if end > total {
+		end = total
+	}
+	return skillChunkResult{
+		text:    string(runes[offset:end]),
+		total:   total,
+		offset:  offset,
+		end:     end,
+		hasMore: end < total,
+	}
+}
+
+func renderSkillViewOutput(skill BridgeSkill, chunk skillChunkResult) string {
 	scripts := "无"
 	if len(skill.Scripts) > 0 {
 		scripts = strings.Join(skill.Scripts, ", ")
 	}
+	body := chunk.text
 	urls := extractSkillDocumentURLs(body)
 	endpoints := extractSkillDocumentEndpoints(body)
 	baseURLs := uniqueSkillStrings(urls)
@@ -219,7 +265,7 @@ func renderSkillViewOutput(skill BridgeSkill, body string) string {
 	if strings.TrimSpace(body) == "" {
 		body = "[empty SKILL.md]"
 	}
-	return fmt.Sprintf(
+	out := fmt.Sprintf(
 		"Skill: %s\nID: %s\nPath: %s\nScripts: %s\nAllowed tools: %s\nDisable model invocation: %t\n\n结构化摘要：\n- Base URL: %s\n- 推荐端点/路径: %s\n- 必须请求头: %s\n- 执行约束: 后续 skill_http_request 的 URL 必须来自本 SKILL.md；不要自造域名、路径或把站点域名改成 API 子域。执行脚本前必须确认 scripts 列表中实际存在该脚本。\n\nSKILL.md：\n%s",
 		skill.Name,
 		skill.ID,
@@ -232,6 +278,21 @@ func renderSkillViewOutput(skill BridgeSkill, body string) string {
 		requiredHeaders,
 		body,
 	)
+	if chunk.hasMore {
+		out += fmt.Sprintf(
+			"\n\nbridge_reading:\n"+
+				"  kind: skill_body_chunk\n"+
+				"  offset: %d\n"+
+				"  end_offset: %d\n"+
+				"  next_offset: %d\n"+
+				"  chunk_chars: %d\n"+
+				"  total_chars: %d\n"+
+				"  has_more: true\n"+
+				"  instruction: 如果用户要求完整阅读该 Skill，必须继续调用 skill_view 并把 offset 设为 next_offset，直到 has_more=false。禁止基于当前分块推断未读取内容。",
+			chunk.offset, chunk.end, chunk.end, chunk.end-chunk.offset, chunk.total,
+		)
+	}
+	return out
 }
 
 func validateSkillHTTPURLFromDocument(skill BridgeSkill, body string, parsed *url.URL) error {
@@ -469,9 +530,6 @@ func (m *Manager) runSkillScriptCommand(ctx context.Context, skillName, scriptNa
 	cmd.Dir = skill.Path
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(decodeCommandOutput(output))
-	if len(text) > 6000 {
-		text = text[:6000] + "\n... [truncated]"
-	}
 	if runCtx.Err() == context.DeadlineExceeded {
 		return text, fmt.Errorf("script timed out")
 	}

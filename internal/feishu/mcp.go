@@ -27,20 +27,60 @@ type mcpTool struct {
 	InputSchema map[string]any
 }
 
+type mcpResource struct {
+	Server      string
+	URI         string
+	Name        string
+	Title       string
+	Description string
+	MimeType    string
+}
+
+type mcpResourceTemplate struct {
+	Server      string
+	URITemplate string
+	Name        string
+	Title       string
+	Description string
+	MimeType    string
+}
+
+type mcpPrompt struct {
+	Server      string
+	Name        string
+	Title       string
+	Description string
+	Arguments   []mcpPromptArgument
+}
+
+type mcpPromptArgument struct {
+	Name        string
+	Description string
+	Required    bool
+}
+
 type mcpSession struct {
-	server      MCPServerConfig
-	client      *mcpClient
-	tools       []mcpTool
-	available   bool
-	message     string
-	lastChecked string
+	server              MCPServerConfig
+	client              *mcpClient
+	tools               []mcpTool
+	resources           []mcpResource
+	resourceTemplates   []mcpResourceTemplate
+	prompts             []mcpPrompt
+	available           bool
+	message             string
+	lastChecked         string
+	supportsListChanged bool
+	supportsResources   bool
+	supportsPrompts     bool
 }
 
 type MCPRuntime struct {
-	mu       sync.Mutex
-	sessions map[string]*mcpSession
-	tools    map[string]mcpTool
-	statuses []MCPServerStatus
+	mu        sync.Mutex
+	sessions  map[string]*mcpSession
+	tools     map[string]mcpTool
+	resources map[string]mcpResource // key: "server:uri"
+	prompts   map[string]mcpPrompt   // key: "server:name"
+	statuses  []MCPServerStatus
 }
 
 type mcpConfigFile struct {
@@ -79,21 +119,30 @@ type mcpToolCallResult struct {
 }
 
 type mcpClient struct {
-	mu           sync.Mutex
-	cmd          string
-	args         []string
-	env          map[string]string
-	stdin        io.WriteCloser
-	stdout       *bufio.Reader
-	close        func()
-	nextID       int64
-	toolsChanged atomic.Bool
+	mu               sync.Mutex
+	cmd              string
+	args             []string
+	env              map[string]string
+	stdin            io.WriteCloser
+	stdout           *bufio.Reader
+	close            func()
+	nextID           int64
+	toolsChanged     atomic.Bool
+	resourcesChanged atomic.Bool
+	promptsChanged   atomic.Bool
+
+	// Server metadata returned during the initialize handshake (MCP spec §Lifecycle).
+	serverCapabilities map[string]any
+	serverInfo         map[string]any
+	serverProtocol     string
 }
 
 func NewMCPRuntime() *MCPRuntime {
 	return &MCPRuntime{
-		sessions: map[string]*mcpSession{},
-		tools:    map[string]mcpTool{},
+		sessions:  map[string]*mcpSession{},
+		tools:     map[string]mcpTool{},
+		resources: map[string]mcpResource{},
+		prompts:   map[string]mcpPrompt{},
 	}
 }
 
@@ -105,6 +154,8 @@ func (r *MCPRuntime) Sync(ctx context.Context, cfg Config) []MCPServerStatus {
 	nextNames := map[string]bool{}
 	statuses := make([]MCPServerStatus, 0, len(servers))
 	toolMap := map[string]mcpTool{}
+	resourceMap := map[string]mcpResource{}
+	promptMap := map[string]mcpPrompt{}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -140,18 +191,58 @@ func (r *MCPRuntime) Sync(ctx context.Context, cfg Config) []MCPServerStatus {
 				session.tools = withMCPFunctionNames(server.Name, tools)
 				session.available = true
 				session.message = ""
+				session.supportsListChanged = mcpBoolCapability(client.serverCapabilities, "tools", "listChanged")
+				session.supportsResources = client.serverCapabilities != nil && client.serverCapabilities["resources"] != nil
+				session.supportsPrompts = client.serverCapabilities != nil && client.serverCapabilities["prompts"] != nil
+				if session.supportsResources {
+					if resources, templates, err := client.listResources(ctx, server.Name); err == nil {
+						session.resources = resources
+						session.resourceTemplates = templates
+					}
+				}
+				if session.supportsPrompts {
+					if prompts, err := client.listPrompts(ctx, server.Name); err == nil {
+						session.prompts = prompts
+					}
+				}
 			}
 			r.sessions[server.Name] = session
 		} else {
 			session.lastChecked = timestampNow()
-			tools, err := session.listTools(ctx)
-			if err != nil {
-				session.available = false
-				session.message = err.Error()
-			} else {
-				session.tools = withMCPFunctionNames(server.Name, tools)
+			changed := session.client != nil && session.client.toolsChanged.Swap(false)
+			if !changed && session.supportsListChanged && len(session.tools) > 0 {
+				// Server supports listChanged and hasn't notified us — skip re-fetch.
 				session.available = true
 				session.message = ""
+			} else {
+				tools, err := session.listTools(ctx)
+				if err != nil {
+					session.available = false
+					session.message = err.Error()
+				} else {
+					session.tools = withMCPFunctionNames(server.Name, tools)
+					session.available = true
+					session.message = ""
+				}
+			}
+			// Refresh resources if server supports them and notified a change.
+			if session.supportsResources && session.client != nil {
+				resChanged := session.client.resourcesChanged.Swap(false)
+				if resChanged || len(session.resources) == 0 {
+					if resources, templates, err := session.client.listResources(ctx, server.Name); err == nil {
+						session.resources = resources
+						session.resourceTemplates = templates
+					}
+				}
+			}
+			// Refresh prompts if server supports them and notified a change.
+			if session.supportsPrompts && session.client != nil {
+				promptChanged := session.client.promptsChanged.Swap(false)
+				if promptChanged || len(session.prompts) == 0 {
+					if prompts, err := session.client.listPrompts(ctx, server.Name); err == nil {
+						session.prompts = prompts
+					}
+				}
 			}
 		}
 		status.Available = session.available
@@ -162,6 +253,16 @@ func (r *MCPRuntime) Sync(ctx context.Context, cfg Config) []MCPServerStatus {
 			if tool.Function != "" {
 				toolMap[tool.Function] = tool
 			}
+		}
+		status.ResourceCount = len(session.resources)
+		for _, res := range session.resources {
+			status.Resources = append(status.Resources, MCPResourceStatus{URI: res.URI, Name: res.Name, Description: res.Description, MimeType: res.MimeType})
+			resourceMap[res.URI] = res
+		}
+		status.PromptCount = len(session.prompts)
+		for _, p := range session.prompts {
+			status.Prompts = append(status.Prompts, MCPPromptStatus{Name: p.Name, Description: p.Description})
+			promptMap[server.Name+":"+p.Name] = p
 		}
 		statuses = append(statuses, status)
 	}
@@ -175,6 +276,8 @@ func (r *MCPRuntime) Sync(ctx context.Context, cfg Config) []MCPServerStatus {
 	}
 	r.statuses = statuses
 	r.tools = toolMap
+	r.resources = resourceMap
+	r.prompts = promptMap
 	return cloneMCPStatuses(statuses)
 }
 
@@ -191,6 +294,8 @@ func (r *MCPRuntime) Stop() {
 		delete(r.sessions, name)
 	}
 	r.tools = map[string]mcpTool{}
+	r.resources = map[string]mcpResource{}
+	r.prompts = map[string]mcpPrompt{}
 }
 
 func (r *MCPRuntime) Tools() []mcpTool {
@@ -219,6 +324,82 @@ func (r *MCPRuntime) Statuses() []MCPServerStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return cloneMCPStatuses(r.statuses)
+}
+
+func (r *MCPRuntime) Resources() []mcpResource {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]mcpResource, 0, len(r.resources))
+	for _, res := range r.resources {
+		out = append(out, res)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Server == out[j].Server {
+			return out[i].URI < out[j].URI
+		}
+		return out[i].Server < out[j].Server
+	})
+	return out
+}
+
+func (r *MCPRuntime) Prompts() []mcpPrompt {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]mcpPrompt, 0, len(r.prompts))
+	for _, p := range r.prompts {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Server == out[j].Server {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Server < out[j].Server
+	})
+	return out
+}
+
+func (r *MCPRuntime) ReadResource(ctx context.Context, uri string) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("mcp runtime not initialized")
+	}
+	r.mu.Lock()
+	res, ok := r.resources[uri]
+	session := r.sessions[res.Server]
+	if !ok || session == nil || session.client == nil {
+		// URI not in index — try each session that supports resources.
+		for _, s := range r.sessions {
+			if s.client != nil && s.supportsResources {
+				session = s
+				ok = true
+				break
+			}
+		}
+	}
+	r.mu.Unlock()
+	if !ok || session == nil || session.client == nil {
+		return "", fmt.Errorf("mcp resource not found: %s", uri)
+	}
+	return session.client.readResource(ctx, uri)
+}
+
+func (r *MCPRuntime) GetPrompt(ctx context.Context, name string, arguments map[string]any) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("mcp runtime not initialized")
+	}
+	r.mu.Lock()
+	prompt, ok := r.prompts[name]
+	session := r.sessions[prompt.Server]
+	r.mu.Unlock()
+	if !ok || session == nil || session.client == nil {
+		return "", fmt.Errorf("mcp prompt not found: %s", name)
+	}
+	return session.client.getPrompt(ctx, prompt.Name, arguments)
 }
 
 func (r *MCPRuntime) CallTool(ctx context.Context, function string, arguments map[string]any) (mcpToolCallResult, error) {
@@ -803,36 +984,88 @@ func listEnabledMCPTools(ctx context.Context, cfg Config) []mcpTool {
 	return tools
 }
 
-func buildMCPPromptSection(tools []mcpTool) string {
-	if len(tools) == 0 {
+func buildMCPPromptSection(tools []mcpTool, resources []mcpResource, prompts []mcpPrompt) string {
+	if len(tools) == 0 && len(resources) == 0 && len(prompts) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("已启用 MCP 动态工具。需要使用非飞书能力时，优先直接调用下面列出的 `mcp__server__tool` 工具；不要臆造未列出的工具。只有没有对应动态工具时，才退回 `mcp_call`。\n")
-	limit := len(tools)
-	if limit > 80 {
-		limit = 80
-	}
-	for i := 0; i < limit; i++ {
-		tool := tools[i]
-		b.WriteString("- ")
-		b.WriteString(tool.Function)
-		b.WriteString("：")
-		b.WriteString(tool.Server)
-		b.WriteString("/")
-		b.WriteString(tool.Name)
-		if desc := strings.TrimSpace(tool.Description); desc != "" {
-			b.WriteString("：")
-			b.WriteString(summarizeText(desc, 140))
+	if len(tools) > 0 {
+		b.WriteString("已启用 MCP 动态工具。需要使用非飞书能力时，优先直接调用下面列出的 `mcp__server__tool` 工具；不要臆造未列出的工具。只有没有对应动态工具时，才退回 `mcp_call`。\n")
+		limit := len(tools)
+		if limit > 80 {
+			limit = 80
 		}
-		b.WriteString("\n")
+		for i := 0; i < limit; i++ {
+			tool := tools[i]
+			b.WriteString("- ")
+			b.WriteString(tool.Function)
+			b.WriteString("：")
+			b.WriteString(tool.Server)
+			b.WriteString("/")
+			b.WriteString(tool.Name)
+			if desc := strings.TrimSpace(tool.Description); desc != "" {
+				b.WriteString("：")
+				b.WriteString(summarizeText(desc, 140))
+			}
+			b.WriteString("\n")
+		}
+		if len(tools) > limit {
+			b.WriteString(fmt.Sprintf("- ... 另有 %d 个 MCP 工具未列出；未列出的工具不要臆造调用。\n", len(tools)-limit))
+		}
 	}
-	if len(tools) > limit {
-		b.WriteString(fmt.Sprintf("- ... 另有 %d 个 MCP 工具未列出；未列出的工具不要臆造调用。\n", len(tools)-limit))
+	if len(resources) > 0 {
+		b.WriteString("\n可用 MCP 资源（可用 mcp_resource_read 读取）：\n")
+		limit := len(resources)
+		if limit > 30 {
+			limit = 30
+		}
+		for i := 0; i < limit; i++ {
+			res := resources[i]
+			b.WriteString("- ")
+			b.WriteString(res.URI)
+			if name := strings.TrimSpace(res.Title); name != "" {
+				b.WriteString("：" + name)
+			} else if name := strings.TrimSpace(res.Name); name != "" {
+				b.WriteString("：" + name)
+			}
+			if desc := strings.TrimSpace(res.Description); desc != "" {
+				b.WriteString("：" + summarizeText(desc, 80))
+			}
+			b.WriteString("\n")
+		}
+		if len(resources) > limit {
+			b.WriteString(fmt.Sprintf("- ... 另有 %d 个资源未列出。\n", len(resources)-limit))
+		}
+	}
+	if len(prompts) > 0 {
+		b.WriteString("\n可用 MCP 提示词模板（可用 mcp_prompt_get 获取）：\n")
+		limit := len(prompts)
+		if limit > 30 {
+			limit = 30
+		}
+		for i := 0; i < limit; i++ {
+			p := prompts[i]
+			b.WriteString("- ")
+			b.WriteString(p.Server + ":" + p.Name)
+			if title := strings.TrimSpace(p.Title); title != "" {
+				b.WriteString("：" + title)
+			}
+			if desc := strings.TrimSpace(p.Description); desc != "" {
+				b.WriteString("：" + summarizeText(desc, 80))
+			}
+			b.WriteString("\n")
+		}
+		if len(prompts) > limit {
+			b.WriteString(fmt.Sprintf("- ... 另有 %d 个提示词未列出。\n", len(prompts)-limit))
+		}
 	}
 	return strings.TrimSpace(b.String())
 }
 
+// executeMCPToolContext is the fallback MCP tool execution path used when no
+// MCPRuntime is available (e.g. direct executeToolContextWithConfig calls).
+// Normal Manager operation goes through MCPRuntime.CallTool which reuses a
+// persistent stdio session instead of reconnecting per call.
 func executeMCPToolContext(parent context.Context, cfg Config, args map[string]any) ToolExecutionResult {
 	if !cfg.MCPEnabled {
 		return ToolExecutionResult{Output: "[error] MCP 未启用", IsError: true}
@@ -872,9 +1105,6 @@ func executeMCPToolContext(parent context.Context, cfg Config, args map[string]a
 	text := strings.TrimSpace(result.Text)
 	if text == "" {
 		text = "[no output]"
-	}
-	if len(text) > 4000 {
-		text = text[:4000] + "\n... (truncated; do not infer unseen content)"
 	}
 	return ToolExecutionResult{Output: text, IsError: result.IsError}
 }
@@ -968,6 +1198,205 @@ func (c *mcpClient) listTools(ctx context.Context, serverName string) ([]mcpTool
 	return tools, nil
 }
 
+func (c *mcpClient) listResources(ctx context.Context, serverName string) ([]mcpResource, []mcpResourceTemplate, error) {
+	const maxPages = 20
+	var resources []mcpResource
+	cursor := ""
+	for page := 0; page < maxPages; page++ {
+		params := any(nil)
+		if cursor != "" {
+			params = map[string]any{"cursor": cursor}
+		}
+		var parsed struct {
+			Resources []struct {
+				URI         string `json:"uri"`
+				Name        string `json:"name"`
+				Title       string `json:"title"`
+				Description string `json:"description"`
+				MimeType    string `json:"mimeType"`
+			} `json:"resources"`
+			NextCursor string `json:"nextCursor"`
+		}
+		if err := c.request(ctx, "resources/list", params, &parsed); err != nil {
+			return nil, nil, err
+		}
+		for _, item := range parsed.Resources {
+			uri := strings.TrimSpace(item.URI)
+			if uri == "" {
+				continue
+			}
+			resources = append(resources, mcpResource{
+				Server:      serverName,
+				URI:         uri,
+				Name:        strings.TrimSpace(item.Name),
+				Title:       strings.TrimSpace(item.Title),
+				Description: strings.TrimSpace(item.Description),
+				MimeType:    strings.TrimSpace(item.MimeType),
+			})
+		}
+		cursor = strings.TrimSpace(parsed.NextCursor)
+		if cursor == "" {
+			break
+		}
+	}
+
+	var templates []mcpResourceTemplate
+	cursor = ""
+	for page := 0; page < maxPages; page++ {
+		params := any(nil)
+		if cursor != "" {
+			params = map[string]any{"cursor": cursor}
+		}
+		var parsed struct {
+			ResourceTemplates []struct {
+				URITemplate string `json:"uriTemplate"`
+				Name        string `json:"name"`
+				Title       string `json:"title"`
+				Description string `json:"description"`
+				MimeType    string `json:"mimeType"`
+			} `json:"resourceTemplates"`
+			NextCursor string `json:"nextCursor"`
+		}
+		if err := c.request(ctx, "resources/templates/list", params, &parsed); err != nil {
+			// Not all servers support templates; ignore errors.
+			break
+		}
+		for _, item := range parsed.ResourceTemplates {
+			tpl := strings.TrimSpace(item.URITemplate)
+			if tpl == "" {
+				continue
+			}
+			templates = append(templates, mcpResourceTemplate{
+				Server:      serverName,
+				URITemplate: tpl,
+				Name:        strings.TrimSpace(item.Name),
+				Title:       strings.TrimSpace(item.Title),
+				Description: strings.TrimSpace(item.Description),
+				MimeType:    strings.TrimSpace(item.MimeType),
+			})
+		}
+		cursor = strings.TrimSpace(parsed.NextCursor)
+		if cursor == "" {
+			break
+		}
+	}
+	return resources, templates, nil
+}
+
+func (c *mcpClient) readResource(ctx context.Context, uri string) (string, error) {
+	var result struct {
+		Contents []struct {
+			URI      string `json:"uri"`
+			MimeType string `json:"mimeType"`
+			Text     string `json:"text"`
+			Blob     string `json:"blob"`
+		} `json:"contents"`
+	}
+	if err := c.request(ctx, "resources/read", map[string]any{"uri": uri}, &result); err != nil {
+		return "", err
+	}
+	if len(result.Contents) == 0 {
+		return "", nil
+	}
+	// Prefer text content; fall back to blob indicator.
+	if text := strings.TrimSpace(result.Contents[0].Text); text != "" {
+		return text, nil
+	}
+	if blob := strings.TrimSpace(result.Contents[0].Blob); blob != "" {
+		return "[binary content, " + fmt.Sprintf("%d", len(blob)) + " bytes base64]", nil
+	}
+	return "", nil
+}
+
+func (c *mcpClient) listPrompts(ctx context.Context, serverName string) ([]mcpPrompt, error) {
+	const maxPages = 20
+	var prompts []mcpPrompt
+	cursor := ""
+	for page := 0; page < maxPages; page++ {
+		params := any(nil)
+		if cursor != "" {
+			params = map[string]any{"cursor": cursor}
+		}
+		var parsed struct {
+			Prompts []struct {
+				Name        string `json:"name"`
+				Title       string `json:"title"`
+				Description string `json:"description"`
+				Arguments   []struct {
+					Name        string `json:"name"`
+					Description string `json:"description"`
+					Required    bool   `json:"required"`
+				} `json:"arguments"`
+			} `json:"prompts"`
+			NextCursor string `json:"nextCursor"`
+		}
+		if err := c.request(ctx, "prompts/list", params, &parsed); err != nil {
+			return nil, err
+		}
+		for _, item := range parsed.Prompts {
+			name := strings.TrimSpace(item.Name)
+			if name == "" {
+				continue
+			}
+			var args []mcpPromptArgument
+			for _, a := range item.Arguments {
+				args = append(args, mcpPromptArgument{
+					Name:        strings.TrimSpace(a.Name),
+					Description: strings.TrimSpace(a.Description),
+					Required:    a.Required,
+				})
+			}
+			prompts = append(prompts, mcpPrompt{
+				Server:      serverName,
+				Name:        name,
+				Title:       strings.TrimSpace(item.Title),
+				Description: strings.TrimSpace(item.Description),
+				Arguments:   args,
+			})
+		}
+		cursor = strings.TrimSpace(parsed.NextCursor)
+		if cursor == "" {
+			return prompts, nil
+		}
+	}
+	return prompts, nil
+}
+
+func (c *mcpClient) getPrompt(ctx context.Context, name string, arguments map[string]any) (string, error) {
+	params := map[string]any{"name": name}
+	if len(arguments) > 0 {
+		params["arguments"] = arguments
+	}
+	var result struct {
+		Description string `json:"description"`
+		Messages    []struct {
+			Role    string `json:"role"`
+			Content struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := c.request(ctx, "prompts/get", params, &result); err != nil {
+		return "", err
+	}
+	var parts []string
+	if desc := strings.TrimSpace(result.Description); desc != "" {
+		parts = append(parts, desc)
+	}
+	for _, msg := range result.Messages {
+		text := strings.TrimSpace(msg.Content.Text)
+		if text == "" {
+			continue
+		}
+		parts = append(parts, "["+msg.Role+"] "+text)
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// callMCPTool creates a one-shot MCP connection, calls a tool, and tears down
+// the connection. This is the fallback path — production code uses
+// MCPRuntime.CallTool which maintains a persistent stdio session.
 func callMCPTool(ctx context.Context, server MCPServerConfig, toolName string, arguments map[string]any) (mcpToolCallResult, error) {
 	client, _, err := connectMCPServer(ctx, server)
 	if err != nil {
@@ -1031,7 +1460,12 @@ func startMCPClient(ctx context.Context, server MCPServerConfig) (*mcpClient, er
 }
 
 func (c *mcpClient) initialize(ctx context.Context) error {
-	var ignored any
+	var result struct {
+		ProtocolVersion string         `json:"protocolVersion"`
+		Capabilities    map[string]any `json:"capabilities"`
+		ServerInfo      map[string]any `json:"serverInfo"`
+		Instructions    string         `json:"instructions"`
+	}
 	if err := c.request(ctx, "initialize", map[string]any{
 		"protocolVersion": mcpProtocolVersion,
 		"capabilities":    map[string]any{},
@@ -1039,9 +1473,12 @@ func (c *mcpClient) initialize(ctx context.Context) error {
 			"name":    "lingma-ipc-proxy-feishu-bridge",
 			"version": "1.0.0",
 		},
-	}, &ignored); err != nil {
+	}, &result); err != nil {
 		return err
 	}
+	c.serverCapabilities = result.Capabilities
+	c.serverInfo = result.ServerInfo
+	c.serverProtocol = result.ProtocolVersion
 	return c.notify(ctx, "notifications/initialized", nil)
 }
 
@@ -1058,8 +1495,15 @@ func (c *mcpClient) request(ctx context.Context, method string, params any, out 
 		if err != nil {
 			return err
 		}
-		if strings.TrimSpace(resp.Method) == "notifications/tools/list_changed" {
+		switch strings.TrimSpace(resp.Method) {
+		case "notifications/tools/list_changed":
 			c.toolsChanged.Store(true)
+			continue
+		case "notifications/resources/list_changed", "notifications/resources/updated":
+			c.resourcesChanged.Store(true)
+			continue
+		case "notifications/prompts/list_changed":
+			c.promptsChanged.Store(true)
 			continue
 		}
 		if resp.ID == nil {
@@ -1170,8 +1614,29 @@ func mcpContentText(payload map[string]any) string {
 			if item == nil {
 				continue
 			}
-			if text := strings.TrimSpace(fmt.Sprint(item["text"])); text != "" && text != "<nil>" {
-				parts = append(parts, text)
+			ctype := strings.TrimSpace(fmt.Sprint(item["type"]))
+			switch ctype {
+			case "text", "":
+				if text := strings.TrimSpace(fmt.Sprint(item["text"])); text != "" && text != "<nil>" {
+					parts = append(parts, text)
+				}
+			case "image":
+				mime := strings.TrimSpace(fmt.Sprint(item["mimeType"]))
+				if mime == "" || mime == "<nil>" {
+					mime = "image"
+				}
+				parts = append(parts, "[image: "+mime+"]")
+			case "resource":
+				uri := ""
+				if res, ok := item["resource"].(map[string]any); ok {
+					uri = strings.TrimSpace(fmt.Sprint(res["uri"]))
+				}
+				if uri == "" || uri == "<nil>" {
+					uri = "unknown"
+				}
+				parts = append(parts, "[resource: "+uri+"]")
+			default:
+				parts = append(parts, "["+ctype+": content omitted]")
 			}
 		}
 		if len(parts) > 0 {
@@ -1303,6 +1768,29 @@ func splitTOMLInlineParts(body string) []string {
 	return parts
 }
 
+func mcpBoolCapability(capabilities map[string]any, keys ...string) bool {
+	if capabilities == nil {
+		return false
+	}
+	m := capabilities
+	for i, key := range keys {
+		val, ok := m[key]
+		if !ok {
+			return false
+		}
+		if i == len(keys)-1 {
+			b, _ := val.(bool)
+			return b
+		}
+		child, ok := val.(map[string]any)
+		if !ok {
+			return false
+		}
+		m = child
+	}
+	return false
+}
+
 func mcpServerFingerprint(server MCPServerConfig) string {
 	command := strings.TrimSpace(server.Command)
 	if command == "" {
@@ -1382,6 +1870,8 @@ func cloneMCPStatuses(statuses []MCPServerStatus) []MCPServerStatus {
 		out[i] = status
 		out[i].Args = append([]string(nil), status.Args...)
 		out[i].Tools = append([]MCPToolStatus(nil), status.Tools...)
+		out[i].Resources = append([]MCPResourceStatus(nil), status.Resources...)
+		out[i].Prompts = append([]MCPPromptStatus(nil), status.Prompts...)
 	}
 	return out
 }

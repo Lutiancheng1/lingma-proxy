@@ -66,6 +66,239 @@ type StructuredSummary struct {
 	NextStep            string   `json:"next_step,omitempty"`
 }
 
+type toolResultHandling string
+
+const (
+	toolResultPreserve  toolResultHandling = "preserve"
+	toolResultSummarize toolResultHandling = "summarize"
+	toolResultStub      toolResultHandling = "stub"
+	toolResultDiscard   toolResultHandling = "discard"
+)
+
+func classifyToolResult(toolName, content string, isError bool) toolResultHandling {
+	if isError {
+		return toolResultStub
+	}
+	switch toolName {
+	case "lark_drive_search":
+		return toolResultPreserve
+	case "lark_docs_fetch", "lark_skill_view", "skill_view":
+		return toolResultPreserve
+	case "lark_sheets_read":
+		return toolResultPreserve
+	case "web_search", "web_fetch":
+		return toolResultPreserve
+	case "lark_im_search":
+		return toolResultPreserve
+	case "lark_calendar_agenda", "lark_task_list", "lark_base_records", "lark_wiki_search":
+		return toolResultSummarize
+	case "lark_im_send", "lark_docs_create", "lark_sheets_info", "lark_calendar_create":
+		return toolResultStub
+	case "safe_file_list", "authorize_local_path", "list_authorized_paths", "lark_permission_public":
+		return toolResultStub
+	case "mcp_call", "mcp_resource_read", "mcp_prompt_get":
+		return toolResultSummarize
+	case "lark_cli_exec":
+		return toolResultSummarize
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return toolResultDiscard
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err == nil {
+		if fmt.Sprint(payload["kind"]) == "drive_search" {
+			return toolResultPreserve
+		}
+		data, _ := payload["data"].(map[string]any)
+		if reading, ok := data["bridge_reading"].(map[string]any); ok {
+			kind := fmt.Sprint(reading["kind"])
+			if kind == "doc_content_chunk" || kind == "sheet_rows_chunk" {
+				return toolResultPreserve
+			}
+		}
+	}
+	return toolResultSummarize
+}
+
+func extractToolResultSummary(toolName, content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "[empty result]"
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return summarizeText(content, 800)
+	}
+	var lines []string
+	switch toolName {
+	case "lark_calendar_agenda":
+		events, _ := payload["events"].([]any)
+		lines = append(lines, fmt.Sprintf("日程数量：%d", len(events)))
+		for i, ev := range events {
+			if i >= 3 {
+				break
+			}
+			if m, ok := ev.(map[string]any); ok {
+				title := fmt.Sprint(m["summary"])
+				start := fmt.Sprint(m["start_time"])
+				lines = append(lines, fmt.Sprintf("- %s (%s)", title, start))
+			}
+		}
+	case "lark_task_list":
+		tasks, _ := payload["tasks"].([]any)
+		if tasks == nil {
+			tasks, _ = payload["items"].([]any)
+		}
+		lines = append(lines, fmt.Sprintf("任务数量：%d", len(tasks)))
+		for i, t := range tasks {
+			if i >= 3 {
+				break
+			}
+			if m, ok := t.(map[string]any); ok {
+				title := fmt.Sprint(m["summary"])
+				if title == "" {
+					title = fmt.Sprint(m["title"])
+				}
+				lines = append(lines, fmt.Sprintf("- %s", title))
+			}
+		}
+	case "lark_base_records":
+		records, _ := payload["records"].([]any)
+		if records == nil {
+			records, _ = payload["items"].([]any)
+		}
+		lines = append(lines, fmt.Sprintf("记录数量：%d", len(records)))
+	case "web_search":
+		results, _ := payload["results"].([]any)
+		if results == nil {
+			results, _ = payload["items"].([]any)
+		}
+		lines = append(lines, fmt.Sprintf("搜索结果：%d 条", len(results)))
+		for i, r := range results {
+			if i >= 3 {
+				break
+			}
+			if m, ok := r.(map[string]any); ok {
+				title := fmt.Sprint(m["title"])
+				url := fmt.Sprint(m["url"])
+				if title != "" {
+					lines = append(lines, fmt.Sprintf("- %s: %s", title, url))
+				}
+			}
+		}
+	case "lark_im_search":
+		messages, _ := payload["messages"].([]any)
+		if messages == nil {
+			messages, _ = payload["items"].([]any)
+		}
+		lines = append(lines, fmt.Sprintf("消息搜索结果：%d 条", len(messages)))
+		for i, msg := range messages {
+			if i >= 3 {
+				break
+			}
+			if m, ok := msg.(map[string]any); ok {
+				sender := fmt.Sprint(m["sender"])
+				body := fmt.Sprint(m["content"])
+				lines = append(lines, fmt.Sprintf("- %s: %s", sender, summarizeText(body, 80)))
+			}
+		}
+	default:
+		if data, ok := payload["data"].(map[string]any); ok {
+			if br, ok := data["bridge_reading"].(map[string]any); ok {
+				kind := fmt.Sprint(br["kind"])
+				total := fmt.Sprint(br["total_chars"])
+				if total == "" {
+					total = fmt.Sprint(br["total_rows"])
+				}
+				lines = append(lines, fmt.Sprintf("[%s chunk, total=%s]", kind, total))
+			}
+		}
+		if len(lines) == 0 {
+			return summarizeText(content, 800)
+		}
+	}
+	if len(lines) == 0 {
+		return summarizeText(content, 800)
+	}
+	result := strings.Join(lines, "\n")
+	if len([]rune(result)) > 800 {
+		result = string([]rune(result)[:800]) + "..."
+	}
+	return result
+}
+
+func extractToolResultStub(toolName, content string, isError bool) string {
+	status := "成功"
+	if isError {
+		status = "失败"
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return fmt.Sprintf("[%s: %s, empty output]", toolName, status)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return fmt.Sprintf("[%s: %s]", toolName, status)
+	}
+	var key string
+	if id, ok := payload["message_id"].(string); ok && id != "" {
+		key = "message_id=" + id
+	} else if id, ok := payload["doc_token"].(string); ok && id != "" {
+		key = "doc_token=" + id
+	} else if id, ok := payload["spreadsheet_token"].(string); ok && id != "" {
+		key = "spreadsheet_token=" + id
+	} else if id, ok := payload["file_token"].(string); ok && id != "" {
+		key = "file_token=" + id
+	}
+	if key != "" {
+		return fmt.Sprintf("[%s: %s, %s]", toolName, status, key)
+	}
+	return fmt.Sprintf("[%s: %s]", toolName, status)
+}
+
+func smartToolSummary(toolName, fullResult string, isError bool) string {
+	fullResult = strings.TrimSpace(fullResult)
+	if fullResult == "" {
+		return "[empty]"
+	}
+	if isError {
+		lines := strings.Split(fullResult, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && len([]rune(line)) > 10 {
+				return "[ERROR] " + summarizeText(line, 200) + "; tool=" + toolName
+			}
+		}
+		return "[ERROR] tool=" + toolName
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(fullResult), &payload); err == nil {
+		var parts []string
+		if ok, exists := payload["ok"].(bool); exists {
+			if !ok {
+				parts = append(parts, "ok=false")
+			}
+		}
+		if data, ok := payload["data"].(map[string]any); ok {
+			if br, ok := data["bridge_reading"].(map[string]any); ok {
+				parts = append(parts, fmt.Sprintf("chunk=%s", br["kind"]))
+			}
+		}
+		if len(parts) > 0 {
+			summary := strings.Join(parts, ", ")
+			if len([]rune(summary)) < 400 {
+				remaining := 500 - len([]rune(summary)) - 20
+				if remaining > 100 {
+					summary += "; " + summarizeText(fullResult, remaining)
+				}
+			}
+			return summary
+		}
+	}
+	return summarizeText(fullResult, 500)
+}
+
 func DefaultContextConfig() ContextConfig {
 	return ContextConfig{
 		AutoCompact:         true,

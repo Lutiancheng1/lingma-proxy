@@ -34,7 +34,7 @@ func TestApplyBudgetCompactionRespectsWatermark(t *testing.T) {
 		{"role": "user", "content": "继续"},
 	}
 	okBudget := ContextBudgetSnapshot{Watermark: "ok"}
-	unchanged := applyBudgetCompaction(messages, DefaultContextConfig(), okBudget)
+	unchanged := applyBudgetCompaction(messages, DefaultContextConfig(), okBudget, nil)
 	if unchanged[1]["content"] != messages[1]["content"] {
 		t.Fatalf("ok watermark should not compact tool results")
 	}
@@ -42,7 +42,7 @@ func TestApplyBudgetCompactionRespectsWatermark(t *testing.T) {
 	compactBudget := ContextBudgetSnapshot{Watermark: "compact"}
 	cfg := DefaultContextConfig()
 	cfg.ToolResultRetention = 1
-	compacted := applyBudgetCompaction(messages, cfg, compactBudget)
+	compacted := applyBudgetCompaction(messages, cfg, compactBudget, nil)
 	content, _ := compacted[1]["content"].(string)
 	if !strings.Contains(content, "old tool result compacted") {
 		t.Fatalf("compact watermark should compact older tool results, got %q", content)
@@ -59,7 +59,7 @@ func TestForcePromptTooLongCompactionForcesCriticalPath(t *testing.T) {
 	}
 	cfg := DefaultContextConfig()
 	cfg.ToolResultRetention = 1
-	compacted := forcePromptTooLongCompaction(messages, cfg, ContextBudgetSnapshot{Watermark: "ok"})
+	compacted := forcePromptTooLongCompaction(messages, cfg, ContextBudgetSnapshot{Watermark: "ok"}, nil)
 	oldContent, _ := compacted[1]["content"].(string)
 	if !strings.Contains(oldContent, "old tool result compacted") {
 		t.Fatalf("prompt-too-long retry should force compaction, got %q", oldContent)

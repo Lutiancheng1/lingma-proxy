@@ -78,6 +78,10 @@ CardKit final-state layering:
 
 Authorization and permissions: the model must not run `lark-cli auth login` directly. When tool output reports `need_user_authorization` or missing scopes, the Bridge owns the device-flow login, replies with the authorization URL, and waits for the user to authorize before continuing.
 
+Local File Access: safe file tools (`safe_file_read`, `safe_file_write`, `safe_file_list`, `safe_file_delete`) are gated by the Feishu Bridge advanced settings. By default, only the app-managed workspace is writable. Other local paths must be explicitly configured as `read`, `write`, or `delete`. Chat-based `授权目录 /path` or `授权文件 /path` authorization only adds a read-only allowlist entry under the app config directory; it never grants write or delete permission.
+
+Write/Delete Safeguards: overwriting an existing file requires the latest user message to explicitly contain `确认覆盖 <filename or absolute path>`. Deleting files requires both `confirmed: true` and an exact `确认删除 <filename or absolute path>` in the latest user message. Directory deletion is blocked. Path checks resolve real paths and use proper subpath matching to avoid prefix and symlink escapes.
+
 ---
 
 ## 2. Runtime Modes
@@ -363,7 +367,47 @@ Because the GUI is used as an operational console, not a transient preview. User
 
 ---
 
-## 8. Known Boundaries
+## 8. MCP Client
+
+The Feishu Bridge includes a full MCP (Model Context Protocol 2025-06-18) client that connects to external MCP servers via stdio transport. All three capability domains are supported:
+
+| Domain | Operations | Exposure to LLM |
+|--------|-----------|-----------------|
+| **Tools** | `tools/list`, `tools/call` | Direct function calling via `mcp_call` |
+| **Resources** | `resources/list`, `resources/templates/list`, `resources/read` | `mcp_resource_read` pseudo-tool + system prompt listing |
+| **Prompts** | `prompts/list`, `prompts/get` | `mcp_prompt_get` pseudo-tool + system prompt listing |
+
+MCP servers are configured in `config.toml` under `[mcp_servers]` or via JSON config. The client negotiates capabilities during `initialize`, fetches lists in `Sync()`, and routes notifications (`notifications/tools/list_changed`, `notifications/resources/list_changed`, `notifications/prompts/list_changed`) to trigger re-sync.
+
+Key files: `internal/feishu/mcp.go` (client + runtime), `internal/feishu/status.go` (status structs).
+
+---
+
+## 9. Context Management
+
+The Feishu Bridge implements a 4-tier watermark system for context window management:
+
+| Watermark | Threshold | Action |
+|-----------|-----------|--------|
+| `ok` | < 60% | No compaction |
+| `microcompact` | 60–74% | Old tool results truncated to 200-char stubs, keep 3 recent |
+| `compact` | 75–84% | LLM-powered structured summary + keep 2 tool results |
+| `critical` | 85–91% | Force summary + minimal tool results |
+| `blocking` | ≥ 92% | Reject request, prompt user to `/compact` |
+
+**Tool result classification** (`classifyToolResult` in `context_budget.go`): Each tool result is categorized as `preserve` (keep full, e.g. doc/sheet content chunks), `summarize` (structured extraction of key fields), `stub` (metadata only), or `discard` (placeholder). This replaces the previous one-size-fits-all 1200-char truncation.
+
+**Tool memory** (`context_store.go`): All tool results are persisted to SQLite with FTS5 full-text search. The `fetch_tool_memory` tool allows the LLM to search or retrieve previous results by keyword or ID.
+
+**Feishu history search** (`history_backfill.go`): The `feishu_history_search` tool calls `lark-cli im +messages-search` to search chat history beyond the context window, with SQLite caching (10-min TTL).
+
+**Conversation compression** (`manager.go`): When triggered, the LLM compressor generates a structured JSON summary (`StructuredSummary`) preserving goals, decisions, pending actions, entities, and tool memory references. Compressed messages retain first/last 200 characters for context boundaries.
+
+Key files: `internal/feishu/context_budget.go` (watermark + classification), `internal/feishu/context_store.go` (SQLite + FTS5), `internal/feishu/manager.go` (compaction pipeline).
+
+---
+
+## 10. Known Boundaries
 
 - IPC mode still has stronger environment coupling with the local Lingma plugin
 - remote credential detection depends on local Lingma cache / auth file layout
@@ -384,9 +428,12 @@ If you are extending the system, start here:
 - `internal/feishu/manager.go`
 - `internal/feishu/card.go`
 - `internal/feishu/prompt.go`
+- `internal/feishu/mcp.go`
+- `internal/feishu/context_budget.go`
+- `internal/feishu/context_store.go`
 - `desktop/app.go`
 - `desktop/main.go`
 
 ---
 
-Document version: 2026-05-24
+Document version: 2026-05-28

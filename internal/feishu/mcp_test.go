@@ -102,6 +102,182 @@ func TestMCPListToolsPaginates(t *testing.T) {
 	}
 }
 
+func TestMCPListResourcesPaginates(t *testing.T) {
+	client, cleanup := newTestMCPClient(t, func(req mcpRPCMessage) mcpRPCMessage {
+		if req.Method == "tools/list" {
+			data, _ := json.Marshal(map[string]any{"tools": []map[string]any{}})
+			return mcpRPCMessage{JSONRPC: "2.0", ID: req.ID, Result: data}
+		}
+		var params map[string]any
+		if raw, ok := req.Params.(map[string]any); ok {
+			params = raw
+		}
+		cursor, _ := params["cursor"].(string)
+		result := map[string]any{}
+		if cursor == "" {
+			result = map[string]any{
+				"resources":  []map[string]any{{"uri": "file:///a.txt", "name": "a.txt", "mimeType": "text/plain"}},
+				"nextCursor": "p2",
+			}
+		} else {
+			result = map[string]any{
+				"resources": []map[string]any{{"uri": "file:///b.txt", "name": "b.txt", "mimeType": "text/plain"}},
+			}
+		}
+		data, _ := json.Marshal(result)
+		return mcpRPCMessage{JSONRPC: "2.0", ID: req.ID, Result: data}
+	})
+	defer cleanup()
+	resources, _, err := client.listResources(context.Background(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources) != 2 || resources[0].URI != "file:///a.txt" || resources[1].URI != "file:///b.txt" {
+		t.Fatalf("unexpected resources: %#v", resources)
+	}
+}
+
+func TestMCPListPromptsPaginates(t *testing.T) {
+	client, cleanup := newTestMCPClient(t, func(req mcpRPCMessage) mcpRPCMessage {
+		if req.Method == "tools/list" {
+			data, _ := json.Marshal(map[string]any{"tools": []map[string]any{}})
+			return mcpRPCMessage{JSONRPC: "2.0", ID: req.ID, Result: data}
+		}
+		var params map[string]any
+		if raw, ok := req.Params.(map[string]any); ok {
+			params = raw
+		}
+		cursor, _ := params["cursor"].(string)
+		result := map[string]any{}
+		if cursor == "" {
+			result = map[string]any{
+				"prompts":    []map[string]any{{"name": "review", "description": "code review", "arguments": []map[string]any{{"name": "code", "required": true}}}},
+				"nextCursor": "p2",
+			}
+		} else {
+			result = map[string]any{
+				"prompts": []map[string]any{{"name": "explain", "description": "explain code"}},
+			}
+		}
+		data, _ := json.Marshal(result)
+		return mcpRPCMessage{JSONRPC: "2.0", ID: req.ID, Result: data}
+	})
+	defer cleanup()
+	prompts, err := client.listPrompts(context.Background(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompts) != 2 || prompts[0].Name != "review" || prompts[1].Name != "explain" {
+		t.Fatalf("unexpected prompts: %#v", prompts)
+	}
+	if len(prompts[0].Arguments) != 1 || prompts[0].Arguments[0].Name != "code" {
+		t.Fatalf("unexpected arguments: %#v", prompts[0].Arguments)
+	}
+}
+
+func TestMCPReadResource(t *testing.T) {
+	client, cleanup := newTestMCPClient(t, func(req mcpRPCMessage) mcpRPCMessage {
+		if req.Method == "tools/list" {
+			data, _ := json.Marshal(map[string]any{"tools": []map[string]any{}})
+			return mcpRPCMessage{JSONRPC: "2.0", ID: req.ID, Result: data}
+		}
+		result := map[string]any{
+			"contents": []map[string]any{{"uri": "file:///a.txt", "mimeType": "text/plain", "text": "hello world"}},
+		}
+		data, _ := json.Marshal(result)
+		return mcpRPCMessage{JSONRPC: "2.0", ID: req.ID, Result: data}
+	})
+	defer cleanup()
+	text, err := client.readResource(context.Background(), "file:///a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "hello world" {
+		t.Fatalf("unexpected text: %q", text)
+	}
+}
+
+func TestMCPGetPrompt(t *testing.T) {
+	client, cleanup := newTestMCPClient(t, func(req mcpRPCMessage) mcpRPCMessage {
+		if req.Method == "tools/list" {
+			data, _ := json.Marshal(map[string]any{"tools": []map[string]any{}})
+			return mcpRPCMessage{JSONRPC: "2.0", ID: req.ID, Result: data}
+		}
+		result := map[string]any{
+			"description": "Code review prompt",
+			"messages": []map[string]any{
+				{"role": "user", "content": map[string]any{"type": "text", "text": "Please review this code."}},
+			},
+		}
+		data, _ := json.Marshal(result)
+		return mcpRPCMessage{JSONRPC: "2.0", ID: req.ID, Result: data}
+	})
+	defer cleanup()
+	text, err := client.getPrompt(context.Background(), "review", map[string]any{"code": "fmt.Println()"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsAll(text, "Code review prompt", "Please review") {
+		t.Fatalf("unexpected prompt text: %q", text)
+	}
+}
+
+func TestMCPNotificationRouting(t *testing.T) {
+	// Use custom pipes so we can inject notifications before the response.
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+	go func() {
+		defer stdoutWriter.Close()
+		scanner := bufio.NewScanner(stdinReader)
+		for scanner.Scan() {
+			var req mcpRPCMessage
+			if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+				continue
+			}
+			// Send notifications before the actual response.
+			notifications := []mcpRPCMessage{
+				{JSONRPC: "2.0", Method: "notifications/tools/list_changed"},
+				{JSONRPC: "2.0", Method: "notifications/resources/list_changed"},
+				{JSONRPC: "2.0", Method: "notifications/resources/updated"},
+				{JSONRPC: "2.0", Method: "notifications/prompts/list_changed"},
+			}
+			for _, n := range notifications {
+				data, _ := json.Marshal(n)
+				_, _ = stdoutWriter.Write(append(data, '\n'))
+			}
+			// Then send the actual response.
+			data, _ := json.Marshal(map[string]any{"tools": []map[string]any{}})
+			resp := mcpRPCMessage{JSONRPC: "2.0", ID: req.ID, Result: data}
+			respData, _ := json.Marshal(resp)
+			_, _ = stdoutWriter.Write(append(respData, '\n'))
+		}
+	}()
+	client := &mcpClient{
+		stdin:  stdinWriter,
+		stdout: bufio.NewReader(stdoutReader),
+		close: func() {
+			_ = stdinWriter.Close()
+			_ = stdinReader.Close()
+			_ = stdoutReader.Close()
+		},
+	}
+	defer client.close()
+
+	_, err := client.listTools(context.Background(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !client.toolsChanged.Load() {
+		t.Fatal("toolsChanged should be set")
+	}
+	if !client.resourcesChanged.Load() {
+		t.Fatal("resourcesChanged should be set")
+	}
+	if !client.promptsChanged.Load() {
+		t.Fatal("promptsChanged should be set")
+	}
+}
+
 func TestMCPStringifyPreservesIsErrorAndStructuredContent(t *testing.T) {
 	result := stringifyMCPResult(map[string]any{
 		"isError": true,

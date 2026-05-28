@@ -45,7 +45,7 @@ func TestBuildSystemPromptGuidesIdentityAndDriveQueries(t *testing.T) {
 		`lark_skill_view {"name":"lark-drive"}`,
 		"drive permission.public patch",
 		"anyone_readable",
-		"不要使用 drive +apply-permission",
+		"不要使用 `drive +apply-permission`",
 		"has_more/page_token",
 		"任务路由速查",
 		`lark_skill_view {"name":"lark-sheets"}`,

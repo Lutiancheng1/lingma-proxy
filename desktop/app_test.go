@@ -180,6 +180,14 @@ func TestSaveConfigPreservesExistingFeishuBridgeConfig(t *testing.T) {
 			"botName": "aily",
 			"botIdentity": "custom identity",
 			"mcpEnabled": true,
+			"safeFiles": {
+				"enabled": true,
+				"workspaceDir": "/tmp/bridge-workspace",
+				"extraPaths": [
+					{"path": "/tmp/read-only", "mode": "read"},
+					{"path": "/tmp/write", "mode": "write"}
+				]
+			},
 			"groupOnlyAtBot": false,
 			"maxToolRounds": 24
 		}
@@ -214,6 +222,9 @@ func TestSaveConfigPreservesExistingFeishuBridgeConfig(t *testing.T) {
 	}
 	if bridgeCfg.GroupOnlyAtBot {
 		t.Fatalf("groupOnlyAtBot=false was not preserved: %#v", bridgeCfg)
+	}
+	if bridgeCfg.SafeFiles.WorkspaceDir != "/tmp/bridge-workspace" || len(bridgeCfg.SafeFiles.ExtraPaths) != 2 {
+		t.Fatalf("safeFiles config was not preserved: %#v", bridgeCfg.SafeFiles)
 	}
 }
 

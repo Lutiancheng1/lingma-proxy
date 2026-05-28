@@ -1,11 +1,18 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -61,11 +68,14 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_skill_view",
-				"description": "读取本机已安装的官方飞书 lark-cli Skill 文档。用于在执行 lark_cli_exec 前确认真实命令、shortcut、参数和注意事项。支持传入 skill 名称或业务域，例如 lark-sheets/sheets/表格、lark-doc/docs/文档、lark-drive/drive/云盘。",
+				"description": "读取本机已安装的官方飞书 lark-cli Skill 文档。支持分页：如果结果中 bridge_reading.has_more=true，必须用 next_offset 继续调用，直到 has_more=false。用于在执行 lark_cli_exec 前确认真实命令、shortcut、参数和注意事项。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"name": map[string]any{"type": "string", "description": "官方 Skill 名称或业务域，例如 lark-sheets、sheets、docs、drive"},
+						"name":        map[string]any{"type": "string", "description": "官方 Skill 名称或业务域，例如 lark-sheets、sheets、docs、drive"},
+						"offset":      map[string]any{"type": "integer", "description": "正文分块读取起点，首次读取填 0 或省略；继续读取使用上次返回的 bridge_reading.next_offset"},
+						"chunk_size":  map[string]any{"type": "integer", "description": "本次读取的正文字符数，默认 6000，最大 12000"},
+						"require_all": map[string]any{"type": "boolean", "description": "当用户要求完整阅读时设为 true"},
 					},
 					"required": []string{"name"},
 				},
@@ -101,6 +111,80 @@ func toolDefinitions() []map[string]any {
 						},
 					},
 					"required": []string{"server", "tool", "arguments"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "web_search",
+				"description": "搜索公开互联网信息，适合最新资讯、网页资料、天气以外的一般事实查询。返回搜索结果摘要和来源链接。不要用它查询飞书内部数据；飞书内部数据优先用 lark-cli 工具。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query": map[string]any{"type": "string", "description": "搜索关键词"},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "web_fetch",
+				"description": "读取公开 HTTP/HTTPS URL 内容。适合抓取网页、公开 JSON 或 Markdown。默认只做 GET；不要用它访问飞书内部云文档，飞书文档优先用 lark_docs_fetch。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"url": map[string]any{"type": "string", "description": "完整 HTTP/HTTPS URL"},
+					},
+					"required": []string{"url"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "weather_lookup",
+				"description": "查询公开天气信息。需要用户给出城市/地区；如果用户只说“天气”但没有地点，应先追问地点。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"location": map[string]any{"type": "string", "description": "城市或地区，例如 广州、深圳、北京、Shanghai"},
+					},
+					"required": []string{"location"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "schedule_task",
+				"description": "创建、查看和管理 Feishu Bridge 定时任务。仅当用户明确要求提醒、稍后执行、每天/每周/定期检查、持续监控时使用；普通飞书操作不要创建定时任务。定时任务到点后会自动执行 prompt 并投递到当前飞书聊天，任务内部最终回复会自动发送，不要再调用 lark_im_send 自行发送。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action": map[string]any{"type": "string", "enum": []string{"create", "list", "delete", "pause", "resume", "run_now"}, "description": "操作类型"},
+						"task_id": map[string]any{
+							"type":        "string",
+							"description": "已有任务 ID。delete/pause/resume/run_now 时必填",
+						},
+						"name": map[string]any{"type": "string", "description": "任务名称，create 时可选"},
+						"prompt": map[string]any{
+							"type":        "string",
+							"description": "到点后要执行的完整任务描述，create 时必填。写成自包含指令，不要写“提醒我”这种缺少内容的片段。",
+						},
+						"schedule_kind": map[string]any{"type": "string", "enum": []string{"at", "every"}, "description": "at=一次性；every=固定间隔循环"},
+						"at":            map[string]any{"type": "string", "description": "首次/一次性执行时间，推荐 RFC3339，也支持 YYYY-MM-DD HH:mm"},
+						"delay_seconds": map[string]any{"type": "integer", "description": "从现在开始延迟多少秒后执行一次"},
+						"every_seconds": map[string]any{"type": "integer", "description": "循环间隔秒数，至少 60。每天=86400，每周=604800"},
+						"timezone":      map[string]any{"type": "string", "description": "时区，默认 Asia/Shanghai"},
+						"delete_after_run": map[string]any{
+							"type":        "boolean",
+							"description": "一次性任务执行后是否删除/停用，默认停用",
+						},
+					},
+					"required": []string{"action"},
 				},
 			},
 		},
@@ -174,13 +258,51 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_docs_fetch",
-				"description": "读取飞书云文档内容。通过文档 URL 或 token 获取正文。",
+				"description": "读取飞书云文档内容。通过文档 URL 或 token 获取正文。长文档会按正文字符分块返回：如果结果里的 bridge_reading.has_more=true，必须用 next_offset 继续调用，直到 has_more=false 后才能声称已完整阅读全文。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"doc_token": map[string]any{"type": "string", "description": "文档 token 或完整 URL"},
+						"doc_token":   map[string]any{"type": "string", "description": "文档 token 或完整 URL"},
+						"offset":      map[string]any{"type": "integer", "description": "正文分块读取起点，首次读取填 0 或省略；继续读取使用上次返回的 bridge_reading.next_offset"},
+						"chunk_size":  map[string]any{"type": "integer", "description": "本次读取的正文字符数，默认 6000，最大 12000"},
+						"require_all": map[string]any{"type": "boolean", "description": "当用户要求全文/整篇/完整阅读时设为 true；工具会在结果中强化续读提示"},
 					},
 					"required": []string{"doc_token"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "lark_drive_search",
+				"description": "搜索飞书云盘文件/文档，返回真实标题、token、URL、total、has_more 和 page_token。需要完整列表时必须按 page_token 继续分页；回答只能引用结果里的真实 URL，禁止自造链接。类型过滤用 doc_types，例如 docx、sheet、bitable、wiki。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query":       map[string]any{"type": "string", "description": "搜索关键词，可选；不要超过飞书接口限制，长标题应拆成短关键词"},
+						"doc_types":   map[string]any{"type": "string", "description": "逗号分隔类型，例如 docx,sheet,bitable,wiki,file,folder"},
+						"mine":        map[string]any{"type": "boolean", "description": "只查我拥有/我相关的文档"},
+						"creator_ids": map[string]any{"type": "string", "description": "逗号分隔 owner open_id；与 mine 二选一"},
+						"page_token":  map[string]any{"type": "string", "description": "上一页返回的 page_token，用于继续分页"},
+					},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "lark_permission_public",
+				"description": "查看或设置飞书文档的链接公开权限。用于“互联网所有人可见/所有人可阅读/公开访问”。不要用 drive +apply-permission；它只能申请 view/edit，不能改公开权限。设置后必须再次 get 验证。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action":            map[string]any{"type": "string", "enum": []string{"get", "patch"}, "description": "get 查看当前公开权限；patch 修改公开权限"},
+						"token":             map[string]any{"type": "string", "description": "文档 token 或 URL"},
+						"type":              map[string]any{"type": "string", "enum": []string{"doc", "docx", "sheet", "bitable", "wiki", "file", "mindnote", "slides"}, "description": "文档类型；docx 云文档填 docx"},
+						"external_access":   map[string]any{"type": "boolean", "description": "是否允许组织外访问；互联网公开一般为 true"},
+						"link_share_entity": map[string]any{"type": "string", "description": "链接分享实体；互联网所有人可见一般用 anyone_readable"},
+					},
+					"required": []string{"action", "token", "type"},
 				},
 			},
 		},
@@ -262,6 +384,155 @@ func toolDefinitions() []map[string]any {
 				},
 			},
 		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "safe_file_read",
+				"description": "读取本地文本文件内容。只支持 Feishu Bridge 高级设置允许的路径，或用户最新消息通过“授权目录/授权文件 <绝对路径>”授予的只读路径。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string", "description": "文件的绝对路径"},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "safe_file_write",
+				"description": "安全写入本地文本文件。只允许已授权路径；创建新文件默认允许，覆盖已有文件必须 overwrite=true 且用户最新消息明确说“确认覆盖 <文件名或绝对路径>”。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path":      map[string]any{"type": "string", "description": "目标文件绝对路径"},
+						"content":   map[string]any{"type": "string", "description": "要写入的完整文本内容"},
+						"overwrite": map[string]any{"type": "boolean", "description": "是否覆盖已有文件。覆盖时必须有用户最新消息的精确确认。"},
+					},
+					"required": []string{"path", "content"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "safe_file_list",
+				"description": "列出本地已授权路径下的文件和子目录列表。只能列出高级设置允许的路径，或用户口述授权的只读路径。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string", "description": "需要列出的目录绝对路径"},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "authorize_local_path",
+				"description": "向白名单添加本地文件或目录。只能在用户最新消息明确包含“授权目录 <绝对路径>”或“授权文件 <绝对路径>”时调用；模型不能自行授权。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string", "description": "需要授权的绝对路径，例如 /Users/tiancheng/my-project"},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "list_authorized_paths",
+				"description": "列出当前已授权的所有本地路径白名单。",
+				"parameters": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "safe_file_delete",
+				"description": "安全删除本地文件。操作的路径必须在已授权的白名单内。执行该操作必须先向用户申请二次确认，只有当用户在最新的对话中回复了‘确认删除 [文件名]’时，才可以且必须将 confirmed 设为 true 后再次执行删除。禁止擅自绕过二次确认直接删除。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path":      map[string]any{"type": "string", "description": "要删除的文件绝对路径"},
+						"confirmed": map[string]any{"type": "boolean", "description": "必须设为 true 以声明已获得用户口头二次验证。默认或未确认时设为 false。"},
+					},
+					"required": []string{"path", "confirmed"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "mcp_resource_read",
+				"description": "读取 MCP 服务器提供的资源内容。传入资源 URI（从系统提示词中的 MCP 资源列表获取），返回资源的文本内容。适用于读取文件、数据库记录、API 响应等 MCP 暴露的数据源。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"uri": map[string]any{"type": "string", "description": "资源的 URI，例如 file:///project/README.md"},
+					},
+					"required": []string{"uri"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "mcp_prompt_get",
+				"description": "获取 MCP 服务器提供的提示词模板内容。传入提示词名称（格式 server:name）和可选参数，返回结构化消息。适用于调用 MCP 服务器预定义的提示词模板。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":      map[string]any{"type": "string", "description": "提示词名称，格式 server:name，从系统提示词中的 MCP 提示词列表获取"},
+						"arguments": map[string]any{"type": "object", "description": "提示词参数（可选），键值对格式"},
+					},
+					"required": []string{"name"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "feishu_history_search",
+				"description": "搜索当前飞书群聊的历史消息。用于查找之前讨论过的话题、提到的文档/链接、用户说过的话等。这是飞书聊天记录的全文搜索，可以找到上下文窗口之外的历史内容。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query": map[string]any{"type": "string", "description": "搜索关键词"},
+						"limit": map[string]any{"type": "integer", "description": "返回结果数量上限，默认 10"},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "fetch_tool_memory",
+				"description": "检索之前工具调用的完整结果。当上下文中的工具结果被压缩、你需要回顾之前获取的详细数据时使用。支持按关键词搜索或按 ID 精确获取。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action": map[string]any{
+							"type":        "string",
+							"enum":        []string{"search", "get"},
+							"description": "search=按关键词搜索；get=按 ID 精确获取",
+						},
+						"query":     map[string]any{"type": "string", "description": "搜索关键词（action=search 时必填）"},
+						"memory_id": map[string]any{"type": "string", "description": "工具记忆 ID（action=get 时必填，如 tool_abc123）"},
+						"limit":     map[string]any{"type": "integer", "description": "搜索结果数量上限，默认 5"},
+					},
+					"required": []string{"action"},
+				},
+			},
+		},
 	}
 }
 
@@ -325,11 +596,14 @@ func skillToolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "skill_view",
-				"description": "读取一个已启用 Skill 的完整 SKILL.md 正文。只有准备使用该 skill 时再调用，避免浪费上下文。",
+				"description": "读取一个已启用 Skill 的 SKILL.md 正文。支持分页：如果结果中 bridge_reading.has_more=true，必须用 next_offset 继续调用，直到 has_more=false 后才能声称已完整阅读。只有准备使用该 skill 时再调用，避免浪费上下文。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"name": map[string]any{"type": "string", "description": "Skill 名称或 ID"},
+						"name":        map[string]any{"type": "string", "description": "Skill 名称或 ID"},
+						"offset":      map[string]any{"type": "integer", "description": "正文分块读取起点，首次读取填 0 或省略；继续读取使用上次返回的 bridge_reading.next_offset"},
+						"chunk_size":  map[string]any{"type": "integer", "description": "本次读取的正文字符数，默认 6000，最大 12000"},
+						"require_all": map[string]any{"type": "boolean", "description": "当用户要求全文/完整阅读时设为 true；工具会在结果中强化续读提示"},
 					},
 					"required": []string{"name"},
 				},
@@ -471,6 +745,54 @@ func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 		return cmd, nil
 	case "lark_docs_fetch":
 		return []string{"lark-cli", "docs", "+fetch", "--api-version", "v2", "--as", "user", "--doc", stringArg(args, "doc_token")}, nil
+	case "lark_drive_search":
+		cmd := []string{"lark-cli", "drive", "+search", "--as", "user", "--format", "json"}
+		if value := stringArg(args, "query"); value != "" {
+			cmd = append(cmd, "--query", value)
+		}
+		if value := stringArg(args, "doc_types"); value != "" {
+			cmd = append(cmd, "--doc-types", value)
+		}
+		if boolArg(args, "mine") {
+			cmd = append(cmd, "--mine")
+		} else if value := stringArg(args, "creator_ids"); value != "" {
+			cmd = append(cmd, "--creator-ids", value)
+		}
+		if value := stringArg(args, "page_token"); value != "" {
+			cmd = append(cmd, "--page-token", value)
+		}
+		return cmd, nil
+	case "lark_permission_public":
+		action := strings.ToLower(strings.TrimSpace(stringArg(args, "action")))
+		if action == "" {
+			action = "get"
+		}
+		if action != "get" && action != "patch" {
+			return nil, fmt.Errorf("unsupported permission action: %s", action)
+		}
+		token := stringArg(args, "token")
+		docType := stringArg(args, "type")
+		if strings.TrimSpace(token) == "" || strings.TrimSpace(docType) == "" {
+			return nil, fmt.Errorf("token 和 type 不能为空")
+		}
+		params, _ := json.Marshal(map[string]any{"token": token, "type": docType})
+		cmd := []string{"lark-cli", "drive", "permission.public", action, "--as", "user", "--params", string(params)}
+		if action == "patch" {
+			externalAccess := true
+			if value, ok := args["external_access"].(bool); ok {
+				externalAccess = value
+			}
+			entity := stringArg(args, "link_share_entity")
+			if entity == "" {
+				entity = "anyone_readable"
+			}
+			data, _ := json.Marshal(map[string]any{
+				"external_access":   externalAccess,
+				"link_share_entity": entity,
+			})
+			cmd = append(cmd, "--data", string(data), "--yes")
+		}
+		return cmd, nil
 	case "lark_base_records":
 		action := stringArg(args, "action")
 		if action == "" {
@@ -544,8 +866,14 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	if toolName == "mcp_call" {
 		return executeMCPToolContext(parent, cfg, args)
 	}
+	switch toolName {
+	case "web_search", "web_fetch", "weather_lookup":
+		return executeBuiltinWebTool(parent, cfg, toolName, args)
+	case "safe_file_read", "safe_file_write", "safe_file_list", "safe_file_delete", "authorize_local_path", "list_authorized_paths":
+		return executeSafeFileTool(parent, cfg, toolName, args)
+	}
 	if toolName == "lark_skill_view" {
-		output, err := renderLarkSkillView(stringArg(args, "name"))
+		output, err := renderLarkSkillView(stringArg(args, "name"), args)
 		if err != nil {
 			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 		}
@@ -569,11 +897,18 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	result := strings.TrimSpace(decodeCommandOutput(output))
 	perm := parsePermissionRequirement(result)
 	result = normalizeToolOutput(result)
+	if toolName == "lark_docs_fetch" {
+		if chunked, ok := chunkLarkDocsFetchResult(result, args); ok {
+			result = chunked
+		}
+	}
+	if toolName == "lark_sheets_read" {
+		if chunked, ok := chunkLarkSheetsReadResult(result, args); ok {
+			result = chunked
+		}
+	}
 	if result == "" && err == nil {
 		result = "[no output]"
-	}
-	if len(result) > 4000 && !isDriveSearchSummary(result) {
-		result = result[:4000] + "\n... (truncated; do not infer unseen content)"
 	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return ToolExecutionResult{Output: "[error] command timed out (30s)", IsError: true}
@@ -600,6 +935,264 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 		}
 	}
 	return ToolExecutionResult{Output: result}
+}
+
+const (
+	defaultDocsFetchChunkChars = 6000
+	maxDocsFetchChunkChars     = 12000
+	minDocsFetchChunkChars     = 1000
+	defaultSheetsReadMaxRows   = 80
+)
+
+func chunkLarkDocsFetchResult(result string, args map[string]any) (string, bool) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		return "", false
+	}
+	data, _ := payload["data"].(map[string]any)
+	if data == nil {
+		return "", false
+	}
+	document, _ := data["document"].(map[string]any)
+	if document == nil {
+		return "", false
+	}
+	content, ok := document["content"].(string)
+	if !ok {
+		return "", false
+	}
+	runes := []rune(content)
+	total := len(runes)
+	offset := intFromAny(args["offset"])
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	chunkSize := intFromAny(args["chunk_size"])
+	if chunkSize <= 0 {
+		chunkSize = defaultDocsFetchChunkChars
+	}
+	if chunkSize < minDocsFetchChunkChars {
+		chunkSize = minDocsFetchChunkChars
+	}
+	if chunkSize > maxDocsFetchChunkChars {
+		chunkSize = maxDocsFetchChunkChars
+	}
+	end := offset + chunkSize
+	if end > total {
+		end = total
+	}
+	document["content"] = string(runes[offset:end])
+	hasMore := end < total
+	reading := map[string]any{
+		"kind":            "doc_content_chunk",
+		"offset":          offset,
+		"end_offset":      end,
+		"next_offset":     end,
+		"chunk_chars":     end - offset,
+		"total_chars":     total,
+		"has_more":        hasMore,
+		"complete":        !hasMore,
+		"instruction":     "如果用户要求全文、整篇、完整阅读、全文总结或按全文改写，必须继续调用 lark_docs_fetch，并把 offset 设为 next_offset，直到 has_more=false。禁止基于当前分块推断未读取内容。",
+		"chunk_size_hint": fmt.Sprintf("继续读取建议使用 chunk_size=%d", chunkSize),
+	}
+	if boolArg(args, "require_all") && hasMore {
+		reading["required_next_call"] = map[string]any{
+			"tool":       "lark_docs_fetch",
+			"doc_token":  stringArg(args, "doc_token"),
+			"offset":     end,
+			"chunk_size": chunkSize,
+		}
+	}
+	data["bridge_reading"] = reading
+	text, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", false
+	}
+	return string(text), true
+}
+
+func chunkLarkSheetsReadResult(result string, args map[string]any) (string, bool) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		return "", false
+	}
+	data, _ := payload["data"].(map[string]any)
+	if data == nil {
+		return "", false
+	}
+	valueRange, _ := data["valueRange"].(map[string]any)
+	if valueRange == nil {
+		return "", false
+	}
+	values, ok := valueRange["values"].([]any)
+	if !ok || len(values) <= defaultSheetsReadMaxRows {
+		return "", false
+	}
+	totalRows := len(values)
+	valueRange["values"] = values[:defaultSheetsReadMaxRows]
+	nextRange := nextA1Range(stringArg(args, "range"), defaultSheetsReadMaxRows)
+	reading := map[string]any{
+		"kind":          "sheet_rows_chunk",
+		"included_rows": defaultSheetsReadMaxRows,
+		"total_rows":    totalRows,
+		"has_more":      true,
+		"instruction":   "当前只返回了本次范围的前若干行。若用户要求完整表格、完整总结或全部内容，必须继续调用 lark_sheets_read 读取后续 range，禁止基于当前分块推断未读取行。",
+	}
+	if nextRange != "" {
+		reading["next_range"] = nextRange
+		reading["required_next_call"] = map[string]any{
+			"tool":              "lark_sheets_read",
+			"spreadsheet_token": stringArg(args, "spreadsheet_token"),
+			"sheet_id":          stringArg(args, "sheet_id"),
+			"range":             nextRange,
+		}
+	}
+	data["bridge_reading"] = reading
+	text, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", false
+	}
+	return string(text), true
+}
+
+var a1RangePattern = regexp.MustCompile(`^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$`)
+
+func nextA1Range(input string, consumedRows int) string {
+	input = strings.TrimSpace(input)
+	if input == "" || consumedRows <= 0 {
+		return ""
+	}
+	prefix := ""
+	body := input
+	if idx := strings.LastIndex(body, "!"); idx >= 0 {
+		prefix = body[:idx+1]
+		body = body[idx+1:]
+	}
+	match := a1RangePattern.FindStringSubmatch(body)
+	if len(match) != 5 {
+		return ""
+	}
+	startRow := intFromString(match[2])
+	endRow := intFromString(match[4])
+	if startRow <= 0 || endRow <= 0 || endRow < startRow {
+		return ""
+	}
+	nextStart := startRow + consumedRows
+	if nextStart > endRow {
+		return ""
+	}
+	nextEnd := nextStart + consumedRows - 1
+	if nextEnd > endRow {
+		nextEnd = endRow
+	}
+	return fmt.Sprintf("%s%s%d:%s%d", prefix, match[1], nextStart, match[3], nextEnd)
+}
+
+func intFromString(value string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func executeBuiltinWebTool(parent context.Context, cfg Config, toolName string, args map[string]any) ToolExecutionResult {
+	cfg.Context = normalizeContextConfig(cfg.Context)
+	timeout := time.Duration(cfg.Context.SkillHTTPTimeout) * time.Second
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	maxBytes := int64(cfg.Context.SkillHTTPMaxBytes)
+	if maxBytes <= 0 {
+		maxBytes = 5 * 1024 * 1024
+	}
+	switch toolName {
+	case "web_search":
+		query := strings.TrimSpace(stringArg(args, "query"))
+		if query == "" {
+			return ToolExecutionResult{Output: "[error] query 不能为空", IsError: true}
+		}
+		searchURL := "https://s.jina.ai/?q=" + url.QueryEscape(query)
+		return executeHTTPGet(parent, searchURL, timeout, maxBytes, "web_search")
+	case "web_fetch":
+		target := strings.TrimSpace(stringArg(args, "url"))
+		if target == "" {
+			return ToolExecutionResult{Output: "[error] url 不能为空", IsError: true}
+		}
+		return executeHTTPGet(parent, target, timeout, maxBytes, "web_fetch")
+	case "weather_lookup":
+		location := strings.TrimSpace(stringArg(args, "location"))
+		if location == "" {
+			return ToolExecutionResult{Output: "[error] location 不能为空；请先向用户确认城市或地区。", IsError: true}
+		}
+		weatherURL := "https://wttr.in/" + url.PathEscape(location) + "?format=j1"
+		return executeHTTPGet(parent, weatherURL, timeout, maxBytes, "weather_lookup")
+	default:
+		return ToolExecutionResult{Output: "[error] unknown web tool: " + toolName, IsError: true}
+	}
+}
+
+func executeHTTPGet(parent context.Context, target string, timeout time.Duration, maxBytes int64, kind string) ToolExecutionResult {
+	parsed, err := url.Parse(target)
+	if err != nil || parsed == nil {
+		return ToolExecutionResult{Output: "[error] invalid URL: " + target, IsError: true}
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ToolExecutionResult{Output: "[error] only http/https URLs are allowed", IsError: true}
+	}
+	if parsed.Host == "" {
+		return ToolExecutionResult{Output: "[error] invalid URL: " + target, IsError: true}
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+	}
+	req.Header.Set("User-Agent", "Lingma-Feishu-Bridge/1.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+	}
+	truncated := int64(len(body)) > maxBytes
+	if truncated {
+		body = body[:maxBytes]
+	}
+	text := strings.TrimSpace(decodeCommandOutput(body))
+	if text == "" {
+		text = "[empty response]"
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(strings.ToLower(contentType), "text/html") {
+		text = stripHTMLForTool(text)
+	}
+	out := map[string]any{
+		"ok":           resp.StatusCode >= 200 && resp.StatusCode < 300,
+		"kind":         kind,
+		"status":       resp.Status,
+		"url":          parsed.String(),
+		"content_type": contentType,
+		"truncated":    truncated,
+		"content":      text,
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	return ToolExecutionResult{Output: string(data), IsError: resp.StatusCode < 200 || resp.StatusCode >= 300}
+}
+
+var htmlTagPattern = regexp.MustCompile(`(?s)<[^>]+>`)
+
+func stripHTMLForTool(text string) string {
+	text = htmlTagPattern.ReplaceAllString(text, " ")
+	text = strings.NewReplacer("&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", `"`, "&#39;", "'").Replace(text)
+	return strings.Join(strings.Fields(text), " ")
 }
 
 func appendLarkCLICorrection(cmdArgs []string, result string) string {
@@ -675,10 +1268,49 @@ func executeToolContextWithRuntime(parent context.Context, cfg Config, runtime *
 		if text == "" {
 			text = "[no output]"
 		}
-		if len(text) > 4000 {
-			text = text[:4000] + "\n... (truncated; do not infer unseen content)"
-		}
 		return ToolExecutionResult{Output: text, IsError: result.IsError}
+	}
+	if toolName == "mcp_resource_read" && runtime != nil {
+		if !cfg.MCPEnabled {
+			return ToolExecutionResult{Output: "[error] MCP 未启用", IsError: true}
+		}
+		uri := strings.TrimSpace(stringArg(args, "uri"))
+		if uri == "" {
+			return ToolExecutionResult{Output: "[error] uri 不能为空", IsError: true}
+		}
+		ctx, cancel := context.WithTimeout(parent, toolTimeout())
+		defer cancel()
+		text, err := runtime.ReadResource(ctx, uri)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		if text == "" {
+			text = "[empty resource]"
+		}
+		return ToolExecutionResult{Output: text}
+	}
+	if toolName == "mcp_prompt_get" && runtime != nil {
+		if !cfg.MCPEnabled {
+			return ToolExecutionResult{Output: "[error] MCP 未启用", IsError: true}
+		}
+		name := strings.TrimSpace(stringArg(args, "name"))
+		if name == "" {
+			return ToolExecutionResult{Output: "[error] name 不能为空", IsError: true}
+		}
+		var arguments map[string]any
+		if raw, ok := args["arguments"].(map[string]any); ok {
+			arguments = raw
+		}
+		ctx, cancel := context.WithTimeout(parent, toolTimeout())
+		defer cancel()
+		text, err := runtime.GetPrompt(ctx, name, arguments)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		if text == "" {
+			text = "[empty prompt]"
+		}
+		return ToolExecutionResult{Output: text}
 	}
 	return executeToolContextWithConfig(parent, cfg, toolName, args)
 }
@@ -1186,4 +1818,481 @@ func uniqueNonEmpty(items []string) []string {
 
 func toolTimeout() time.Duration {
 	return 30 * time.Second
+}
+
+// ==========================================
+// 动态路径授权与安全文件读写自研系统
+// ==========================================
+
+type contextKey string
+
+const (
+	senderIDKey    contextKey = "sender_id"
+	userMessageKey contextKey = "user_message"
+)
+
+func getUserMessage(ctx context.Context) string {
+	if v := ctx.Value(userMessageKey); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+type allowedPathsConfig struct {
+	AllowedPaths []string `json:"allowed_paths"`
+}
+
+const (
+	safeFileReadMaxBytes  = 1 * 1024 * 1024
+	safeFileWriteMaxBytes = 1 * 1024 * 1024
+	safeFileListMaxItems  = 200
+)
+
+type safeFileAccessLevel int
+
+const (
+	safeFileAccessNone safeFileAccessLevel = iota
+	safeFileAccessRead
+	safeFileAccessWrite
+	safeFileAccessDelete
+)
+
+var (
+	allowedPathsFilePathOverride  string
+	errSafeFileAccessPathNotExist = fmt.Errorf("path does not exist")
+)
+
+func allowedPathsFilePath() (string, error) {
+	if allowedPathsFilePathOverride != "" {
+		return allowedPathsFilePathOverride, nil
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return "", err
+		}
+		configDir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(configDir, "lingma-proxy", "allowed_paths.json"), nil
+}
+
+func loadAllowedPaths() []string {
+	path, err := allowedPathsFilePath()
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var cfg allowedPathsConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+	return cfg.AllowedPaths
+}
+
+func saveAllowedPaths(paths []string) error {
+	path, err := allowedPathsFilePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	cfg := allowedPathsConfig{AllowedPaths: paths}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func safeFileConfiguredRoots(cfg Config) []SafeFilePathConfig {
+	cfg = NormalizeConfig(cfg)
+	if !cfg.SafeFiles.Enabled {
+		return nil
+	}
+	roots := []SafeFilePathConfig{
+		{Path: cfg.SafeFiles.WorkspaceDir, Mode: "delete"},
+	}
+	roots = append(roots, cfg.SafeFiles.ExtraPaths...)
+	return roots
+}
+
+func absCleanPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("path is empty")
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("path must be absolute")
+	}
+	return filepath.Abs(filepath.Clean(path))
+}
+
+func canonicalExistingPath(path string) (string, error) {
+	abs, err := absCleanPath(path)
+	if err != nil {
+		return "", err
+	}
+	realPath, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return abs, errSafeFileAccessPathNotExist
+		}
+		return "", err
+	}
+	return filepath.Abs(filepath.Clean(realPath))
+}
+
+func canonicalAccessPath(path string) (string, error) {
+	abs, err := absCleanPath(path)
+	if err != nil {
+		return "", err
+	}
+	if realPath, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Abs(filepath.Clean(realPath))
+	}
+	parent := abs
+	for {
+		parent = filepath.Dir(parent)
+		if parent == "." || parent == string(filepath.Separator) || parent == "" {
+			break
+		}
+		if realParent, err := filepath.EvalSymlinks(parent); err == nil {
+			rel, relErr := filepath.Rel(parent, abs)
+			if relErr != nil {
+				return "", relErr
+			}
+			parts := append([]string{realParent}, strings.Split(rel, string(filepath.Separator))...)
+			return filepath.Abs(filepath.Clean(filepath.Join(parts...)))
+		}
+	}
+	return abs, nil
+}
+
+func isSubpath(root, target string) bool {
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	targetAbs, err := filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
+}
+
+func safeFileAccessForPath(cfg Config, targetPath string) safeFileAccessLevel {
+	cfg = NormalizeConfig(cfg)
+	if !cfg.SafeFiles.Enabled {
+		return safeFileAccessNone
+	}
+	target, err := canonicalAccessPath(targetPath)
+	if err != nil {
+		return safeFileAccessNone
+	}
+	level := safeFileAccessNone
+	for _, rule := range safeFileConfiguredRoots(cfg) {
+		root, rootErr := canonicalAccessPath(rule.Path)
+		if rootErr != nil {
+			continue
+		}
+		if !isSubpath(root, target) {
+			continue
+		}
+		switch normalizeSafeFileMode(rule.Mode) {
+		case "delete":
+			if level < safeFileAccessDelete {
+				level = safeFileAccessDelete
+			}
+		case "write":
+			if level < safeFileAccessWrite {
+				level = safeFileAccessWrite
+			}
+		default:
+			if level < safeFileAccessRead {
+				level = safeFileAccessRead
+			}
+		}
+	}
+	for _, allowed := range loadAllowedPaths() {
+		root, rootErr := canonicalAccessPath(allowed)
+		if rootErr == nil && isSubpath(root, target) && level < safeFileAccessRead {
+			level = safeFileAccessRead
+		}
+	}
+	return level
+}
+
+func hasSafeFileAccess(cfg Config, targetPath string, required safeFileAccessLevel) bool {
+	return safeFileAccessForPath(cfg, targetPath) >= required
+}
+
+func deniedPathResult(path string) ToolExecutionResult {
+	return ToolExecutionResult{
+		Output:  fmt.Sprintf("[error] 拒绝访问：路径 %s 未获得足够权限。读取可让用户发送精确授权消息：授权目录 %s；写入或删除必须到 Feishu Bridge 高级设置的“本机文件访问”中为该路径开启写入/删除权限。", path, filepath.Dir(filepath.Clean(path))),
+		IsError: true,
+	}
+}
+
+func userMessageHasExactPathCommand(userMsg string, commands []string, path string) bool {
+	userMsg = strings.TrimSpace(strings.ReplaceAll(userMsg, "：", ":"))
+	if userMsg == "" {
+		return false
+	}
+	cleanPath := filepath.Clean(path)
+	baseName := filepath.Base(cleanPath)
+	for _, command := range commands {
+		candidates := []string{
+			command + " " + cleanPath,
+			command + "：" + cleanPath,
+			command + ": " + cleanPath,
+			command + " " + baseName,
+			command + "：" + baseName,
+			command + ": " + baseName,
+		}
+		for _, candidate := range candidates {
+			if strings.Contains(userMsg, candidate) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isLikelyBinary(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	return bytes.IndexByte(data, 0) >= 0
+}
+
+func executeSafeFileTool(parent context.Context, cfg Config, toolName string, args map[string]any) ToolExecutionResult {
+	cfg = NormalizeConfig(cfg)
+	if !cfg.SafeFiles.Enabled && toolName != "list_authorized_paths" {
+		return ToolExecutionResult{Output: "[error] 本机文件工具已在 Feishu Bridge 高级设置中关闭。", IsError: true}
+	}
+	if cfg.SafeFiles.Enabled && strings.TrimSpace(cfg.SafeFiles.WorkspaceDir) != "" {
+		_ = os.MkdirAll(cfg.SafeFiles.WorkspaceDir, 0755)
+	}
+	switch toolName {
+	case "safe_file_read":
+		path := stringArg(args, "path")
+		if !hasSafeFileAccess(cfg, path, safeFileAccessRead) {
+			return deniedPathResult(path)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		if info.IsDir() {
+			return ToolExecutionResult{Output: "[error] 目标是目录，请改用 safe_file_list。", IsError: true}
+		}
+		if info.Size() > safeFileReadMaxBytes {
+			return ToolExecutionResult{Output: fmt.Sprintf("[error] 文件过大：%d bytes，当前安全读取上限为 %d bytes。", info.Size(), safeFileReadMaxBytes), IsError: true}
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		if isLikelyBinary(content) {
+			return ToolExecutionResult{Output: "[error] 拒绝读取：目标看起来是二进制文件，safe_file_read 只支持文本文件。", IsError: true}
+		}
+		return ToolExecutionResult{Output: string(content)}
+
+	case "safe_file_write":
+		path := stringArg(args, "path")
+		if !hasSafeFileAccess(cfg, path, safeFileAccessWrite) {
+			return deniedPathResult(path)
+		}
+		cleanPath, err := absCleanPath(path)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		content := stringArg(args, "content")
+		if len([]byte(content)) > safeFileWriteMaxBytes {
+			return ToolExecutionResult{Output: fmt.Sprintf("[error] 写入内容过大：%d bytes，当前安全写入上限为 %d bytes。", len([]byte(content)), safeFileWriteMaxBytes), IsError: true}
+		}
+		parentDir := filepath.Dir(cleanPath)
+		parentInfo, err := os.Stat(parentDir)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] 父目录不存在或不可访问: " + err.Error(), IsError: true}
+		}
+		if !parentInfo.IsDir() {
+			return ToolExecutionResult{Output: "[error] 父路径不是目录。", IsError: true}
+		}
+		if !hasSafeFileAccess(cfg, parentDir, safeFileAccessWrite) {
+			return deniedPathResult(parentDir)
+		}
+		overwrite := boolArg(args, "overwrite")
+		if info, err := os.Stat(cleanPath); err == nil {
+			if info.IsDir() {
+				return ToolExecutionResult{Output: "[error] 目标是目录，不能写入文件内容。", IsError: true}
+			}
+			if !overwrite {
+				return ToolExecutionResult{Output: fmt.Sprintf("[error] 目标文件已存在。覆盖需要用户发送“确认覆盖 %s”，然后再次调用 safe_file_write 并设置 overwrite=true。", filepath.Base(cleanPath)), IsError: true}
+			}
+			if !userMessageHasExactPathCommand(getUserMessage(parent), []string{"确认覆盖"}, cleanPath) {
+				return ToolExecutionResult{Output: fmt.Sprintf("[error] 敏感操作拦截：覆盖文件需要用户最新消息精确包含“确认覆盖 %s”或“确认覆盖 %s”。", filepath.Base(cleanPath), cleanPath), IsError: true}
+			}
+			if err := os.WriteFile(cleanPath, []byte(content), 0644); err != nil {
+				return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+			}
+			return ToolExecutionResult{Output: "success"}
+		} else if !os.IsNotExist(err) {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		file, err := os.OpenFile(cleanPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		_, writeErr := file.WriteString(content)
+		closeErr := file.Close()
+		if writeErr != nil {
+			return ToolExecutionResult{Output: "[error] " + writeErr.Error(), IsError: true}
+		}
+		if closeErr != nil {
+			return ToolExecutionResult{Output: "[error] " + closeErr.Error(), IsError: true}
+		}
+		return ToolExecutionResult{Output: "success"}
+
+	case "safe_file_list":
+		path := stringArg(args, "path")
+		if !hasSafeFileAccess(cfg, path, safeFileAccessRead) {
+			return deniedPathResult(path)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		if !info.IsDir() {
+			return ToolExecutionResult{Output: "[error] 目标不是目录，请改用 safe_file_read。", IsError: true}
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("目录 %s 下的文件和子目录：\n", path))
+		for i, entry := range entries {
+			if i >= safeFileListMaxItems {
+				sb.WriteString(fmt.Sprintf("- ... 已截断，仅显示前 %d 项\n", safeFileListMaxItems))
+				break
+			}
+			info, err := entry.Info()
+			size := int64(0)
+			if err == nil {
+				size = info.Size()
+			}
+			typeStr := "文件"
+			if entry.IsDir() {
+				typeStr = "目录"
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s, %d bytes)\n", entry.Name(), typeStr, size))
+		}
+		return ToolExecutionResult{Output: sb.String()}
+
+	case "authorize_local_path":
+		path := stringArg(args, "path")
+		if strings.TrimSpace(path) == "" {
+			return ToolExecutionResult{Output: "[error] 路径不能为空", IsError: true}
+		}
+		canonicalPath, err := canonicalExistingPath(path)
+		if err != nil {
+			if err == errSafeFileAccessPathNotExist {
+				return ToolExecutionResult{Output: "[error] 授权路径必须是已存在的文件或目录。请先确认路径存在。", IsError: true}
+			}
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		userMsg := getUserMessage(parent)
+		if !userMessageHasExactPathCommand(userMsg, []string{"授权目录", "授权文件"}, canonicalPath) && !userMessageHasExactPathCommand(userMsg, []string{"授权目录", "授权文件"}, filepath.Clean(path)) {
+			return ToolExecutionResult{
+				Output:  fmt.Sprintf("[error] 授权被拒绝：只能在用户最新消息明确包含“授权目录 %s”或“授权文件 %s”时添加白名单。模型不能自行授权。", canonicalPath, canonicalPath),
+				IsError: true,
+			}
+		}
+
+		allowedPaths := loadAllowedPaths()
+		alreadyExists := false
+		for _, p := range allowedPaths {
+			existing, err := canonicalAccessPath(p)
+			if err == nil && existing == canonicalPath {
+				alreadyExists = true
+				break
+			}
+		}
+		if !alreadyExists {
+			allowedPaths = append(allowedPaths, canonicalPath)
+			if err := saveAllowedPaths(allowedPaths); err != nil {
+				return ToolExecutionResult{Output: "[error] 保存白名单失败: " + err.Error(), IsError: true}
+			}
+		}
+		return ToolExecutionResult{Output: fmt.Sprintf("授权成功！路径 %s 已加入只读白名单。写入或删除仍需在 Feishu Bridge 高级设置中显式开启。", canonicalPath)}
+
+	case "list_authorized_paths":
+		allowedPaths := loadAllowedPaths()
+		var sb strings.Builder
+		sb.WriteString("当前本地文件工具配置：\n")
+		if !cfg.SafeFiles.Enabled {
+			sb.WriteString("- 文件工具：已关闭\n")
+			return ToolExecutionResult{Output: sb.String()}
+		}
+		sb.WriteString(fmt.Sprintf("- [workspace 可读写删] %s\n", filepath.Clean(cfg.SafeFiles.WorkspaceDir)))
+		for _, rule := range cfg.SafeFiles.ExtraPaths {
+			sb.WriteString(fmt.Sprintf("- [设置 %s] %s\n", normalizeSafeFileMode(rule.Mode), filepath.Clean(rule.Path)))
+		}
+		for _, p := range allowedPaths {
+			sb.WriteString(fmt.Sprintf("- [口述授权只读] %s\n", p))
+		}
+		return ToolExecutionResult{Output: sb.String()}
+
+	case "safe_file_delete":
+		path := stringArg(args, "path")
+		if !hasSafeFileAccess(cfg, path, safeFileAccessDelete) {
+			return deniedPathResult(path)
+		}
+		cleanPath, err := absCleanPath(path)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+
+		// 1. 优先校验目标是否为有效文件（禁止删除目录，防止灾难）
+		info, err := os.Stat(cleanPath)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		if info.IsDir() {
+			return ToolExecutionResult{Output: "[error] 拒绝删除：目标是目录，只能删除文件。安全起见，禁止直接删除整个目录。", IsError: true}
+		}
+
+		// 2. 二次确认拦截与审计
+		confirmed := boolArg(args, "confirmed")
+		userMsg := getUserMessage(parent)
+		filename := filepath.Base(cleanPath)
+		hasExactConfirm := userMessageHasExactPathCommand(userMsg, []string{"确认删除"}, cleanPath)
+
+		if !confirmed || !hasExactConfirm {
+			return ToolExecutionResult{
+				Output:  fmt.Sprintf("[error] 敏感操作拦截：删除文件 %s 需要用户进行二次验证。请在正文中向用户提出二次确认申请，提示用户发送 '确认删除 %s'。只有当用户发送了确认消息后，你才可以将 confirmed 设为 true 并再次执行删除。", filename, filename),
+				IsError: true,
+			}
+		}
+
+		if err := os.Remove(cleanPath); err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		return ToolExecutionResult{Output: "success"}
+
+	default:
+		return ToolExecutionResult{Output: "[error] 未知的文件安全工具", IsError: true}
+	}
 }

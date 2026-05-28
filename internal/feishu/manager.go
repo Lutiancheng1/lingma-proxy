@@ -206,6 +206,7 @@ type Manager struct {
 	skillService   *BridgeSkillService
 	skillApprovals map[string]map[string]struct{}
 	skillViews     map[string]map[string]struct{}
+	scheduleRunner scheduleRunnerState
 
 	// refreshGuard ensures only one refreshStatus runs at a time. The desktop
 	// polls every ~2.5s; without serialization, a slow `npx skills ls` causes
@@ -230,6 +231,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		mcp:            NewMCPRuntime(),
 		skillApprovals: make(map[string]map[string]struct{}),
 		skillViews:     make(map[string]map[string]struct{}),
+		scheduleRunner: scheduleRunnerState{running: make(map[string]struct{})},
 	}
 	if strings.TrimSpace(opts.DataDir) != "" {
 		if store, err := newBridgeStore(opts.DataDir); err == nil {
@@ -833,6 +835,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	go m.readEvents(runCtx, stdout)
 	go m.readEventStderr(runCtx, stderr)
 	go m.runMCPHealthChecks(runCtx)
+	go m.runScheduledTaskLoop(runCtx)
 	go func() {
 		err := cmd.Wait()
 		m.mcp.Stop()
@@ -867,7 +870,7 @@ func (m *Manager) resetEventBus(ctx context.Context) {
 		return
 	}
 	if trimmed := strings.TrimSpace(decodeCommandOutput(output)); trimmed != "" {
-		m.logf("info", "Feishu bridge 已重置事件总线："+summarizeText(trimmed, 180))
+		m.logf("info", "Feishu bridge 已重置事件总线："+trimmed)
 	} else {
 		m.logf("info", "Feishu bridge 已重置事件总线")
 	}
@@ -1014,7 +1017,7 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 	m.logf("info", fmt.Sprintf("Feishu bridge 收到消息: chat=%s type=%s text=%s",
 		trimmedID(event.ChatID),
 		valueOrFallback(strings.TrimSpace(event.MessageType), "unknown"),
-		summarizeText(event.Content, 120),
+		event.Content,
 	), logMeta)
 	if m.shouldIgnoreGroupMessage(event) {
 		m.logf("info", "Feishu bridge 群聊消息未 @机器人，忽略", logMeta)
@@ -1222,12 +1225,14 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 		m.mu.Unlock()
 	}
 	mcpTools := m.mcp.Tools()
+	mcpResources := m.mcp.Resources()
+	mcpPrompts := m.mcp.Prompts()
 	toolDefs := toolDefinitionsWithMCP(mcpTools)
 	importedSkillListing := ""
 	if m.skillService != nil {
 		importedSkillListing = m.skillService.PromptListing(40)
 	}
-	messages := []map[string]any{{"role": "system", "content": buildSystemPrompt(skills, cfg.BotIdentity, buildMCPPromptSection(mcpTools), importedSkillListing)}}
+	messages := []map[string]any{{"role": "system", "content": buildSystemPrompt(skills, cfg.BotIdentity, buildMCPPromptSection(mcpTools, mcpResources, mcpPrompts), importedSkillListing)}}
 	if larkSkillContext := buildRelevantLarkSkillContext(skills, input.Text); strings.TrimSpace(larkSkillContext) != "" {
 		messages = append(messages, map[string]any{
 			"role":    "system",
@@ -1301,7 +1306,7 @@ conversation:
 		streamHadText := false
 		var resp *llmResponse
 		var err error
-		requestMessages := applyBudgetCompaction(messages, cfg.Context, budget)
+		requestMessages := applyBudgetCompaction(messages, cfg.Context, budget, nil)
 		if plainVisionTurn {
 			m.logf("info", fmt.Sprintf("Feishu bridge 视觉请求开始: model=%s timeout=%s", model, feishuVisionResponseTimeout), logMeta)
 			visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
@@ -1347,7 +1352,7 @@ conversation:
 		}
 		if err != nil && isPromptTooLongError(err) {
 			m.logf("warn", "Feishu bridge 检测到 prompt 过长，自动压缩旧工具结果后重试："+err.Error(), logMeta)
-			requestMessages = forcePromptTooLongCompaction(messages, cfg.Context, budget)
+			requestMessages = forcePromptTooLongCompaction(messages, cfg.Context, budget, nil)
 			if plainVisionTurn {
 				visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
 				resp, err = callLLMPlain(visionCtx, proxyURL, model, requestMessages)
@@ -1421,11 +1426,27 @@ conversation:
 				Tool:  tc.Function.Name,
 				Body:  "参数：`" + summarizeText(argsSummary, 200) + "`",
 			})
+			toolCtx := context.WithValue(ctx, senderIDKey, event.SenderID)
+			toolCtx = context.WithValue(toolCtx, userMessageKey, input.Text)
 			var result ToolExecutionResult
-			if isBridgeSkillTool(tc.Function.Name) {
-				result = m.executeBridgeSkillTool(ctx, conversationKey, tc.ID, tc.Function.Name, args)
+			if tc.Function.Name == "feishu_history_search" {
+				query := stringArg(args, "query")
+				limit := intArg(args, "limit")
+				if limit <= 0 {
+					limit = 10
+				}
+				result = ToolExecutionResult{Output: searchFeishuHistory(toolCtx, event.ChatID, query, limit)}
+				if result.Output == "" {
+					result = ToolExecutionResult{Output: "[未找到匹配的历史消息]"}
+				}
+			} else if tc.Function.Name == "fetch_tool_memory" {
+				result = m.executeFetchToolMemory(toolCtx, conversationKey, args)
+			} else if isScheduleTool(tc.Function.Name) {
+				result = m.executeScheduleTool(toolCtx, conversationKey, model, args)
+			} else if isBridgeSkillTool(tc.Function.Name) {
+				result = m.executeBridgeSkillTool(toolCtx, conversationKey, tc.ID, tc.Function.Name, args)
 			} else {
-				result = executeToolContextWithRuntime(ctx, cfg, m.mcp, tc.Function.Name, args)
+				result = executeToolContextWithRuntime(toolCtx, cfg, m.mcp, tc.Function.Name, args)
 			}
 			toolCallsExecuted = true
 			content := result.Output
@@ -1512,8 +1533,16 @@ conversation:
 			lastToolOutput = content
 			if m.store != nil {
 				if memoryID, err := m.store.SaveToolMemory(ctx, conversationKey, tc.Function.Name, args, content, result.IsError); err == nil && memoryID != "" && len(content) > 1200 {
-					if !shouldPreserveToolResultForModel(content) {
-						content = summarizeText(content, 1200) + "\n\n[完整工具结果已保存为 " + memoryID + "；如需要完整内容，请基于该引用继续请求。]"
+					category := classifyToolResult(tc.Function.Name, content, result.IsError)
+					switch category {
+					case toolResultPreserve:
+						// keep full content
+					case toolResultSummarize:
+						content = extractToolResultSummary(tc.Function.Name, content) + "\n\n[完整工具结果已保存为 " + memoryID + "]"
+					case toolResultStub:
+						content = extractToolResultStub(tc.Function.Name, content, result.IsError) + "\n\n[完整工具结果已保存为 " + memoryID + "]"
+					default:
+						content = summarizeText(content, 600) + "\n\n[完整工具结果已保存为 " + memoryID + "]"
 					}
 				}
 			}
@@ -1577,7 +1606,7 @@ conversation:
 		rawHistory = append(rawHistory, map[string]any{"role": "assistant", "content": replyText})
 	}
 	m.storeConversation(conversationKey, rawHistory)
-	m.logf("info", "Feishu bridge 准备回复: "+summarizeText(replyText, 160), logMeta)
+	m.logf("info", "Feishu bridge 准备回复: "+replyText, logMeta)
 	if card.IsBroken() {
 		replyCtx := ctx
 		if ctx.Err() != nil {
@@ -1606,7 +1635,16 @@ func shouldPreserveToolResultForModel(content string) bool {
 	if err := json.Unmarshal([]byte(content), &payload); err != nil {
 		return false
 	}
-	return strings.TrimSpace(fmt.Sprint(payload["kind"])) == "drive_search"
+	if strings.TrimSpace(fmt.Sprint(payload["kind"])) == "drive_search" {
+		return true
+	}
+	data, _ := payload["data"].(map[string]any)
+	if data == nil {
+		return false
+	}
+	reading, _ := data["bridge_reading"].(map[string]any)
+	kind := strings.TrimSpace(fmt.Sprint(reading["kind"]))
+	return kind == "doc_content_chunk" || kind == "sheet_rows_chunk"
 }
 
 func toolFailureFingerprint(toolName string, args map[string]any, output string) string {
@@ -1795,7 +1833,7 @@ func endsWithAssistantReply(messages []map[string]any, reply string) bool {
 // original — schema and tool_call_id are preserved so the API call still
 // validates. Mirrors the "microcompact" pass in free-code: cheap context
 // pressure relief without losing turn structure.
-func microcompactToolResults(messages []map[string]any) []map[string]any {
+func microcompactToolResults(messages []map[string]any, toolNames map[string]string) []map[string]any {
 	const keepRecent = 3
 	const stubLimit = 200
 	toolIdx := make([]int, 0, len(messages))
@@ -1815,7 +1853,17 @@ func microcompactToolResults(messages []map[string]any) []map[string]any {
 			role, _ := msg["role"].(string)
 			if role == "tool" {
 				cloned := cloneMessage(msg)
-				if content, ok := cloned["content"].(string); ok && len(content) > stubLimit {
+				content, _ := cloned["content"].(string)
+				if len(content) > stubLimit {
+					toolName := ""
+					if callID, ok := cloned["tool_call_id"].(string); ok && toolNames != nil {
+						toolName = toolNames[callID]
+					}
+					cat := classifyToolResult(toolName, content, false)
+					if cat == toolResultPreserve {
+						out[i] = cloned
+						continue
+					}
 					cloned["content"] = summarizeText(content, stubLimit) + "\n[已压缩，仅保留摘要]"
 				}
 				out[i] = cloned
@@ -1827,12 +1875,12 @@ func microcompactToolResults(messages []map[string]any) []map[string]any {
 	return out
 }
 
-func applyBudgetCompaction(messages []map[string]any, cfg ContextConfig, budget ContextBudgetSnapshot) []map[string]any {
+func applyBudgetCompaction(messages []map[string]any, cfg ContextConfig, budget ContextBudgetSnapshot, toolNames map[string]string) []map[string]any {
 	cfg = normalizeContextConfig(cfg)
 	if budget.Watermark == "ok" {
 		return messages
 	}
-	compacted := microcompactToolResults(messages)
+	compacted := microcompactToolResults(messages, toolNames)
 	if budget.Watermark != "critical" && budget.Watermark != "compact" {
 		return compacted
 	}
@@ -1855,6 +1903,49 @@ func applyBudgetCompaction(messages []map[string]any, cfg ContextConfig, budget 
 		compacted[i] = next
 	}
 	return compacted
+}
+
+func (m *Manager) executeFetchToolMemory(ctx context.Context, conversationKey string, args map[string]any) ToolExecutionResult {
+	if m.store == nil {
+		return ToolExecutionResult{Output: "[error] 工具记忆存储未初始化", IsError: true}
+	}
+	action := stringArg(args, "action")
+	switch action {
+	case "get":
+		memoryID := stringArg(args, "memory_id")
+		if memoryID == "" {
+			return ToolExecutionResult{Output: "[error] memory_id 不能为空", IsError: true}
+		}
+		r, err := m.store.FetchToolMemory(ctx, memoryID)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		output := fmt.Sprintf("工具：%s\n创建时间：%s\n\n%s", r.ToolName, r.CreatedAt, r.FullResult)
+		return ToolExecutionResult{Output: output}
+	case "search":
+		query := stringArg(args, "query")
+		if query == "" {
+			return ToolExecutionResult{Output: "[error] query 不能为空", IsError: true}
+		}
+		limit := intArg(args, "limit")
+		if limit <= 0 {
+			limit = 5
+		}
+		results, err := m.store.SearchToolMemory(ctx, conversationKey, query, limit)
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		if len(results) == 0 {
+			return ToolExecutionResult{Output: "[未找到匹配的工具记忆]"}
+		}
+		var lines []string
+		for _, r := range results {
+			lines = append(lines, fmt.Sprintf("- [%s] %s: %s", r.ID, r.ToolName, summarizeText(r.Summary, 120)))
+		}
+		return ToolExecutionResult{Output: "找到 " + fmt.Sprint(len(results)) + " 条匹配记录：\n" + strings.Join(lines, "\n")}
+	default:
+		return ToolExecutionResult{Output: "[error] 不支持的 action: " + action + "，使用 search 或 get", IsError: true}
+	}
 }
 
 // assistant.tool_calls and synthesises a placeholder tool_result for any
@@ -2253,6 +2344,7 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 			"- /skill <name>：查看某个 Skill 摘要\n" +
 			"- /reload-skills：重新扫描用户导入 Skills 和官方 lark-cli Skills\n" +
 			"- /skill-run <skill> <script> confirm：确认执行 Skill scripts/ 下的脚本\n" +
+			"- /schedule：查看当前会话定时任务；支持 list/delete/pause/resume/run\n" +
 			"- /retry：用最近一条用户消息重新跑一次（先自动 /undo）\n" +
 			"- /undo：撤回最近一轮（assistant + 关联 tool 消息）\n" +
 			"- /summary：查看本会话摘要\n" +
@@ -2317,6 +2409,9 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 	case "/skills":
 		m.logf("info", "Feishu bridge 会话命令: /skills", meta)
 		return m.commandSkillsText(), true
+	case "/schedule":
+		m.logf("info", "Feishu bridge 会话命令: /schedule", meta)
+		return m.commandScheduleText(ctx, chatID, model, args), true
 	case "/skill":
 		m.logf("info", "Feishu bridge 会话命令: /skill", meta)
 		if len(args) == 0 {
@@ -3080,7 +3175,7 @@ func summarizeConversation(ctx context.Context, proxyURL string, model string, e
 	if err != nil {
 		return "", StructuredSummary{}, err
 	}
-	prompt := "请用中文把下面这段飞书工作会话压缩成可续接的结构化摘要。只输出 JSON，不要 Markdown，不要前言。字段必须包含：primary_goal、user_preferences、confirmed_decisions、pending_actions、open_questions、important_entities、artifacts、tool_results、errors_and_recoveries、next_step。数组字段输出字符串数组。摘要要保留授权状态、待继续任务、关键文档/文件/图片引用和工具失败恢复信息。"
+	prompt := "请用中文把下面这段飞书工作会话压缩成可续接的结构化摘要。只输出 JSON，不要 Markdown，不要前言。字段必须包含：primary_goal、user_preferences、confirmed_decisions、pending_actions、open_questions、important_entities、artifacts、tool_results、errors_and_recoveries、next_step。数组字段输出字符串数组。特别关注：(a) 用户最近的修正和偏好变更，权重最高；(b) 最近3轮的工具调用结果；(c) 未完成的待办事项和开放问题。保留所有文档 token、URL、记录 ID、文件路径等精确引用，不要泛化为'某文档'。如果会话中包含 [完整工具结果已保存为 tool_xxx] 标记，在 tool_results 数组中保留该引用 ID。摘要要保留授权状态、待继续任务、关键文档/文件/图片引用和工具失败恢复信息。"
 	if strings.TrimSpace(existingSummary) != "" {
 		prompt += "\n\n已有摘要（如有价值可合并更新）：\n" + strings.TrimSpace(existingSummary)
 	}
@@ -3117,7 +3212,15 @@ func sanitizeMessagesForSummary(history []map[string]any) []map[string]any {
 		next := cloneMessage(msg)
 		content, ok := next["content"].(string)
 		if ok && len(content) > 1800 {
-			next["content"] = summarizeText(content, 900) + "\n[content compacted for summary]"
+			role, _ := next["role"].(string)
+			if role == "tool" {
+				next["content"] = extractToolResultSummary("", content) + "\n[content compacted for summary]"
+			} else {
+				runes := []rune(content)
+				if len(runes) > 1800 {
+					next["content"] = string(runes[:200]) + "\n...(中间内容已省略)...\n" + string(runes[len(runes)-200:]) + "\n[content compacted for summary]"
+				}
+			}
 		}
 		if contentBlocks, ok := next["content"].([]any); ok {
 			blocks := make([]any, 0, len(contentBlocks))
@@ -3332,28 +3435,32 @@ func compactJSON(value any) string {
 	if err != nil {
 		return "{}"
 	}
-	text := strings.TrimSpace(string(data))
-	if len(text) > 280 {
-		return text[:280] + "..."
-	}
-	return text
+	return strings.TrimSpace(string(data))
 }
 
 func summarizeText(text string, limit int) string {
 	text = strings.TrimSpace(strings.ReplaceAll(text, "\n", " "))
 	text = strings.Join(strings.Fields(text), " ")
-	if limit <= 0 || len(text) <= limit {
+	if limit <= 0 {
 		return text
 	}
-	return text[:limit] + "..."
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "..."
 }
 
 func truncatePreserveLines(text string, limit int) string {
 	text = strings.TrimSpace(text)
-	if limit <= 0 || len(text) <= limit {
+	if limit <= 0 {
 		return text
 	}
-	return text[:limit] + "\n... (truncated)"
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "\n... (truncated)"
 }
 
 func trimmedID(value string) string {
@@ -3459,11 +3566,11 @@ func isPromptTooLongError(err error) bool {
 	return false
 }
 
-func forcePromptTooLongCompaction(messages []map[string]any, cfg ContextConfig, budget ContextBudgetSnapshot) []map[string]any {
+func forcePromptTooLongCompaction(messages []map[string]any, cfg ContextConfig, budget ContextBudgetSnapshot, toolNames map[string]string) []map[string]any {
 	if budget.Watermark != "critical" && budget.Watermark != "compact" {
 		budget.Watermark = "critical"
 	}
-	return applyBudgetCompaction(messages, cfg, budget)
+	return applyBudgetCompaction(messages, cfg, budget, toolNames)
 }
 
 func firstJSONStringField(data []byte, field string) string {

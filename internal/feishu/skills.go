@@ -297,7 +297,7 @@ func missingSkillNames(skills []SkillStatus, limit int) []string {
 	return missing
 }
 
-func renderLarkSkillView(name string) (string, error) {
+func renderLarkSkillView(name string, args map[string]any) (string, error) {
 	status, err := resolveLarkSkillStatus(name, nil)
 	if err != nil {
 		return "", err
@@ -306,7 +306,7 @@ func renderLarkSkillView(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return formatLarkSkillGuide(status, text, 12000), nil
+	return formatLarkSkillGuide(status, text, args), nil
 }
 
 func buildRelevantLarkSkillContext(skills []SkillStatus, userText string) string {
@@ -324,7 +324,7 @@ func buildRelevantLarkSkillContext(skills []SkillStatus, userText string) string
 		if err != nil {
 			continue
 		}
-		sections = append(sections, formatLarkSkillGuide(status, text, 5200))
+		sections = append(sections, formatLarkSkillGuide(status, text, map[string]any{"chunk_size": 5200}))
 		if len(sections) >= 3 {
 			break
 		}
@@ -453,7 +453,7 @@ func readLarkSkillText(status SkillStatus) (string, error) {
 	return string(data), nil
 }
 
-func formatLarkSkillGuide(status SkillStatus, text string, limit int) string {
+func formatLarkSkillGuide(status SkillStatus, text string, args map[string]any) string {
 	body := stripYAMLFrontmatter(text)
 	body = strings.TrimSpace(body)
 	title := status.Name
@@ -481,10 +481,49 @@ func formatLarkSkillGuide(status SkillStatus, text string, limit int) string {
 			lines = append(lines, "- "+ref)
 		}
 	}
-	lines = append(lines, "", "SKILL.md 正文：", body)
+
+	// Chunk the body with pagination support.
+	runes := []rune(body)
+	total := len(runes)
+	offset := intFromAny(args["offset"])
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	chunkSize := intFromAny(args["chunk_size"])
+	if chunkSize <= 0 {
+		chunkSize = defaultSkillViewChunkChars
+	}
+	if chunkSize < minSkillViewChunkChars {
+		chunkSize = minSkillViewChunkChars
+	}
+	if chunkSize > maxSkillViewChunkChars {
+		chunkSize = maxSkillViewChunkChars
+	}
+	end := offset + chunkSize
+	if end > total {
+		end = total
+	}
+	chunkedBody := string(runes[offset:end])
+
+	lines = append(lines, "", "SKILL.md 正文：", chunkedBody)
 	out := strings.TrimSpace(strings.Join(lines, "\n"))
-	if limit > 0 && len(out) > limit {
-		out = out[:limit] + "\n...[truncated; 如需完整内容请再次调用 lark_skill_view]"
+
+	if end < total {
+		out += fmt.Sprintf(
+			"\n\nbridge_reading:\n"+
+				"  kind: skill_body_chunk\n"+
+				"  offset: %d\n"+
+				"  end_offset: %d\n"+
+				"  next_offset: %d\n"+
+				"  chunk_chars: %d\n"+
+				"  total_chars: %d\n"+
+				"  has_more: true\n"+
+				"  instruction: 如果用户要求完整阅读该 Skill，必须继续调用 lark_skill_view 并把 offset 设为 next_offset，直到 has_more=false。禁止基于当前分块推断未读取内容。",
+			offset, end, end, end-offset, total,
+		)
 	}
 	return out
 }
