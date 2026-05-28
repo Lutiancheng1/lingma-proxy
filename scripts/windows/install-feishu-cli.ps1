@@ -345,6 +345,25 @@ try {
         return $prefix
     }
 
+    function Get-AppManagedNpmPrefix {
+        if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+            return (Join-Path $env:APPDATA "lingma-proxy\npm-global")
+        }
+        return (Join-Path $HOME "AppData\Roaming\lingma-proxy\npm-global")
+    }
+
+    function Test-NpmPermissionError {
+        param([object]$ErrorObject)
+        if ($null -eq $ErrorObject) {
+            return $false
+        }
+        $text = ($ErrorObject | Out-String).ToLowerInvariant()
+        return $text.Contains("eacces") -or
+            $text.Contains("permission denied") -or
+            $text.Contains("access is denied") -or
+            $text.Contains("operation was rejected")
+    }
+
     function Invoke-Checked {
         param(
             [string]$Name,
@@ -383,7 +402,20 @@ try {
         } catch {
             Write-Step "npm install reported an error; checking whether lark-cli is actually usable."
             if (-not (Test-LarkCLI)) {
-                throw
+                if (-not (Test-NpmPermissionError $_)) {
+                    throw
+                }
+                $appPrefix = Get-AppManagedNpmPrefix
+                New-Item -ItemType Directory -Force -Path $appPrefix | Out-Null
+                Write-Step "npm global prefix is not writable; retrying lark-cli install under user directory: $appPrefix"
+                Invoke-Checked "Install lark-cli to user directory" $npm @("install", "-g", "@larksuite/cli", "--prefix", $appPrefix)
+                $env:Path = "$appPrefix;$env:Path"
+                if ($PersistPath) {
+                    Add-ToUserPath $appPrefix
+                }
+                if (-not (Test-LarkCLI)) {
+                    throw "lark-cli is still not executable after user-directory installation."
+                }
             }
         }
     }

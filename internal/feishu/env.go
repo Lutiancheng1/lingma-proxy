@@ -66,6 +66,13 @@ func resolvedPATH() string {
 			segments = append(segments, filepath.Join(appData, "npm"))
 		}
 	}
+	if prefix := appManagedNPMPrefix(); prefix != "" {
+		if runtime.GOOS == "windows" {
+			segments = append(segments, prefix)
+		} else {
+			segments = append(segments, filepath.Join(prefix, "bin"))
+		}
+	}
 	segments = append(segments, npmGlobalPATHSegments(segments)...)
 	segments = uniqueStrings(segments)
 	if selected := selectSupportedNodeBinDir(segments); selected != "" {
@@ -117,6 +124,9 @@ func npmGlobalPrefixes(baseSegments []string) []string {
 	if prefix := strings.TrimSpace(os.Getenv("npm_config_prefix")); prefix != "" {
 		prefixes = append(prefixes, prefix)
 	}
+	if prefix := appManagedNPMPrefix(); prefix != "" {
+		prefixes = append(prefixes, prefix)
+	}
 	if os.Getenv("FEISHU_SKIP_NPM_PREFIX_PROBE") == "1" {
 		return uniqueStrings(prefixes)
 	}
@@ -130,6 +140,22 @@ func npmGlobalPrefixes(baseSegments []string) []string {
 		}
 	}
 	return uniqueStrings(prefixes)
+}
+
+func appManagedNPMPrefix() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+	switch runtime.GOOS {
+	case "windows":
+		if appData := strings.TrimSpace(os.Getenv("APPDATA")); appData != "" {
+			return filepath.Join(appData, "lingma-proxy", "npm-global")
+		}
+		return filepath.Join(home, "AppData", "Roaming", "lingma-proxy", "npm-global")
+	default:
+		return filepath.Join(home, ".config", "lingma-proxy", "npm-global")
+	}
 }
 
 func npmPrefixFromCommand(npmPath string, baseSegments []string, args ...string) string {

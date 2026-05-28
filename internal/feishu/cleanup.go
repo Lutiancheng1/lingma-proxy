@@ -145,6 +145,10 @@ func uninstallLarkCLI(ctx context.Context) error {
 		}
 		return fmt.Errorf("卸载 @larksuite/cli 失败：%s", text)
 	}
+	if prefix := appManagedNPMPrefix(); prefix != "" {
+		cmd := commandContextWithEnv(ctx, "npm", "uninstall", "-g", "@larksuite/cli", "--prefix", prefix)
+		_, _ = cmd.CombinedOutput()
+	}
 	return nil
 }
 
@@ -187,6 +191,12 @@ func npmShimDirs() []string {
 			add(filepath.Join(home, "AppData", "Roaming", "npm"))
 		} else {
 			add(filepath.Join(home, ".npm-global", "bin"))
+		}
+	}
+	if prefix := appManagedNPMPrefix(); prefix != "" {
+		add(prefix)
+		if runtime.GOOS != "windows" {
+			add(filepath.Join(prefix, "bin"))
 		}
 	}
 	if appData := os.Getenv("APPDATA"); appData != "" {

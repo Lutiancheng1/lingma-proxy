@@ -1,6 +1,9 @@
 package feishu
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestNodeVersionSupported(t *testing.T) {
 	cases := []struct {
@@ -96,5 +99,25 @@ func TestSelectPreferredCompatibleNodeVersionRejectsOldVersions(t *testing.T) {
 `
 	if got := selectPreferredCompatibleNodeVersion(output); got != "" {
 		t.Fatalf("selectPreferredCompatibleNodeVersion() = %q, want empty", got)
+	}
+}
+
+func TestNPMInstallNeedsUserPrefix(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "eacces", err: errors.New("npm error code EACCES\npermission denied, mkdir '/usr/local/lib/node_modules/@larksuite'"), want: true},
+		{name: "windows access denied", err: errors.New("Access is denied"), want: true},
+		{name: "other", err: errors.New("network timeout"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := npmInstallNeedsUserPrefix(tc.err); got != tc.want {
+				t.Fatalf("npmInstallNeedsUserPrefix() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

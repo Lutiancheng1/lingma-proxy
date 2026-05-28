@@ -23,6 +23,7 @@ func TestResolvedPATHIncludesWindowsNodeDefaults(t *testing.T) {
 		filepath.Join(`C:\Program Files (x86)`, "nodejs"),
 		filepath.Join(`C:\Users\tester\AppData\Local`, "Programs", "nodejs"),
 		filepath.Join(`C:\Users\tester\AppData\Roaming`, "npm"),
+		filepath.Join(`C:\Users\tester\AppData\Roaming`, "lingma-proxy", "npm-global"),
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("resolved PATH %q missing %q", got, want)

@@ -91,6 +91,24 @@ func installCLI(ctx context.Context, onLine func(string)) error {
 		resetResolvedCommandEnv()
 		if cli := detectBinary("lark-cli", "--version"); cli.Found {
 			emitInstallLine(onLine, "飞书 CLI 安装命令返回错误，但 lark-cli 已可用，继续安装 Skills："+describeBinary(cli))
+		} else if npmInstallNeedsUserPrefix(err) {
+			prefix := appManagedNPMPrefix()
+			if prefix == "" {
+				return fmt.Errorf("install lark-cli failed: command=%q node=%s npm=%s npx=%s error=%w", "npm install -g @larksuite/cli", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
+			}
+			if mkdirErr := os.MkdirAll(prefix, 0755); mkdirErr != nil {
+				return fmt.Errorf("install lark-cli failed: create app npm prefix %s: %w", prefix, mkdirErr)
+			}
+			emitInstallLine(onLine, fmt.Sprintf("系统 npm 全局目录不可写，改用用户目录安装飞书 CLI: npm install -g @larksuite/cli --prefix %s", prefix))
+			if fallbackErr := runInstallStep(ctx, []string{"npm", "install", "-g", "@larksuite/cli", "--prefix", prefix}, onLine); fallbackErr != nil {
+				return fmt.Errorf("install lark-cli failed: command=%q fallback=%q node=%s npm=%s npx=%s error=%w; fallback error=%v", "npm install -g @larksuite/cli", "npm install -g @larksuite/cli --prefix "+prefix, describeBinary(node), describeBinary(npm), describeBinary(npx), err, fallbackErr)
+			}
+			resetResolvedCommandEnv()
+			if cli := detectBinary("lark-cli", "--version"); cli.Found {
+				emitInstallLine(onLine, "飞书 CLI 已安装到用户目录："+describeBinary(cli))
+			} else {
+				return fmt.Errorf("install lark-cli failed: installed to app npm prefix %s but lark-cli is still missing in resolved PATH", prefix)
+			}
 		} else {
 			return fmt.Errorf("install lark-cli failed: command=%q node=%s npm=%s npx=%s error=%w", "npm install -g @larksuite/cli", describeBinary(node), describeBinary(npm), describeBinary(npx), err)
 		}
@@ -107,6 +125,17 @@ func installCLI(ctx context.Context, onLine func(string)) error {
 	}
 	emitInstallLine(onLine, "飞书 CLI 安装完成："+describeBinary(cli))
 	return nil
+}
+
+func npmInstallNeedsUserPrefix(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "eacces") ||
+		strings.Contains(text, "permission denied") ||
+		strings.Contains(text, "access is denied") ||
+		strings.Contains(text, "operation was rejected")
 }
 
 func nodeInstallPrerequisiteNeedsRepair(node, npm, npx BinaryStatus) bool {
