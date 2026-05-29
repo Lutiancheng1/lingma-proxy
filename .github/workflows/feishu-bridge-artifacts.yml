@@ -193,12 +193,14 @@ jobs:
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
           UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_BUCKET" ] && [ -n "$R2_PUBLIC_BASE_URL" ] && [ -n "$UPDATE_SIGNING_PRIVATE_KEY" ] && [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+          if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_BUCKET" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_PUBLIC_BASE_URL" ] && [ -n "$UPDATE_SIGNING_PRIVATE_KEY" ] && [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -349,13 +351,27 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
         run: |
           set -euo pipefail
-          npx wrangler@latest r2 object put "${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$MAC_ASSET")" --file "$MAC_ASSET" --content-type application/x-apple-diskimage --remote
-          npx wrangler@latest r2 object put "${R2_BUCKET}/${RELEASE_PREFIX}/$(basename "$WIN_ASSET")" --file "$WIN_ASSET" --content-type application/vnd.microsoft.portable-executable --remote
-          npx wrangler@latest r2 object put "${R2_BUCKET}/updates/feishu/stable/manifest.json" --file dist/manifests/update-manifest.json --content-type application/json --remote
-          npx wrangler@latest r2 object put "${R2_BUCKET}/prompt-pack/feishu/stable/prompt-pack.json" --file dist/prompt-pack/prompt-pack.json --content-type application/json --remote
-          npx wrangler@latest r2 object put "${R2_BUCKET}/prompt-pack/feishu/stable/manifest.json" --file dist/prompt-pack/manifest.json --content-type application/json --remote
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          upload_file() {
+            local src="$1"
+            local key="$2"
+            local content_type="$3"
+            aws s3 cp "$src" "s3://${R2_BUCKET}/${key}" \
+              --endpoint-url "$endpoint" \
+              --content-type "$content_type" \
+              --no-progress
+          }
+
+          upload_file "$MAC_ASSET" "${RELEASE_PREFIX}/$(basename "$MAC_ASSET")" "application/x-apple-diskimage"
+          upload_file "$WIN_ASSET" "${RELEASE_PREFIX}/$(basename "$WIN_ASSET")" "application/vnd.microsoft.portable-executable"
+          upload_file dist/manifests/update-manifest.json "updates/feishu/stable/manifest.json" "application/json"
+          upload_file dist/prompt-pack/prompt-pack.json "prompt-pack/feishu/stable/prompt-pack.json" "application/json"
+          upload_file dist/prompt-pack/manifest.json "prompt-pack/feishu/stable/manifest.json" "application/json"
           while IFS= read -r file; do
             rel="${file#site/}"
             case "$file" in
@@ -364,7 +380,7 @@ jobs:
               *.js) ct="application/javascript; charset=utf-8" ;;
               *) ct="application/octet-stream" ;;
             esac
-            npx wrangler@latest r2 object put "${R2_BUCKET}/site/${rel}" --file "$file" --content-type "$ct" --remote
+            upload_file "$file" "site/${rel}" "$ct"
           done < <(find site -type f | sort)
           npx wrangler@latest r2 bucket cors set "${R2_BUCKET}" --file .github/r2-cors.json
 
