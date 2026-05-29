@@ -58,7 +58,8 @@
 
         const info = document.createElement("p");
         info.className = "asset-info";
-        info.textContent = [asset.filename, formatSize(asset.size), asset.kind].filter(Boolean).join(" · ");
+        const friendlyName = platform.key === "darwin-arm64" ? "Lingma Proxy.dmg" : "Lingma Proxy.exe";
+        info.textContent = [friendlyName, formatSize(asset.size), asset.kind].filter(Boolean).join(" · ");
         card.appendChild(info);
       } else {
         const unavailable = document.createElement("p");
