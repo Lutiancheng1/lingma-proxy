@@ -86,6 +86,22 @@ ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 Dev
 - **上下文压缩**：4 级水位线（ok/microcompact/compact/critical/blocking），超 75% 自动触发 LLM 结构化摘要。修改在 `manager.go` 的 `summarizeConversation`/`applyBudgetCompaction`
 - **不要在工具结果处理中使用 `summarizeText` 做盲截断**：用 `classifyToolResult` + `extractToolResultSummary`/`extractToolResultStub` 替代
 
+## 文档同步约定
+
+本地 `docs/` 下的三份飞书智能体核心文档均与用户飞书云盘中的云端文档保持 1-to-1 对应关系，请勿脱离云端文档在本地直接编辑：
+
+1. **Lingma Feishu Agent 食用指南**
+   - 本地路径：`docs/feishu-agent-user-guide.md`
+   - 云端链接：[https://www.feishu.cn/docx/BwacdC9evoNa1txuGUMcFVChnHd](https://www.feishu.cn/docx/BwacdC9evoNa1txuGUMcFVChnHd) (Token: `BwacdC9evoNa1txuGUMcFVChnHd`)
+2. **基于 Lingma 账号资源的飞书个人专属智能体 (Pitch)**
+   - 本地路径：`docs/feishu-agent-pitch.md`
+   - 云端链接：[https://www.feishu.cn/docx/Mz3ldFZKvooIkdx6z4hcwn9Mnjb](https://www.feishu.cn/docx/Mz3ldFZKvooIkdx6z4hcwn9Mnjb) (Token: `Mz3ldFZKvooIkdx6z4hcwn9Mnjb`)
+3. **Lingma Feishu Agent — 技术架构与实现详解**
+   - 本地路径：`docs/feishu-agent-features.md`
+   - 云端链接：[https://www.feishu.cn/docx/FggndYCZaor2FyxF8hFcs1imnVc](https://www.feishu.cn/docx/FggndYCZaor2FyxF8hFcs1imnVc) (Token: `FggndYCZaor2FyxF8hFcs1imnVc`)
+
+如需将云端修改同步到本地，可使用 `lark-cli` 拉取相应文档；在编辑或新增特性时，请确保两边内容同步更新，防止文档因缺乏维护而失效。
+
 ## 已知限制
 
 - 工具调用依赖模型配合，**Qwen3-Coder 最可靠**，其他模型可能拒绝

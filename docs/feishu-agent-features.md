@@ -1,5 +1,7 @@
 # Lingma Feishu Agent — 技术架构与实现详解
 
+> 本文档对应飞书云盘中的云端源文档（链接：https://www.feishu.cn/docx/FggndYCZaor2FyxF8hFcs1imnVc，Token: FggndYCZaor2FyxF8hFcs1imnVc）。修改时请确保与云端同步，勿直接在此处进行非同步性修改。
+
 > 在飞书群里跟 AI 对话，它自己去读文档、查表格、搜日程、建任务、改权限，完了把结果流式打出来。你不需要切任何工具。
 
 这不是一个聊天机器人。这是一个跑在飞书生态里的 AI Agent，有 30+ 工具、有记忆、会自己修错、能定时干活。

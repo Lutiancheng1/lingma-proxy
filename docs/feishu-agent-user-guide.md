@@ -1,5 +1,7 @@
 # Lingma Feishu Agent 食用指南
 
+> 本文档对应飞书云盘中的云端源文档（链接：https://www.feishu.cn/docx/BwacdC9evoNa1txuGUMcFVChnHd，Token: BwacdC9evoNa1txuGUMcFVChnHd）。修改时请确保与云端同步，勿直接在此处进行非同步性修改。
+
 本指南将指引您从零开始完成 **Lingma Feishu Agent** 的下载、安装、配置和飞书交互，帮助您将 AI Agent 无缝接入飞书办公生态。
 
 Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent字段, 叫法不一样 内容功能均一致。

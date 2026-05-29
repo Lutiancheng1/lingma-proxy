@@ -1,5 +1,7 @@
 # 基于 Lingma 账号资源的飞书个人专属智能体
 
+> 本文档对应飞书云盘中的云端源文档（链接：https://www.feishu.cn/docx/Mz3ldFZKvooIkdx6z4hcwn9Mnjb，Token: Mz3ldFZKvooIkdx6z4hcwn9Mnjb）。修改时请确保与云端同步，勿直接在此处进行非同步性修改。
+
 > 依托现有 Lingma 账号资源，接入飞书生态，实现个人专属 AI 智能体。具备飞书官方 Aily 约 70% 的核心能力，且支持自主调优和持续进化。
 
 ---
