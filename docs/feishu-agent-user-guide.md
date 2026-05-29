@@ -35,8 +35,8 @@ Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent
 
 ### 2.2 Windows x64
 
-1. 点击 [Windows 下载地址](https://pub-8b42d9b2b003480e9392e0123a37d52e.r2.dev/releases/feishu/v1.6.7/feishu-ef5daa4/lingma-proxy-feishu-desktop_feishu-ef5daa4_windows_amd64.exe) 获取安装程序。
-2. 双击运行下载完成的 `lingma-proxy-feishu-desktop_feishu-ef5daa4_windows_amd64.exe` 即可启动程序。
+1. 点击 [Windows 下载地址](https://pub-8b42d9b2b003480e9392e0123a37d52e.r2.dev/releases/feishu/v1.6.8/feishu-3dca62c/lingma-proxy-desktop_feishu-3dca62c_windows_amd64.zip) 获取 ZIP 压缩包。
+2. 解压后双击运行 `Lingma Proxy.exe` 即可启动程序。
 
 ---
 

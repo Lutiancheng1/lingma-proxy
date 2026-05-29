@@ -167,15 +167,21 @@ jobs:
         run: |
           $exe = Get-ChildItem .\desktop\build\bin -Filter *.exe | Where-Object { $_.Name -notlike "*installer*" } | Select-Object -First 1
           if (-not $exe) { throw "Desktop portable exe was not produced" }
-          $asset = "lingma-proxy-desktop_${env:BUILD_LABEL}_windows_amd64.exe"
-          Copy-Item -Path $exe.FullName -Destination $asset -Force
+          $asset = "lingma-proxy-desktop_${env:BUILD_LABEL}_windows_amd64.zip"
+          if (Test-Path $asset) { Remove-Item $asset -Force }
+          $zipRoot = Join-Path $env:TEMP "lingma-proxy-windows-$env:BUILD_LABEL"
+          if (Test-Path $zipRoot) { Remove-Item $zipRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $zipRoot | Out-Null
+          Copy-Item -Path $exe.FullName -Destination (Join-Path $zipRoot "Lingma Proxy.exe") -Force
+          Compress-Archive -Path (Join-Path $zipRoot "Lingma Proxy.exe") -DestinationPath $asset -Force
+          Remove-Item $zipRoot -Recurse -Force
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: feishu-desktop-windows
           retention-days: 14
-          path: lingma-proxy-desktop_${{ env.BUILD_LABEL }}_windows_amd64.exe
+          path: lingma-proxy-desktop_${{ env.BUILD_LABEL }}_windows_amd64.zip
 
   publish-r2:
     name: Publish Feishu OTA to R2
@@ -232,7 +238,7 @@ jobs:
           public_base="${R2_PUBLIC_BASE_URL%/}"
 
           mac_asset="$(find dist -maxdepth 1 -name '*darwin_arm64.dmg' -print -quit)"
-          win_asset="$(find dist -maxdepth 1 -name '*windows_amd64.exe' -print -quit)"
+          win_asset="$(find dist -maxdepth 1 -name '*windows_amd64.zip' -print -quit)"
           test -n "$mac_asset"
           test -n "$win_asset"
 
@@ -281,7 +287,7 @@ jobs:
                       "sha256": os.environ["WIN_SHA"],
                       "signature": os.environ["WIN_SIG"],
                       "size": int(os.environ["WIN_SIZE"]),
-                      "kind": "portable-exe",
+                      "kind": "zip",
                   },
               },
           }
@@ -371,7 +377,7 @@ jobs:
           }
 
           upload_file "$MAC_ASSET" "${RELEASE_PREFIX}/$(basename "$MAC_ASSET")" "application/x-apple-diskimage"
-          upload_file "$WIN_ASSET" "${RELEASE_PREFIX}/$(basename "$WIN_ASSET")" "application/vnd.microsoft.portable-executable"
+          upload_file "$WIN_ASSET" "${RELEASE_PREFIX}/$(basename "$WIN_ASSET")" "application/zip"
           upload_file dist/manifests/update-manifest.json "updates/feishu/stable/manifest.json" "application/json"
           upload_file dist/prompt-pack/prompt-pack.json "prompt-pack/feishu/stable/prompt-pack.json" "application/json"
           upload_file dist/prompt-pack/manifest.json "prompt-pack/feishu/stable/manifest.json" "application/json"

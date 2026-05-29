@@ -15,7 +15,7 @@
     {
       key: "windows-amd64",
       title: "Windows x64",
-      detail: "便携 exe，下载后手动替换旧版本。",
+      detail: "ZIP 压缩包，下载后解压并手动替换旧版本。",
     },
   ];
 
@@ -58,7 +58,7 @@
 
         const info = document.createElement("p");
         info.className = "asset-info";
-        const friendlyName = platform.key === "darwin-arm64" ? "Lingma Proxy.dmg" : "Lingma Proxy.exe";
+        const friendlyName = platform.key === "darwin-arm64" ? "Lingma Proxy.dmg" : "Lingma Proxy.zip";
         info.textContent = [friendlyName, formatSize(asset.size), asset.kind].filter(Boolean).join(" · ");
         card.appendChild(info);
       } else {

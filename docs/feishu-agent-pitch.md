@@ -10,15 +10,9 @@
 
 桌面端应用，本地安装，接入飞书。在飞书里跟 AI 对话，它直接帮你操作飞书完成工作。
 
-由于还在不断迭代升级 下面放一个稳定版:
+下载官网:
 
-Mac 下载地址: 
-
-https://pub-8b42d9b2b003480e9392e0123a37d52e.r2.dev/releases/feishu/v1.6.7/feishu-ef5daa4/lingma-proxy-feishu-desktop_feishu-ef5daa4_darwin_arm64.dmg
-
-Windows 下载地址: 
-
-https://pub-8b42d9b2b003480e9392e0123a37d52e.r2.dev/releases/feishu/v1.6.7/feishu-ef5daa4/lingma-proxy-feishu-desktop_feishu-ef5daa4_windows_amd64.exe
+https://lingma-feishu-agent.pages.dev/
 
 ## 完整食用指南
 
