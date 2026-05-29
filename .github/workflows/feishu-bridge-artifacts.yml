@@ -355,6 +355,12 @@ jobs:
           AWS_DEFAULT_REGION: auto
         run: |
           set -euo pipefail
+          export CLOUDFLARE_API_TOKEN=$(python3 -c "import os; print(''.join(c for c in os.environ.get('CLOUDFLARE_API_TOKEN', '') if ord(c) < 128).strip())")
+          export CLOUDFLARE_ACCOUNT_ID=$(python3 -c "import os; print(''.join(c for c in os.environ.get('CLOUDFLARE_ACCOUNT_ID', '') if ord(c) < 128).strip())")
+          export R2_ACCOUNT_ID=$(python3 -c "import os; print(''.join(c for c in os.environ.get('R2_ACCOUNT_ID', '') if ord(c) < 128).strip())")
+          export R2_BUCKET=$(python3 -c "import os; print(''.join(c for c in os.environ.get('R2_BUCKET', '') if ord(c) < 128).strip())")
+          export AWS_ACCESS_KEY_ID=$(python3 -c "import os; print(''.join(c for c in os.environ.get('AWS_ACCESS_KEY_ID', '') if ord(c) < 128).strip())")
+          export AWS_SECRET_ACCESS_KEY=$(python3 -c "import os; print(''.join(c for c in os.environ.get('AWS_SECRET_ACCESS_KEY', '') if ord(c) < 128).strip())")
           endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           upload_file() {
             local src="$1"
@@ -391,6 +397,9 @@ jobs:
           CLOUDFLARE_PAGES_PROJECT: ${{ secrets.CLOUDFLARE_PAGES_PROJECT }}
         run: |
           set -euo pipefail
+          export CLOUDFLARE_API_TOKEN=$(python3 -c "import os; print(''.join(c for c in os.environ.get('CLOUDFLARE_API_TOKEN', '') if ord(c) < 128).strip())")
+          export CLOUDFLARE_ACCOUNT_ID=$(python3 -c "import os; print(''.join(c for c in os.environ.get('CLOUDFLARE_ACCOUNT_ID', '') if ord(c) < 128).strip())")
+          export CLOUDFLARE_PAGES_PROJECT=$(python3 -c "import os; print(''.join(c for c in os.environ.get('CLOUDFLARE_PAGES_PROJECT', '') if ord(c) < 128).strip())")
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$CLOUDFLARE_PAGES_PROJECT" ]; then
             echo "::warning::Cloudflare Pages deploy skipped: Pages secrets are not configured."
             exit 0
