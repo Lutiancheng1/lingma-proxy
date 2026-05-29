@@ -97,11 +97,11 @@ jobs:
           cp -R "$APP_PATH" "$DMG_ROOT/"
           ln -s /Applications "$DMG_ROOT/Applications"
           hdiutil create \
-            -volname "Lingma Proxy Feishu" \
+            -volname "Lingma Proxy" \
             -srcfolder "$DMG_ROOT" \
             -ov \
             -format UDZO \
-            "lingma-proxy-feishu-desktop_${BUILD_LABEL}_darwin_arm64.dmg"
+            "lingma-proxy-desktop_${BUILD_LABEL}_darwin_arm64.dmg"
           rm -rf "$DMG_ROOT"
 
       - name: Upload macOS artifact
@@ -109,7 +109,7 @@ jobs:
         with:
           name: feishu-desktop-macos
           retention-days: 14
-          path: lingma-proxy-feishu-desktop_${{ env.BUILD_LABEL }}_darwin_arm64.dmg
+          path: lingma-proxy-desktop_${{ env.BUILD_LABEL }}_darwin_arm64.dmg
 
   build-desktop-windows:
     name: Build Feishu Desktop Windows
@@ -167,7 +167,7 @@ jobs:
         run: |
           $exe = Get-ChildItem .\desktop\build\bin -Filter *.exe | Where-Object { $_.Name -notlike "*installer*" } | Select-Object -First 1
           if (-not $exe) { throw "Desktop portable exe was not produced" }
-          $asset = "lingma-proxy-feishu-desktop_${env:BUILD_LABEL}_windows_amd64.exe"
+          $asset = "lingma-proxy-desktop_${env:BUILD_LABEL}_windows_amd64.exe"
           Copy-Item -Path $exe.FullName -Destination $asset -Force
 
       - name: Upload Windows artifact
@@ -175,7 +175,7 @@ jobs:
         with:
           name: feishu-desktop-windows
           retention-days: 14
-          path: lingma-proxy-feishu-desktop_${{ env.BUILD_LABEL }}_windows_amd64.exe
+          path: lingma-proxy-desktop_${{ env.BUILD_LABEL }}_windows_amd64.exe
 
   publish-r2:
     name: Publish Feishu OTA to R2
