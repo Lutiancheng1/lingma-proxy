@@ -358,6 +358,7 @@ jobs:
             esac
             npx wrangler@latest r2 object put "${R2_BUCKET}/site/${rel}" --file "$file" --content-type "$ct" --remote
           done < <(find site -type f | sort)
+          npx wrangler@latest r2 bucket cors set "${R2_BUCKET}" --file .github/r2-cors.json
 
       - name: Deploy site to Cloudflare Pages
         if: steps.r2.outputs.enabled == 'true'
