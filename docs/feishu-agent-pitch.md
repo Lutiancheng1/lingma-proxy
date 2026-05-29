@@ -12,7 +12,7 @@
 
 下载官网:
 
-https://lingma-feishu-agent.pages.dev/
+https://lingma-feishu-agent.pages.dev/download
 
 ## 完整食用指南
 

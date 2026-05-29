@@ -28,15 +28,11 @@ Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent
 
 由于智能体当前仍处于快速迭代升级阶段，为您提供当前最新的稳定版安装包进行下载安装：
 
-### 2.1 macOS (Apple Silicon M1/M2/M3/M4)
+### 2.1 下载与安装
 
-1. 点击 [Mac 下载地址](https://pub-8b42d9b2b003480e9392e0123a37d52e.r2.dev/releases/feishu/v1.6.7/feishu-ef5daa4/lingma-proxy-feishu-desktop_feishu-ef5daa4_darwin_arm64.dmg) 获取 DMG 安装包。
-2. 双击打开已下载的 DMG 文件，将 `Lingma Proxy.app` 拖拽放入系统的 `Applications`（应用程序）目录中。*[图片占位符：macOS DMG 拖拽安装界面]*
-
-### 2.2 Windows x64
-
-1. 点击 [Windows 下载地址](https://pub-8b42d9b2b003480e9392e0123a37d52e.r2.dev/releases/feishu/v1.6.8/feishu-3dca62c/lingma-proxy-desktop_feishu-3dca62c_windows_amd64.zip) 获取 ZIP 压缩包。
-2. 解压后双击运行 `Lingma Proxy.exe` 即可启动程序。
+1. 前往官网下载安装最新版本：<https://lingma-feishu-agent.pages.dev/download>
+2. 按页面提示下载对应平台安装包并完成安装。
+3. macOS 下载 DMG 后拖入 `Applications`；Windows 下载 ZIP 后解压并运行 `Lingma Proxy.exe`。
 
 ---
 
