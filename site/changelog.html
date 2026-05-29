@@ -14,7 +14,38 @@
       </nav>
       <section class="panel">
         <h1>更新日志</h1>
-        <p>后续可由发布流程同步 OTA manifest 的 releaseNotes，或替换为静态 changelog 内容。</p>
+        <article class="release-entry">
+          <h2>v1.6.7 · Feishu Bridge 稳定版</h2>
+          <p>面向个人飞书智能体场景的一次完整增强，重点修复长内容、上下文、工具调用和发布下载链路。</p>
+          <h3>核心飞书能力</h3>
+          <ul>
+            <li>增强飞书云文档、云盘、电子表格、日历、消息、权限等核心工具调用。</li>
+            <li>长文档和长表格支持分页读取、完整输出和多卡片续发，减少只读第一页或回复被截断的问题。</li>
+            <li>权限处理区分“申请权限”和“公开分享权限”，避免把 apply-permission 当成公开设置。</li>
+            <li>工具结果保留真实 URL、token、标题和分页状态，明确禁止编造链接。</li>
+          </ul>
+          <h3>上下文与记忆</h3>
+          <ul>
+            <li>新增上下文预算、水位线、自动压缩和 `/context` 状态展示。</li>
+            <li>工具结果按 preserve / summarize / stub / discard 分类压缩，降低长对话撑爆上下文的概率。</li>
+            <li>引入 SQLite + FTS5 工具记忆，可通过工具记忆检索恢复被压缩的历史结果。</li>
+            <li>支持飞书历史消息检索，用户说“上次/之前/继续”时能更可靠地恢复上下文。</li>
+          </ul>
+          <h3>工具生态</h3>
+          <ul>
+            <li>接入 MCP session manager、工具清单缓存、动态 tool schema 和工具展开展示。</li>
+            <li>支持 Bridge Skills 导入、启用、查看和按需加载，脚本执行保留用户确认机制。</li>
+            <li>补充通用 HTTP、Web、天气、定时任务、本地安全文件读写等基础工具能力。</li>
+            <li>飞书 CLI prompt rules 模块化，并支持签名 Prompt Pack 远程更新。</li>
+          </ul>
+          <h3>桌面端与发布</h3>
+          <ul>
+            <li>优化 Feishu Bridge 高级设置、日志详情、区间复制、深色模式和 Windows/macOS 默认窗口体验。</li>
+            <li>新增环境维护入口，可清理自动安装的飞书 CLI、官方 Skills 和授权信息。</li>
+            <li>新增官网下载页、教程页、更新日志页，以及 R2 OTA manifest 发布链路。</li>
+            <li>修复 R2 下载页 CORS，浏览器可直接读取最新版本 manifest。</li>
+          </ul>
+        </article>
       </section>
     </main>
   </body>

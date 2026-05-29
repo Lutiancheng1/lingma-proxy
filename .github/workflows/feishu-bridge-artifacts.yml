@@ -258,7 +258,15 @@ jobs:
               "version": os.environ["VERSION"],
               "minSupportedVersion": "1.6.7",
               "mandatory": False,
-              "releaseNotes": "Feishu Bridge OTA build " + os.environ.get("GITHUB_SHA", "")[:7],
+              "releaseNotes": "\n".join([
+                  "v1.6.7 Feishu Bridge 稳定版",
+                  "• 增强飞书文档、云盘、表格、权限、日历和消息工具链。",
+                  "• 支持长文档/长表格分页读取、完整输出和多卡片续发。",
+                  "• 新增上下文预算、自动压缩、工具记忆检索和飞书历史搜索。",
+                  "• 接入 MCP、Bridge Skills、定时任务、Web/HTTP/天气和安全文件工具。",
+                  "• 新增官网下载、教程、更新日志、R2 OTA manifest 和 Prompt Pack 更新。",
+                  "Build " + os.environ.get("GITHUB_SHA", "")[:7],
+              ]),
               "assets": {
                   "darwin-arm64": {
                       "url": f"{public_base}/{release_prefix}/{os.environ['MAC_NAME']}",
