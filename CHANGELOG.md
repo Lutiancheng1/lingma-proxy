@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased (target: v1.6.8)
+
 ## v1.6.8 - 2026-05-29
 
 - Feishu Agent branch only; no GitHub Release assets are published from this branch.
