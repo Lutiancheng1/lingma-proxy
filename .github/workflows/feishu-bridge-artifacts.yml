@@ -197,14 +197,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
           UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_BUCKET" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_PUBLIC_BASE_URL" ] && [ -n "$UPDATE_SIGNING_PRIVATE_KEY" ] && [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+          if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_BUCKET" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_PUBLIC_BASE_URL" ] && [ -n "$UPDATE_SIGNING_PRIVATE_KEY" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "R2 publish skipped: one or more Cloudflare/R2/update signing secrets are not configured."
+            echo "R2 publish skipped: one or more R2 S3/update signing secrets are not configured."
           fi
 
       - name: Download macOS artifact
@@ -387,7 +385,11 @@ jobs:
             esac
             upload_file "$file" "site/${rel}" "$ct"
           done < <(find site -type f | sort)
-          npx wrangler@latest r2 bucket cors set "${R2_BUCKET}" --file .github/r2-cors.json
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::warning::R2 CORS update skipped: CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is not configured. Artifacts and manifests were already uploaded."
+          elif ! npx wrangler@latest r2 bucket cors set "${R2_BUCKET}" --file .github/r2-cors.json; then
+            echo "::warning::R2 CORS update failed. Artifacts and manifests were already uploaded; check CLOUDFLARE_API_TOKEN Workers R2 Storage Write permission."
+          fi
 
       - name: Deploy site to Cloudflare Pages
         if: steps.r2.outputs.enabled == 'true'
