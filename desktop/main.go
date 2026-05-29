@@ -17,10 +17,10 @@ import (
 var assets embed.FS
 
 var devtoolsBuild = "false"
-var updateManifestURL = ""
-var updatePublicKey = ""
-var promptPackManifestURL = ""
-var promptPackPublicKey = ""
+var updateManifestURL = "https://pub-8b42d9b2b003480e9392e0123a37d52e.r2.dev/updates/feishu/stable/manifest.json"
+var updatePublicKey = "GON2hz2jw7rk4wXH+uGocxIwPxmSCGip2iC+GNrsFHg="
+var promptPackManifestURL = "https://pub-8b42d9b2b003480e9392e0123a37d52e.r2.dev/prompt-pack/feishu/stable/manifest.json"
+var promptPackPublicKey = "GON2hz2jw7rk4wXH+uGocxIwPxmSCGip2iC+GNrsFHg="
 
 func main() {
 	app := NewApp()
