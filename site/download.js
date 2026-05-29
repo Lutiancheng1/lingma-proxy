@@ -2,6 +2,8 @@
   const statusEl = document.getElementById("download-status");
   const metaEl = document.getElementById("download-meta");
   const gridEl = document.getElementById("download-grid");
+  const defaultUpdateManifestUrl =
+    "https://pub-8b42d9b2b003480e9392e0123a37d52e.r2.dev/updates/feishu/stable/manifest.json";
   const config = window.LINGMA_SITE_CONFIG || {};
 
   const platforms = [
@@ -70,13 +72,14 @@
   }
 
   async function main() {
-    if (!config.updateManifestUrl) {
+    const updateManifestUrl = config.updateManifestUrl || defaultUpdateManifestUrl;
+    if (!updateManifestUrl) {
       renderFallback("还没有配置 OTA manifest 地址。发布 Action 成功后，这里会自动显示最新下载链接。");
       return;
     }
 
     try {
-      const response = await fetch(config.updateManifestUrl, { cache: "no-store" });
+      const response = await fetch(updateManifestUrl, { cache: "no-store" });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
