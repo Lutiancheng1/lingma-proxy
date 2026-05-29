@@ -50,7 +50,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_cli_exec",
-				"description": "通用飞书 CLI 执行入口。适用于当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；已知飞书业务域命令如果未显式指定 --as，则会自动追加 --as user；auth、--help/-h 和未知根命令不会追加 --as。\n\n强制规则：\n- 如果准备使用某个业务域但不确定命令/参数，先调用 lark_skill_view 阅读对应官方 Skill（如 lark-sheets、lark-doc、lark-drive），再执行本工具；不要凭经验猜 Sheet1/0/1、docs/file/list 等命令\n- 本工具返回 Usage/unknown flag/invalid value 后，下一步必须先查 lark_skill_view、--help 或 schema，不能原样重复或换相似命令盲试\n- 授权不要通过本工具执行 auth login；遇到 need_user_authorization 时 Bridge 会自动发起登录并返回授权链接\n- 查询当前身份优先用 argv：[\"auth\", \"status\"]；查看已登录用户用 argv：[\"auth\", \"list\"]\n- 设置文档互联网公开权限使用 drive permission.public get/patch；不要使用 drive +apply-permission，它只申请 view/edit 权限\n- lark-cli 的子命令分两类：原生子命令（如 drive file list）和 skill 快捷命令（带 + 前缀，如 im +chat-list、im +messages-send）\n- IM 相关操作必须使用 + 前缀快捷命令：im +chat-list、im +chat-create、im +messages-send、im +messages-search、im +messages-reply\n- 示例 argv：[\"im\", \"+chat-list\", \"--limit\", \"10\"]、[\"drive\", \"permission.public\", \"get\", \"--params\", \"{...}\"]、[\"calendar\", \"+agenda\"]",
+				"description": "通用飞书 CLI 执行入口。适用于当前未单独结构化建模的 lark-cli 能力。传入 argv 数组，不要包含程序名 lark-cli；已知飞书业务域命令如果未显式指定 --as，则会自动追加 --as user；auth、--help/-h 和未知根命令不会追加 --as。\n\n强制规则：\n- 如果准备使用某个业务域但不确定命令/参数，先调用 lark_skill_view 阅读对应官方 Skill（如 lark-sheets、lark-doc、lark-drive），再执行本工具；不要凭经验猜 Sheet1/0/1、docs/file/list 等命令\n- 本工具返回 Usage/unknown flag/invalid value 后，下一步必须先查 lark_skill_view、--help 或 schema，不能原样重复或换相似命令盲试\n- 授权不要通过本工具执行 auth login；遇到 need_user_authorization 时 Agent 会自动发起登录并返回授权链接\n- 查询当前身份优先用 argv：[\"auth\", \"status\"]；查看已登录用户用 argv：[\"auth\", \"list\"]\n- 设置文档互联网公开权限使用 drive permission.public get/patch；不要使用 drive +apply-permission，它只申请 view/edit 权限\n- lark-cli 的子命令分两类：原生子命令（如 drive file list）和 skill 快捷命令（带 + 前缀，如 im +chat-list、im +messages-send）\n- IM 相关操作必须使用 + 前缀快捷命令：im +chat-list、im +chat-create、im +messages-send、im +messages-search、im +messages-reply\n- 示例 argv：[\"im\", \"+chat-list\", \"--limit\", \"10\"]、[\"drive\", \"permission.public\", \"get\", \"--params\", \"{...}\"]、[\"calendar\", \"+agenda\"]",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -68,12 +68,12 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_skill_view",
-				"description": "读取本机已安装的官方飞书 lark-cli Skill 文档。支持分页：如果结果中 bridge_reading.has_more=true，必须用 next_offset 继续调用，直到 has_more=false。用于在执行 lark_cli_exec 前确认真实命令、shortcut、参数和注意事项。",
+				"description": "读取本机已安装的官方飞书 lark-cli Skill 文档。支持分页：如果结果中 agent_reading.has_more=true，必须用 next_offset 继续调用，直到 has_more=false。用于在执行 lark_cli_exec 前确认真实命令、shortcut、参数和注意事项。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"name":        map[string]any{"type": "string", "description": "官方 Skill 名称或业务域，例如 lark-sheets、sheets、docs、drive"},
-						"offset":      map[string]any{"type": "integer", "description": "正文分块读取起点，首次读取填 0 或省略；继续读取使用上次返回的 bridge_reading.next_offset"},
+						"offset":      map[string]any{"type": "integer", "description": "正文分块读取起点，首次读取填 0 或省略；继续读取使用上次返回的 agent_reading.next_offset"},
 						"chunk_size":  map[string]any{"type": "integer", "description": "本次读取的正文字符数，默认 6000，最大 12000"},
 						"require_all": map[string]any{"type": "boolean", "description": "当用户要求完整阅读时设为 true"},
 					},
@@ -160,7 +160,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "schedule_task",
-				"description": "创建、查看和管理 Feishu Bridge 定时任务。仅当用户明确要求提醒、稍后执行、每天/每周/定期检查、持续监控时使用；普通飞书操作不要创建定时任务。定时任务到点后会自动执行 prompt 并投递到当前飞书聊天，任务内部最终回复会自动发送，不要再调用 lark_im_send 自行发送。",
+				"description": "创建、查看和管理 Feishu Agent 定时任务。仅当用户明确要求提醒、稍后执行、每天/每周/定期检查、持续监控时使用；普通飞书操作不要创建定时任务。定时任务到点后会自动执行 prompt 并投递到当前飞书聊天，任务内部最终回复会自动发送，不要再调用 lark_im_send 自行发送。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -258,12 +258,12 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_docs_fetch",
-				"description": "读取飞书云文档内容。通过文档 URL 或 token 获取正文。长文档会按正文字符分块返回：如果结果里的 bridge_reading.has_more=true，必须用 next_offset 继续调用，直到 has_more=false 后才能声称已完整阅读全文。",
+				"description": "读取飞书云文档内容。通过文档 URL 或 token 获取正文。长文档会按正文字符分块返回：如果结果里的 agent_reading.has_more=true，必须用 next_offset 继续调用，直到 has_more=false 后才能声称已完整阅读全文。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"doc_token":   map[string]any{"type": "string", "description": "文档 token 或完整 URL"},
-						"offset":      map[string]any{"type": "integer", "description": "正文分块读取起点，首次读取填 0 或省略；继续读取使用上次返回的 bridge_reading.next_offset"},
+						"offset":      map[string]any{"type": "integer", "description": "正文分块读取起点，首次读取填 0 或省略；继续读取使用上次返回的 agent_reading.next_offset"},
 						"chunk_size":  map[string]any{"type": "integer", "description": "本次读取的正文字符数，默认 6000，最大 12000"},
 						"require_all": map[string]any{"type": "boolean", "description": "当用户要求全文/整篇/完整阅读时设为 true；工具会在结果中强化续读提示"},
 					},
@@ -388,7 +388,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "safe_file_read",
-				"description": "读取本地文本文件内容。只支持 Feishu Bridge 高级设置允许的路径，或用户最新消息通过“授权目录/授权文件 <绝对路径>”授予的只读路径。",
+				"description": "读取本地文本文件内容。只支持 Feishu Agent 高级设置允许的路径，或用户最新消息通过“授权目录/授权文件 <绝对路径>”授予的只读路径。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -571,7 +571,7 @@ func skillToolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "skill_list",
-				"description": "列出用户在 Feishu Bridge 高级设置中导入并启用的 Skills。只返回索引，不返回完整正文。",
+				"description": "列出用户在 Feishu Agent 高级设置中导入并启用的 Skills。只返回索引，不返回完整正文。",
 				"parameters": map[string]any{
 					"type":       "object",
 					"properties": map[string]any{},
@@ -596,12 +596,12 @@ func skillToolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "skill_view",
-				"description": "读取一个已启用 Skill 的 SKILL.md 正文。支持分页：如果结果中 bridge_reading.has_more=true，必须用 next_offset 继续调用，直到 has_more=false 后才能声称已完整阅读。只有准备使用该 skill 时再调用，避免浪费上下文。",
+				"description": "读取一个已启用 Skill 的 SKILL.md 正文。支持分页：如果结果中 agent_reading.has_more=true，必须用 next_offset 继续调用，直到 has_more=false 后才能声称已完整阅读。只有准备使用该 skill 时再调用，避免浪费上下文。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"name":        map[string]any{"type": "string", "description": "Skill 名称或 ID"},
-						"offset":      map[string]any{"type": "integer", "description": "正文分块读取起点，首次读取填 0 或省略；继续读取使用上次返回的 bridge_reading.next_offset"},
+						"offset":      map[string]any{"type": "integer", "description": "正文分块读取起点，首次读取填 0 或省略；继续读取使用上次返回的 agent_reading.next_offset"},
 						"chunk_size":  map[string]any{"type": "integer", "description": "本次读取的正文字符数，默认 6000，最大 12000"},
 						"require_all": map[string]any{"type": "boolean", "description": "当用户要求全文/完整阅读时设为 true；工具会在结果中强化续读提示"},
 					},
@@ -650,7 +650,7 @@ func skillToolDefinitions() []map[string]any {
 	}
 }
 
-func isBridgeSkillTool(name string) bool {
+func isAgentSkillTool(name string) bool {
 	switch name {
 	case "skill_list", "skill_search", "skill_view", "skill_run_script", "skill_http_get", "skill_http_request":
 		return true
@@ -885,7 +885,7 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	}
 	if isLarkAuthLoginCommand(cmdArgs) {
 		return ToolExecutionResult{
-			Output:     "[error] auth login 由 Feishu Bridge 登录流程接管；已请求 Bridge 发起授权并返回授权链接。",
+			Output:     "[error] auth login 由 Feishu Agent 登录流程接管；已请求 Agent 发起授权并返回授权链接。",
 			NeedsLogin: true,
 			IsError:    true,
 		}
@@ -1006,7 +1006,7 @@ func chunkLarkDocsFetchResult(result string, args map[string]any) (string, bool)
 			"chunk_size": chunkSize,
 		}
 	}
-	data["bridge_reading"] = reading
+	data["agent_reading"] = reading
 	text, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", false
@@ -1050,7 +1050,7 @@ func chunkLarkSheetsReadResult(result string, args map[string]any) (string, bool
 			"range":             nextRange,
 		}
 	}
-	data["bridge_reading"] = reading
+	data["agent_reading"] = reading
 	text, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", false
@@ -1152,7 +1152,7 @@ func executeHTTPGet(parent context.Context, target string, timeout time.Duration
 	if err != nil {
 		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 	}
-	req.Header.Set("User-Agent", "Lingma-Feishu-Bridge/1.0")
+	req.Header.Set("User-Agent", "Lingma-Feishu-Agent/1.0")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
@@ -2039,7 +2039,7 @@ func hasSafeFileAccess(cfg Config, targetPath string, required safeFileAccessLev
 
 func deniedPathResult(path string) ToolExecutionResult {
 	return ToolExecutionResult{
-		Output:  fmt.Sprintf("[error] 拒绝访问：路径 %s 未获得足够权限。读取可让用户发送精确授权消息：授权目录 %s；写入或删除必须到 Feishu Bridge 高级设置的“本机文件访问”中为该路径开启写入/删除权限。", path, filepath.Dir(filepath.Clean(path))),
+		Output:  fmt.Sprintf("[error] 拒绝访问：路径 %s 未获得足够权限。读取可让用户发送精确授权消息：授权目录 %s；写入或删除必须到 Feishu Agent 高级设置的“本机文件访问”中为该路径开启写入/删除权限。", path, filepath.Dir(filepath.Clean(path))),
 		IsError: true,
 	}
 }
@@ -2079,7 +2079,7 @@ func isLikelyBinary(data []byte) bool {
 func executeSafeFileTool(parent context.Context, cfg Config, toolName string, args map[string]any) ToolExecutionResult {
 	cfg = NormalizeConfig(cfg)
 	if !cfg.SafeFiles.Enabled && toolName != "list_authorized_paths" {
-		return ToolExecutionResult{Output: "[error] 本机文件工具已在 Feishu Bridge 高级设置中关闭。", IsError: true}
+		return ToolExecutionResult{Output: "[error] 本机文件工具已在 Feishu Agent 高级设置中关闭。", IsError: true}
 	}
 	if cfg.SafeFiles.Enabled && strings.TrimSpace(cfg.SafeFiles.WorkspaceDir) != "" {
 		_ = os.MkdirAll(cfg.SafeFiles.WorkspaceDir, 0755)
@@ -2236,7 +2236,7 @@ func executeSafeFileTool(parent context.Context, cfg Config, toolName string, ar
 				return ToolExecutionResult{Output: "[error] 保存白名单失败: " + err.Error(), IsError: true}
 			}
 		}
-		return ToolExecutionResult{Output: fmt.Sprintf("授权成功！路径 %s 已加入只读白名单。写入或删除仍需在 Feishu Bridge 高级设置中显式开启。", canonicalPath)}
+		return ToolExecutionResult{Output: fmt.Sprintf("授权成功！路径 %s 已加入只读白名单。写入或删除仍需在 Feishu Agent 高级设置中显式开启。", canonicalPath)}
 
 	case "list_authorized_paths":
 		allowedPaths := loadAllowedPaths()

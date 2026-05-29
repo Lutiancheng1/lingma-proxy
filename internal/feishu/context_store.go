@@ -15,11 +15,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type bridgeStore struct {
+type agentStore struct {
 	db *sql.DB
 }
 
-func newBridgeStore(dataDir string) (*bridgeStore, error) {
+func newAgentStore(dataDir string) (*agentStore, error) {
 	dataDir = strings.TrimSpace(dataDir)
 	if dataDir == "" {
 		return nil, nil
@@ -27,13 +27,13 @@ func newBridgeStore(dataDir string) (*bridgeStore, error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dataDir, "feishu-bridge.sqlite")
+	path := filepath.Join(dataDir, "feishu-agent.sqlite")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	store := &bridgeStore{db: db}
+	store := &agentStore{db: db}
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -41,14 +41,14 @@ func newBridgeStore(dataDir string) (*bridgeStore, error) {
 	return store, nil
 }
 
-func (s *bridgeStore) Close() error {
+func (s *agentStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
 	return s.db.Close()
 }
 
-func (s *bridgeStore) migrate(ctx context.Context) error {
+func (s *agentStore) migrate(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -217,7 +217,7 @@ func (s *bridgeStore) migrate(ctx context.Context) error {
 	return nil
 }
 
-func (s *bridgeStore) SaveConversationSnapshot(ctx context.Context, key string, snapshot ConversationSnapshot) error {
+func (s *agentStore) SaveConversationSnapshot(ctx context.Context, key string, snapshot ConversationSnapshot) error {
 	if s == nil || s.db == nil || strings.TrimSpace(key) == "" {
 		return nil
 	}
@@ -268,7 +268,7 @@ func (s *bridgeStore) SaveConversationSnapshot(ctx context.Context, key string, 
 	return tx.Commit()
 }
 
-func (s *bridgeStore) SaveSummary(ctx context.Context, key string, model string, summary StructuredSummary, from, to, preTokens, postTokens int) error {
+func (s *agentStore) SaveSummary(ctx context.Context, key string, model string, summary StructuredSummary, from, to, preTokens, postTokens int) error {
 	if s == nil || s.db == nil || strings.TrimSpace(key) == "" {
 		return nil
 	}
@@ -283,7 +283,7 @@ func (s *bridgeStore) SaveSummary(ctx context.Context, key string, model string,
 	return err
 }
 
-func (s *bridgeStore) ClearConversation(ctx context.Context, key string) error {
+func (s *agentStore) ClearConversation(ctx context.Context, key string) error {
 	if s == nil || s.db == nil || strings.TrimSpace(key) == "" {
 		return nil
 	}
@@ -307,7 +307,7 @@ func (s *bridgeStore) ClearConversation(ctx context.Context, key string) error {
 	return tx.Commit()
 }
 
-func (s *bridgeStore) SaveToolMemory(ctx context.Context, conversationKey, toolName string, args map[string]any, fullResult string, isError bool) (string, error) {
+func (s *agentStore) SaveToolMemory(ctx context.Context, conversationKey, toolName string, args map[string]any, fullResult string, isError bool) (string, error) {
 	if s == nil || s.db == nil {
 		return "", nil
 	}
@@ -338,7 +338,7 @@ type ToolMemorySearchResult struct {
 	Rank       float64 `json:"rank"`
 }
 
-func (s *bridgeStore) SearchToolMemory(ctx context.Context, conversationKey string, query string, limit int) ([]ToolMemorySearchResult, error) {
+func (s *agentStore) SearchToolMemory(ctx context.Context, conversationKey string, query string, limit int) ([]ToolMemorySearchResult, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -372,7 +372,7 @@ func (s *bridgeStore) SearchToolMemory(ctx context.Context, conversationKey stri
 	return results, rows.Err()
 }
 
-func (s *bridgeStore) FetchToolMemory(ctx context.Context, id string) (ToolMemorySearchResult, error) {
+func (s *agentStore) FetchToolMemory(ctx context.Context, id string) (ToolMemorySearchResult, error) {
 	if s == nil || s.db == nil {
 		return ToolMemorySearchResult{}, fmt.Errorf("store not initialized")
 	}
@@ -403,7 +403,7 @@ func sanitizeFTSQuery(query string) string {
 	return strings.Join(quoted, " OR ")
 }
 
-func (s *bridgeStore) SaveFeishuHistoryCache(ctx context.Context, chatID, query, result string) error {
+func (s *agentStore) SaveFeishuHistoryCache(ctx context.Context, chatID, query, result string) error {
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -413,7 +413,7 @@ func (s *bridgeStore) SaveFeishuHistoryCache(ctx context.Context, chatID, query,
 	return err
 }
 
-func (s *bridgeStore) LoadFeishuHistoryCache(ctx context.Context, chatID, query string, maxAge time.Duration) (string, bool) {
+func (s *agentStore) LoadFeishuHistoryCache(ctx context.Context, chatID, query string, maxAge time.Duration) (string, bool) {
 	if s == nil || s.db == nil {
 		return "", false
 	}
@@ -428,7 +428,7 @@ func (s *bridgeStore) LoadFeishuHistoryCache(ctx context.Context, chatID, query 
 	return result, true
 }
 
-func (s *bridgeStore) CleanupStaleHistoryCache(ctx context.Context, maxAge time.Duration) error {
+func (s *agentStore) CleanupStaleHistoryCache(ctx context.Context, maxAge time.Duration) error {
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -437,7 +437,7 @@ func (s *bridgeStore) CleanupStaleHistoryCache(ctx context.Context, maxAge time.
 	return err
 }
 
-func (s *bridgeStore) UpsertSkill(ctx context.Context, skill BridgeSkill) error {
+func (s *agentStore) UpsertSkill(ctx context.Context, skill AgentSkill) error {
 	if s == nil || s.db == nil || strings.TrimSpace(skill.ID) == "" {
 		return nil
 	}
@@ -464,7 +464,7 @@ func (s *bridgeStore) UpsertSkill(ctx context.Context, skill BridgeSkill) error 
 	return err
 }
 
-func (s *bridgeStore) DeleteSkill(ctx context.Context, id string) error {
+func (s *agentStore) DeleteSkill(ctx context.Context, id string) error {
 	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
 		return nil
 	}
@@ -472,7 +472,7 @@ func (s *bridgeStore) DeleteSkill(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *bridgeStore) DeleteAllSkills(ctx context.Context) error {
+func (s *agentStore) DeleteAllSkills(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -480,7 +480,7 @@ func (s *bridgeStore) DeleteAllSkills(ctx context.Context) error {
 	return err
 }
 
-func (s *bridgeStore) SetSkillEnabled(ctx context.Context, id string, enabled bool) error {
+func (s *agentStore) SetSkillEnabled(ctx context.Context, id string, enabled bool) error {
 	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
 		return nil
 	}
@@ -492,7 +492,7 @@ func (s *bridgeStore) SetSkillEnabled(ctx context.Context, id string, enabled bo
 	return err
 }
 
-func (s *bridgeStore) LoadSkills(ctx context.Context) ([]BridgeSkill, error) {
+func (s *agentStore) LoadSkills(ctx context.Context) ([]AgentSkill, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -501,9 +501,9 @@ func (s *bridgeStore) LoadSkills(ctx context.Context) ([]BridgeSkill, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []BridgeSkill
+	var out []AgentSkill
 	for rows.Next() {
-		var skill BridgeSkill
+		var skill AgentSkill
 		var enabled int
 		if err := rows.Scan(&skill.ID, &skill.Name, &skill.Description, &skill.Version, &skill.WhenToUse, &skill.Path, &skill.Source, &skill.Hash, &enabled, &skill.Error, &skill.CreatedAt, &skill.UpdatedAt); err != nil {
 			return nil, err
@@ -514,7 +514,7 @@ func (s *bridgeStore) LoadSkills(ctx context.Context) ([]BridgeSkill, error) {
 	return out, rows.Err()
 }
 
-func (s *bridgeStore) SaveSkillInvocation(ctx context.Context, conversationKey, skillID, skillName, toolCallID string) error {
+func (s *agentStore) SaveSkillInvocation(ctx context.Context, conversationKey, skillID, skillName, toolCallID string) error {
 	if s == nil || s.db == nil || strings.TrimSpace(conversationKey) == "" || strings.TrimSpace(skillID) == "" {
 		return nil
 	}
@@ -525,7 +525,7 @@ func (s *bridgeStore) SaveSkillInvocation(ctx context.Context, conversationKey, 
 	return err
 }
 
-func (s *bridgeStore) SaveScheduledTask(ctx context.Context, task ScheduledTask) error {
+func (s *agentStore) SaveScheduledTask(ctx context.Context, task ScheduledTask) error {
 	if s == nil || s.db == nil || strings.TrimSpace(task.ID) == "" {
 		return nil
 	}
@@ -566,7 +566,7 @@ func (s *bridgeStore) SaveScheduledTask(ctx context.Context, task ScheduledTask)
 	return err
 }
 
-func (s *bridgeStore) ListScheduledTasks(ctx context.Context, chatID string, includeDisabled bool) ([]ScheduledTask, error) {
+func (s *agentStore) ListScheduledTasks(ctx context.Context, chatID string, includeDisabled bool) ([]ScheduledTask, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -593,7 +593,7 @@ func (s *bridgeStore) ListScheduledTasks(ctx context.Context, chatID string, inc
 	return scanScheduledTasks(rows)
 }
 
-func (s *bridgeStore) GetScheduledTask(ctx context.Context, id string) (ScheduledTask, error) {
+func (s *agentStore) GetScheduledTask(ctx context.Context, id string) (ScheduledTask, error) {
 	if s == nil || s.db == nil {
 		return ScheduledTask{}, sql.ErrNoRows
 	}
@@ -613,7 +613,7 @@ func (s *bridgeStore) GetScheduledTask(ctx context.Context, id string) (Schedule
 	return tasks[0], nil
 }
 
-func (s *bridgeStore) DeleteScheduledTask(ctx context.Context, id string) error {
+func (s *agentStore) DeleteScheduledTask(ctx context.Context, id string) error {
 	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
 		return nil
 	}
@@ -621,7 +621,7 @@ func (s *bridgeStore) DeleteScheduledTask(ctx context.Context, id string) error 
 	return err
 }
 
-func (s *bridgeStore) SetScheduledTaskEnabled(ctx context.Context, id string, enabled bool) error {
+func (s *agentStore) SetScheduledTaskEnabled(ctx context.Context, id string, enabled bool) error {
 	if s == nil || s.db == nil || strings.TrimSpace(id) == "" {
 		return nil
 	}
@@ -633,7 +633,7 @@ func (s *bridgeStore) SetScheduledTaskEnabled(ctx context.Context, id string, en
 	return err
 }
 
-func (s *bridgeStore) DueScheduledTasks(ctx context.Context, now time.Time, limit int) ([]ScheduledTask, error) {
+func (s *agentStore) DueScheduledTasks(ctx context.Context, now time.Time, limit int) ([]ScheduledTask, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -652,7 +652,7 @@ func (s *bridgeStore) DueScheduledTasks(ctx context.Context, now time.Time, limi
 	return scanScheduledTasks(rows)
 }
 
-func (s *bridgeStore) FinishScheduledTaskRun(ctx context.Context, task ScheduledTask, status string, output string, errText string, finishedAt time.Time, nextRunAt string, enabled bool) error {
+func (s *agentStore) FinishScheduledTaskRun(ctx context.Context, task ScheduledTask, status string, output string, errText string, finishedAt time.Time, nextRunAt string, enabled bool) error {
 	if s == nil || s.db == nil || strings.TrimSpace(task.ID) == "" {
 		return nil
 	}

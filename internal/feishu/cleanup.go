@@ -24,9 +24,9 @@ func (m *Manager) CleanupArtifacts(ctx context.Context, opts CleanupOptions) ([]
 
 	m.setCleanupOutput("正在清理飞书 CLI、Skills 和授权信息...", "")
 
-	results, err := cleanupBridgeArtifacts(ctx, m.setCleanupOutput)
+	results, err := cleanupAgentArtifacts(ctx, m.setCleanupOutput)
 	if opts.IncludeImportedSkills {
-		m.setCleanupOutput("正在清理用户导入 Bridge Skills...", "")
+		m.setCleanupOutput("正在清理用户导入 Agent Skills...", "")
 		if skillResults, skillErr := m.cleanupImportedSkills(ctx); skillErr != nil {
 			if err != nil {
 				err = fmt.Errorf("%v; %w", err, skillErr)
@@ -50,10 +50,10 @@ func (m *Manager) CleanupArtifacts(ctx context.Context, opts CleanupOptions) ([]
 	}
 
 	if err != nil {
-		m.logf("error", "飞书 Bridge 清理失败："+err.Error())
+		m.logf("error", "飞书 Agent 清理失败："+err.Error())
 		return results, err
 	}
-	m.logf("info", "飞书 Bridge 清理完成："+summary)
+	m.logf("info", "飞书 Agent 清理完成："+summary)
 	return results, nil
 }
 
@@ -72,7 +72,7 @@ func (m *Manager) cleanupImportedSkills(ctx context.Context) ([]string, error) {
 	}
 	removed, err := m.skillService.ClearAll(ctx)
 	if removed == 0 && err == nil {
-		return []string{"未发现用户导入 Bridge Skills"}, nil
+		return []string{"未发现用户导入 Agent Skills"}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -81,10 +81,10 @@ func (m *Manager) cleanupImportedSkills(ctx context.Context) ([]string, error) {
 	m.status.SkillCount = 0
 	m.mu.Unlock()
 	m.notifyConversationChanged()
-	return []string{fmt.Sprintf("已移除用户导入 Bridge Skills %d 个", removed)}, nil
+	return []string{fmt.Sprintf("已移除用户导入 Agent Skills %d 个", removed)}, nil
 }
 
-func cleanupBridgeArtifacts(ctx context.Context, onProgress func(string, string)) ([]string, error) {
+func cleanupAgentArtifacts(ctx context.Context, onProgress func(string, string)) ([]string, error) {
 	var results []string
 	var failures []string
 

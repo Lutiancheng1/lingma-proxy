@@ -391,7 +391,7 @@ func TestShouldPreserveDriveSearchToolResultForModel(t *testing.T) {
 	if !shouldPreserveToolResultForModel(`{"kind":"drive_search","results":[]}`) {
 		t.Fatal("drive_search summaries should stay inline for the model")
 	}
-	if !shouldPreserveToolResultForModel(`{"ok":true,"data":{"bridge_reading":{"kind":"doc_content_chunk","has_more":true},"document":{"content":"正文"}}}`) {
+	if !shouldPreserveToolResultForModel(`{"ok":true,"data":{"agent_reading":{"kind":"doc_content_chunk","has_more":true},"document":{"content":"正文"}}}`) {
 		t.Fatal("document chunks should stay inline for the model")
 	}
 	if shouldPreserveToolResultForModel(`{"kind":"other"}`) {

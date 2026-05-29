@@ -15,6 +15,24 @@
       <section class="panel">
         <h1>更新日志</h1>
         <article class="release-entry">
+          <h2>v1.6.8 · Feishu Agent 稳定版</h2>
+          <p>本次版本迭代完成了从 Bridge 到 Agent 架构更名与优化重构，重点打通了 Cloudflare Pages 非阻断部署及 R2 资源发布。</p>
+          <h3>重命名与重构</h3>
+          <ul>
+            <li>完成项目从 Bridge 到 Agent 的全面更名，并清理文档、源码及测试中的遗留 Bridge 字段与描述。</li>
+          </ul>
+          <h3>发布与部署优化</h3>
+          <ul>
+            <li>升级 GitHub Actions 自动化构建与发布，大文件发布改走 AWS S3 API 规避 524 错误超时。</li>
+            <li>优化 Cloudflare Pages 静态页面部署策略，支持非阻断式静默发布，打通官网自动发布及 R2 OTA 升级包检测闭环。</li>
+          </ul>
+          <h3>安全加固</h3>
+          <ul>
+            <li>增强敏感路径文件操作的口诉授权追加逻辑。</li>
+            <li>敏感文件删除（safe_file_delete）新增“参数 confirmed 校验 + 管理员口头指令确认”双保险二次验证，预防恶意注入越权误删。</li>
+          </ul>
+        </article>
+        <article class="release-entry">
           <h2>v1.6.7 · Feishu Agent 稳定版</h2>
           <p>面向个人飞书智能体场景的一次完整增强，重点修复长内容、上下文、工具调用和发布下载链路。</p>
           <h3>核心飞书能力</h3>
@@ -34,13 +52,13 @@
           <h3>工具生态</h3>
           <ul>
             <li>接入 MCP session manager、工具清单缓存、动态 tool schema 和工具展开展示。</li>
-            <li>支持 Bridge Skills 导入、启用、查看和按需加载，脚本执行保留用户确认机制。</li>
+            <li>支持 Agent Skills 导入、启用、查看和按需加载，脚本执行保留用户确认机制。</li>
             <li>补充通用 HTTP、Web、天气、定时任务、本地安全文件读写等基础工具能力。</li>
             <li>飞书 CLI prompt rules 模块化，并支持签名 Prompt Pack 远程更新。</li>
           </ul>
           <h3>桌面端与发布</h3>
           <ul>
-            <li>优化 Feishu Bridge 高级设置、日志详情、区间复制、深色模式和 Windows/macOS 默认窗口体验。</li>
+            <li>优化 Feishu Agent 高级设置、日志详情、区间复制、深色模式和 Windows/macOS 默认窗口体验。</li>
             <li>新增环境维护入口，可清理自动安装的飞书 CLI、官方 Skills 和授权信息。</li>
             <li>新增官网下载页、教程页、更新日志页，以及 R2 OTA manifest 发布链路。</li>
             <li>修复 R2 下载页 CORS，浏览器可直接读取最新版本 manifest。</li>

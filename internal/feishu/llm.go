@@ -263,7 +263,7 @@ func runStreamingRequest(ctx context.Context, proxyURL string, body map[string]a
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	// Streaming can legitimately take longer than a normal request, but it
-	// must not be unbounded. The context timeout above prevents Bridge cards
+	// must not be unbounded. The context timeout above prevents Agent cards
 	// from staying in "thinking" forever when the proxy/model stalls.
 	client := &http.Client{}
 	resp, err := client.Do(req)

@@ -21,7 +21,7 @@ func TestPromptPackRendersEmbeddedModules(t *testing.T) {
 	for _, want := range []string{
 		"官方 `lark-cli`",
 		"drive permission.public patch",
-		"bridge_reading.has_more",
+		"agent_reading.has_more",
 		"Skill",
 	} {
 		if !strings.Contains(prompt, want) {

@@ -14,16 +14,16 @@ export function ChooseFeedbackExportPath() {
   return window['go']['main']['App']['ChooseFeedbackExportPath']();
 }
 
-export function ChooseFeishuBridgeSkillFolder() {
-  return window['go']['main']['App']['ChooseFeishuBridgeSkillFolder']();
+export function ChooseFeishuAgentSkillFolder() {
+  return window['go']['main']['App']['ChooseFeishuAgentSkillFolder']();
 }
 
-export function ChooseFeishuBridgeSkillZip() {
-  return window['go']['main']['App']['ChooseFeishuBridgeSkillZip']();
+export function ChooseFeishuAgentSkillZip() {
+  return window['go']['main']['App']['ChooseFeishuAgentSkillZip']();
 }
 
-export function CleanupFeishuBridgeArtifacts(arg1) {
-  return window['go']['main']['App']['CleanupFeishuBridgeArtifacts'](arg1);
+export function CleanupFeishuAgentArtifacts(arg1) {
+  return window['go']['main']['App']['CleanupFeishuAgentArtifacts'](arg1);
 }
 
 export function ClearLogs() {
@@ -34,8 +34,8 @@ export function ClearRequests() {
   return window['go']['main']['App']['ClearRequests']();
 }
 
-export function DeleteFeishuBridgeSkill(arg1) {
-  return window['go']['main']['App']['DeleteFeishuBridgeSkill'](arg1);
+export function DeleteFeishuAgentSkill(arg1) {
+  return window['go']['main']['App']['DeleteFeishuAgentSkill'](arg1);
 }
 
 export function DownloadAndInstallUpdate() {
@@ -62,20 +62,20 @@ export function GetDetectionInfo() {
   return window['go']['main']['App']['GetDetectionInfo']();
 }
 
-export function GetFeishuBridgeConfig() {
-  return window['go']['main']['App']['GetFeishuBridgeConfig']();
+export function GetFeishuAgentConfig() {
+  return window['go']['main']['App']['GetFeishuAgentConfig']();
 }
 
-export function GetFeishuBridgeMCPJSON() {
-  return window['go']['main']['App']['GetFeishuBridgeMCPJSON']();
+export function GetFeishuAgentMCPJSON() {
+  return window['go']['main']['App']['GetFeishuAgentMCPJSON']();
 }
 
-export function GetFeishuBridgeSkills() {
-  return window['go']['main']['App']['GetFeishuBridgeSkills']();
+export function GetFeishuAgentSkills() {
+  return window['go']['main']['App']['GetFeishuAgentSkills']();
 }
 
-export function GetFeishuBridgeStatus() {
-  return window['go']['main']['App']['GetFeishuBridgeStatus']();
+export function GetFeishuAgentStatus() {
+  return window['go']['main']['App']['GetFeishuAgentStatus']();
 }
 
 export function GetLogDetail(arg1) {
@@ -114,8 +114,8 @@ export function HideWindow() {
   return window['go']['main']['App']['HideWindow']();
 }
 
-export function ImportFeishuBridgeSkillPath(arg1) {
-  return window['go']['main']['App']['ImportFeishuBridgeSkillPath'](arg1);
+export function ImportFeishuAgentSkillPath(arg1) {
+  return window['go']['main']['App']['ImportFeishuAgentSkillPath'](arg1);
 }
 
 export function InstallFeishuCLI() {
@@ -134,8 +134,8 @@ export function RecordBootMilestone(arg1) {
   return window['go']['main']['App']['RecordBootMilestone'](arg1);
 }
 
-export function RefreshFeishuBridgeStatus() {
-  return window['go']['main']['App']['RefreshFeishuBridgeStatus']();
+export function RefreshFeishuAgentStatus() {
+  return window['go']['main']['App']['RefreshFeishuAgentStatus']();
 }
 
 export function RefreshModels() {
@@ -146,32 +146,32 @@ export function ReinstallFeishuSkills() {
   return window['go']['main']['App']['ReinstallFeishuSkills']();
 }
 
-export function ReloadFeishuBridgeSkills() {
-  return window['go']['main']['App']['ReloadFeishuBridgeSkills']();
+export function ReloadFeishuAgentSkills() {
+  return window['go']['main']['App']['ReloadFeishuAgentSkills']();
 }
 
 export function RequestQuitShortcut() {
   return window['go']['main']['App']['RequestQuitShortcut']();
 }
 
-export function SaveFeishuBridgeMCPJSON(arg1) {
-  return window['go']['main']['App']['SaveFeishuBridgeMCPJSON'](arg1);
+export function SaveFeishuAgentMCPJSON(arg1) {
+  return window['go']['main']['App']['SaveFeishuAgentMCPJSON'](arg1);
 }
 
 export function SelectModel(arg1) {
   return window['go']['main']['App']['SelectModel'](arg1);
 }
 
-export function SetFeishuBridgeSkillEnabled(arg1, arg2) {
-  return window['go']['main']['App']['SetFeishuBridgeSkillEnabled'](arg1, arg2);
+export function SetFeishuAgentSkillEnabled(arg1, arg2) {
+  return window['go']['main']['App']['SetFeishuAgentSkillEnabled'](arg1, arg2);
 }
 
 export function ShowWindow() {
   return window['go']['main']['App']['ShowWindow']();
 }
 
-export function StartFeishuBridge() {
-  return window['go']['main']['App']['StartFeishuBridge']();
+export function StartFeishuAgent() {
+  return window['go']['main']['App']['StartFeishuAgent']();
 }
 
 export function StartFeishuCLILogin() {
@@ -186,8 +186,8 @@ export function StartProxy() {
   return window['go']['main']['App']['StartProxy']();
 }
 
-export function StopFeishuBridge() {
-  return window['go']['main']['App']['StopFeishuBridge']();
+export function StopFeishuAgent() {
+  return window['go']['main']['App']['StopFeishuAgent']();
 }
 
 export function StopProxy() {
@@ -198,6 +198,6 @@ export function UpdateConfig(arg1) {
   return window['go']['main']['App']['UpdateConfig'](arg1);
 }
 
-export function UpdateFeishuBridgeConfig(arg1) {
-  return window['go']['main']['App']['UpdateFeishuBridgeConfig'](arg1);
+export function UpdateFeishuAgentConfig(arg1) {
+  return window['go']['main']['App']['UpdateFeishuAgentConfig'](arg1);
 }

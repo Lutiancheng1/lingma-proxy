@@ -179,7 +179,7 @@ func TestHandleEventSynthesizesFinalReplyAfterToolRounds(t *testing.T) {
 	}
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"查到 1 份周报：项目周报，内容摘要为本周完成 Feishu Bridge 调试。"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"查到 1 份周报：项目周报，内容摘要为本周完成 Feishu Agent 调试。"}}]}`))
 	}))
 	defer proxy.Close()
 
@@ -382,7 +382,7 @@ func TestHandleStopCancelsRunningConversation(t *testing.T) {
 		MessageType: "text",
 	})
 
-	got := string(mustReadFileContainingEventually(t, replyLog, "已请求停止当前 Feishu Bridge 任务。"))
+	got := string(mustReadFileContainingEventually(t, replyLog, "已请求停止当前 Feishu Agent 任务。"))
 	if !strings.Contains(got, "--message-id om_stop_2") {
 		t.Fatalf("/stop reply should target stop command message, got: %s", got)
 	}
@@ -545,7 +545,7 @@ func TestReplyToMessageSplitsLongMarkdown(t *testing.T) {
 	}
 }
 
-func TestAuthLoginToolRequestsBridgeLogin(t *testing.T) {
+func TestAuthLoginToolRequestsAgentLogin(t *testing.T) {
 	result := executeToolContext(context.Background(), "lark_cli_exec", map[string]any{
 		"argv": []any{"auth", "login"},
 	})
@@ -590,7 +590,7 @@ if "%2"=="messages" if "%3"=="get" (
 echo {"reaction_id":"re_typing"}
 exit /b 0
 :drive
-echo weekly report: Feishu Bridge debug completed.
+echo weekly report: Feishu Agent debug completed.
 exit /b 0
 :unexpected
 echo unexpected lark-cli command: %* 1>&2
@@ -670,7 +670,7 @@ if [ "$1" = "api" ] && [ "$2" = "PATCH" ]; then
   exit 0
 fi
 if [ "$1" = "drive" ]; then
-  printf '项目周报：本周完成 Feishu Bridge 调试。\n'
+  printf '项目周报：本周完成 Feishu Agent 调试。\n'
   exit 0
 fi
 printf 'unexpected lark-cli command: %s\n' "$*" >&2

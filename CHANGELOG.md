@@ -1,70 +1,70 @@
 # Changelog
 
-## Unreleased (target: v1.6.7)
+## Unreleased (target: v1.6.8)
 
 ## v1.6.7 - 2026-05-27
 
-- Feishu Bridge branch only; no GitHub Release assets are published from this branch.
-- Hardened Feishu Bridge card delivery with serialized CardKit updates, retry/fallback handling, long-reply continuation behavior, and safer final-state updates so replies are less likely to be lost or duplicated.
-- Improved Feishu Bridge context handling with reset boundaries, safer history backfill, context-budget tests, and prompt-too-long recovery paths.
+- Feishu Agent branch only; no GitHub Release assets are published from this branch.
+- Hardened Feishu Agent card delivery with serialized CardKit updates, retry/fallback handling, long-reply continuation behavior, and safer final-state updates so replies are less likely to be lost or duplicated.
+- Improved Feishu Agent context handling with reset boundaries, safer history backfill, context-budget tests, and prompt-too-long recovery paths.
 - Improved MCP support with paginated `tools/list`, `tools/call` error recognition, tool-cache refresh handling, and tests for protocol edge cases.
 - Strengthened Skill support with structured skill summaries, safer HTTP sanity checks, URL guidance, zip/folder import hardening, and clearer script execution behavior.
 - Added Feishu CLI guidance and correction hints for common drive/sheets/docs/auth mistakes, reducing repeated invalid command attempts from weaker models.
 - Added complete desktop log detail and range-copy support for Feishu logs, preserving full Session ID / Chat ID fields and full backend log messages for feedback collection.
-- Fixed Logs page layout and dark-mode polish: long messages stay inside the table, clear-selection stays on one line, detail timestamps are formatted, and Feishu Bridge setting buttons inherit dark theme colors.
-- 仅 Feishu Bridge 分支使用；本分支不发布 GitHub Release assets。
-- 加固飞书 Bridge 卡片投递：CardKit 更新串行化、失败重试 / 兜底、长回复续卡、最终状态更新更稳，降低回复丢失或重复补发概率。
+- Fixed Logs page layout and dark-mode polish: long messages stay inside the table, clear-selection stays on one line, detail timestamps are formatted, and Feishu Agent setting buttons inherit dark theme colors.
+- 仅 Feishu Agent 分支使用；本分支不发布 GitHub Release assets。
+- 加固飞书 Agent 卡片投递：CardKit 更新串行化、失败重试 / 兜底、长回复续卡、最终状态更新更稳，降低回复丢失或重复补发概率。
 - 优化上下文管理：加入 reset boundary、回填历史受边界约束、补充上下文预算测试，并增加 prompt 过长后的恢复路径。
 - 优化 MCP 支持：`tools/list` 分页、`tools/call` 错误识别、工具缓存刷新和协议边界测试补齐。
 - 增强 Skill 支持：结构化 skill 摘要、HTTP 响应 sanity check、URL 使用约束、zip / 文件夹导入加固，以及脚本执行行为说明更清晰。
 - 增加飞书 CLI 常见 drive / sheets / docs / auth 场景提示和纠偏，减少弱模型连续乱试无效命令。
 - 飞书日志页新增完整详情和区间复制，保留完整 Session ID / Chat ID 与后端完整日志，方便反馈排障。
-- 修复日志页布局和暗色模式细节：长消息不再撑出表格，“清除选择”不换行，详情时间格式化，Bridge 设置按钮适配夜间模式。
+- 修复日志页布局和暗色模式细节：长消息不再撑出表格，“清除选择”不换行，详情时间格式化，Agent 设置按钮适配夜间模式。
 
 ## v1.6.6 - 2026-05-25
 
-- Feishu Bridge branch only; no GitHub Release assets are published from this branch.
+- Feishu Agent branch only; no GitHub Release assets are published from this branch.
 - Synced the mainline `v1.6.6` desktop inspector and IPC image fixes: packaged desktop builds keep the right-click `Inspect Element` menu, QoderCN IPC image turns use `qodercn:///agent/file?path=...`, and legacy Lingma runtimes keep `lingma:///agent/file?path=...`.
-- Added Feishu image-message handling for Bridge conversations: image attachments are downloaded, converted into OpenAI image content blocks, and routed through a bounded plain-vision path when no tool use is required.
-- Added stream timeouts for Feishu model calls so stalled visual or final-answer requests stop with a clear card error instead of leaving the Bridge card in "thinking" indefinitely.
-- Improved Feishu Bridge card titles/status text so the visible card header follows the configured bot display name and uses concise "正在思考" / "完成" status copy.
-- 仅 Feishu Bridge 分支使用；本分支不发布 GitHub Release assets。
+- Added Feishu image-message handling for Agent conversations: image attachments are downloaded, converted into OpenAI image content blocks, and routed through a bounded plain-vision path when no tool use is required.
+- Added stream timeouts for Feishu model calls so stalled visual or final-answer requests stop with a clear card error instead of leaving the Agent card in "thinking" indefinitely.
+- Improved Feishu Agent card titles/status text so the visible card header follows the configured bot display name and uses concise "正在思考" / "完成" status copy.
+- 仅 Feishu Agent 分支使用；本分支不发布 GitHub Release assets。
 - 同步主线 `v1.6.6` 桌面调试和 IPC 图片修复：正式桌面包保留右键 `Inspect Element`，QoderCN IPC 图片轮次使用 `qodercn:///agent/file?path=...`，旧 Lingma 运行时继续使用 `lingma:///agent/file?path=...`。
-- 新增飞书图片消息处理：Bridge 会下载图片附件，转换为 OpenAI 图片内容块；当本轮不需要工具调用时，走有超时保护的纯视觉请求路径。
+- 新增飞书图片消息处理：Agent 会下载图片附件，转换为 OpenAI 图片内容块；当本轮不需要工具调用时，走有超时保护的纯视觉请求路径。
 - 飞书模型调用增加流式超时保护，视觉请求或最终答复卡住时会停止并给出明确卡片错误，不再无限停留在“正在思考”。
-- 优化飞书 Bridge 卡片标题和状态文案：卡片头部跟随配置的 bot 展示名，状态使用更简洁的“正在思考” / “完成”。
+- 优化飞书 Agent 卡片标题和状态文案：卡片头部跟随配置的 bot 展示名，状态使用更简洁的“正在思考” / “完成”。
 
 ## v1.6.5 - 2026-05-22
 
-- Feishu Bridge branch only; no GitHub Release assets are published from this branch.
+- Feishu Agent branch only; no GitHub Release assets are published from this branch.
 - Synced the mainline `v1.6.5` startup model probing optimization: the last successful Remote API domain is cached and preferred on the next launch, cached models are shown immediately after reopening, and background startup probing uses a shorter path than manual refresh.
 - Synced the Logs table header layout fix so the header background spans the full log panel width while Feishu-specific session/chat columns remain aligned.
 - Hardened Windows Feishu CLI installation again: custom npm global prefixes such as `D:\node.js\node_global` are detected without requiring users to edit the system PATH, npm install cleanup failures are tolerated when `lark-cli` is actually usable, and pinned `skills` versions are tried before the currently broken latest package.
 - Aligned the App installer and Windows fallback script on a stable Node strategy: prefer Node.js 22.11.0, fall back to 20.18.0, and avoid selecting the highest current Node by default.
-- Added a Settings-page Feishu Bridge installation guide with copyable fallback commands for Windows/manual troubleshooting.
-- Kept Feishu Bridge branch-specific behavior unchanged: macOS/Windows artifacts are produced from the branch workflow only.
-- 仅 Feishu Bridge 分支使用；本分支不发布 GitHub Release assets。
+- Added a Settings-page Feishu Agent installation guide with copyable fallback commands for Windows/manual troubleshooting.
+- Kept Feishu Agent branch-specific behavior unchanged: macOS/Windows artifacts are produced from the branch workflow only.
+- 仅 Feishu Agent 分支使用；本分支不发布 GitHub Release assets。
 - 同步主线 `v1.6.5` 启动模型探测优化：缓存并优先使用上一次成功的远端 API 域名，重新打开时先展示缓存模型，后台启动探测使用比手动刷新更短的路径。
 - 同步日志页表头全宽修复，Feishu 专属会话 / Chat ID 列继续保持对齐。
 - 再次加固 Windows 飞书 CLI 安装：无需用户手动改系统 PATH，也能识别 `D:\node.js\node_global` 这类自定义 npm 全局目录；当 npm 安装脚本清理临时目录失败但 `lark-cli` 实际可用时继续后续流程；优先使用固定兼容的 `skills` 版本，最后才回退 latest。
 - App 内安装和 Windows 兜底脚本统一为稳定 Node 策略：优先 Node.js 22.11.0，失败回退 20.18.0，不再默认选择最高 current 版本。
-- 设置页新增 Feishu Bridge 安装指南弹层，提供可复制的 Windows / 手动排障兜底命令。
-- Feishu Bridge 分支专属行为保持不变：仅通过分支 workflow 生成 macOS / Windows artifact。
+- 设置页新增 Feishu Agent 安装指南弹层，提供可复制的 Windows / 手动排障兜底命令。
+- Feishu Agent 分支专属行为保持不变：仅通过分支 workflow 生成 macOS / Windows artifact。
 
 ## v1.6.4 - 2026-05-21
 
-- Feishu Bridge branch only; no GitHub Release assets are published from this branch.
+- Feishu Agent branch only; no GitHub Release assets are published from this branch.
 - Synced the mainline `v1.6.4` Remote API endpoint fixes: real QoderCN/Lingma runtime chat/model URLs are preferred, explicit enterprise domains stay authoritative, and desktop startup model discovery now retries and refreshes again after warmup.
 - Hardened Windows Feishu CLI onboarding: command windows are hidden, Node/npm/npx/lark-cli resolution includes common Windows global npm locations, and child commands can select a compatible Node.js version without changing the user's default Node.
 - Improved Feishu CLI install progress: the Settings page now shows streaming install output and logs exact node/npm/npx/lark-cli paths for feedback packages.
 - Added compatibility fallback for `npx skills add larksuite/cli -y -g`: if the latest `skills` package fails with its current Windows/Node 22 ESM packaging error, the installer retries pinned `skills@1.5.6` and `skills@1.5.5`.
-- Kept Feishu Bridge feature work branch-scoped: typing reaction while processing, Feishu-specific log filtering/session columns, and artifact-only branch workflow remain outside mainline releases.
-- 仅 Feishu Bridge 分支使用；本分支不发布 GitHub Release assets。
+- Kept Feishu Agent feature work branch-scoped: typing reaction while processing, Feishu-specific log filtering/session columns, and artifact-only branch workflow remain outside mainline releases.
+- 仅 Feishu Agent 分支使用；本分支不发布 GitHub Release assets。
 - 同步主线 `v1.6.4` 远端 API 域名探测修复：优先使用 QoderCN / Lingma 真实 chat/model 请求域名，显式企业域名不被自动探测覆盖，桌面启动模型探测增加重试并在 warmup 后补刷新。
 - 加固 Windows 飞书 CLI 接入：隐藏命令窗口，补齐 Windows 全局 npm 路径探测，子进程可选择兼容 Node.js 版本运行且不修改用户默认 Node。
 - 优化飞书 CLI 安装进度：设置页展示实时安装输出，反馈日志保留 node/npm/npx/lark-cli 解析路径。
 - 增加 `npx skills add larksuite/cli -y -g` 兼容兜底：如果 latest `skills` 包在 Windows/Node 22 下触发当前 ESM 打包错误，会自动重试 `skills@1.5.6` 和 `skills@1.5.5`。
-- Feishu Bridge 独立能力仍只保留在本分支：处理中的飞书消息 reaction、Feishu 专属日志筛选/会话列、分支 artifact-only workflow 均不进入主线 release。
+- Feishu Agent 独立能力仍只保留在本分支：处理中的飞书消息 reaction、Feishu 专属日志筛选/会话列、分支 artifact-only workflow 均不进入主线 release。
 
 ## v1.6.2 - 2026-05-21
 

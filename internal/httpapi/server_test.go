@@ -105,18 +105,18 @@ func TestDebugAppLogsUsesProviderAndSkipsRecorder(t *testing.T) {
 		if limit != 7 {
 			t.Fatalf("limit = %d", limit)
 		}
-		if source != "feishu-bridge" {
+		if source != "feishu-agent" {
 			t.Fatalf("source = %q", source)
 		}
 		return []DebugAppLogRecord{{
 			Time:    "12:00:00",
-			Source:  "feishu-bridge",
+			Source:  "feishu-agent",
 			Level:   "info",
 			Message: "hello",
 		}}
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/debug/app-logs?limit=7&source=feishu-bridge", nil)
+	req := httptest.NewRequest(http.MethodGet, "/debug/app-logs?limit=7&source=feishu-agent", nil)
 	rec := httptest.NewRecorder()
 	server.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

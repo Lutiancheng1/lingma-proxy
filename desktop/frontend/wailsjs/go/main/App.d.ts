@@ -10,17 +10,17 @@ export function CheckPromptPackUpdate():Promise<feishu.PromptPackStatus>;
 
 export function ChooseFeedbackExportPath():Promise<string>;
 
-export function ChooseFeishuBridgeSkillFolder():Promise<string>;
+export function ChooseFeishuAgentSkillFolder():Promise<string>;
 
-export function ChooseFeishuBridgeSkillZip():Promise<string>;
+export function ChooseFeishuAgentSkillZip():Promise<string>;
 
-export function CleanupFeishuBridgeArtifacts(arg1:main.FeishuBridgeCleanupOptions):Promise<Array<string>>;
+export function CleanupFeishuAgentArtifacts(arg1:main.FeishuAgentCleanupOptions):Promise<Array<string>>;
 
 export function ClearLogs():Promise<void>;
 
 export function ClearRequests():Promise<void>;
 
-export function DeleteFeishuBridgeSkill(arg1:string):Promise<void>;
+export function DeleteFeishuAgentSkill(arg1:string):Promise<void>;
 
 export function DownloadAndInstallUpdate():Promise<main.OnlineUpdateStatus>;
 
@@ -34,13 +34,13 @@ export function GetConfig():Promise<service.Config>;
 
 export function GetDetectionInfo():Promise<main.DetectionInfo>;
 
-export function GetFeishuBridgeConfig():Promise<feishu.Config>;
+export function GetFeishuAgentConfig():Promise<feishu.Config>;
 
-export function GetFeishuBridgeMCPJSON():Promise<main.MCPJSONFile>;
+export function GetFeishuAgentMCPJSON():Promise<main.MCPJSONFile>;
 
-export function GetFeishuBridgeSkills():Promise<Array<feishu.BridgeSkill>>;
+export function GetFeishuAgentSkills():Promise<Array<feishu.AgentSkill>>;
 
-export function GetFeishuBridgeStatus():Promise<feishu.Status>;
+export function GetFeishuAgentStatus():Promise<feishu.Status>;
 
 export function GetLogDetail(arg1:string):Promise<main.AppLog>;
 
@@ -60,7 +60,7 @@ export function GetTokenStats():Promise<main.TokenStats>;
 
 export function HideWindow():Promise<void>;
 
-export function ImportFeishuBridgeSkillPath(arg1:string):Promise<feishu.BridgeSkillImportResult>;
+export function ImportFeishuAgentSkillPath(arg1:string):Promise<feishu.AgentSkillImportResult>;
 
 export function InstallFeishuCLI():Promise<void>;
 
@@ -70,25 +70,25 @@ export function OpenPathInFileManager(arg1:string):Promise<void>;
 
 export function RecordBootMilestone(arg1:string):Promise<void>;
 
-export function RefreshFeishuBridgeStatus():Promise<feishu.Status>;
+export function RefreshFeishuAgentStatus():Promise<feishu.Status>;
 
 export function RefreshModels():Promise<Array<main.ModelInfo>>;
 
 export function ReinstallFeishuSkills():Promise<void>;
 
-export function ReloadFeishuBridgeSkills():Promise<void>;
+export function ReloadFeishuAgentSkills():Promise<void>;
 
 export function RequestQuitShortcut():Promise<void>;
 
-export function SaveFeishuBridgeMCPJSON(arg1:string):Promise<main.MCPJSONFile>;
+export function SaveFeishuAgentMCPJSON(arg1:string):Promise<main.MCPJSONFile>;
 
 export function SelectModel(arg1:string):Promise<main.ProxyStatus>;
 
-export function SetFeishuBridgeSkillEnabled(arg1:string,arg2:boolean):Promise<void>;
+export function SetFeishuAgentSkillEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function ShowWindow():Promise<void>;
 
-export function StartFeishuBridge():Promise<void>;
+export function StartFeishuAgent():Promise<void>;
 
 export function StartFeishuCLILogin():Promise<void>;
 
@@ -96,10 +96,10 @@ export function StartFeishuCLISetupNew():Promise<void>;
 
 export function StartProxy():Promise<void>;
 
-export function StopFeishuBridge():Promise<void>;
+export function StopFeishuAgent():Promise<void>;
 
 export function StopProxy():Promise<void>;
 
 export function UpdateConfig(arg1:service.Config):Promise<void>;
 
-export function UpdateFeishuBridgeConfig(arg1:feishu.Config):Promise<void>;
+export function UpdateFeishuAgentConfig(arg1:feishu.Config):Promise<void>;

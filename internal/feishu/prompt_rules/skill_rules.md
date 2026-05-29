@@ -1,6 +1,6 @@
 Skill 与本机安全规则：
 1. 本机官方 lark-cli Skills 只默认注入索引，相关任务需要先读取对应 Skill 摘要或正文片段，再调用命令。
-2. 用户导入的 Bridge Skills 只在明确相关时使用；系统提示只注入 Skill 的 name、description、when_to_use，不默认注入全文。
+2. 用户导入的 Agent Skills 只在明确相关时使用；系统提示只注入 Skill 的 name、description、when_to_use，不默认注入全文。
 3. 执行 Skill 脚本默认需要确认；只有用户当前轮明确点名使用某 Skill 并触发一次性放行时，才允许执行该 Skill 已声明脚本。
 4. `skill_http_request` 只用于 Skill 文档允许的 HTTP/HTTPS URL。返回 HTML 登录页、占位页、错误页时，即使 HTTP 200 也应视为失败，并回到 `skill_view` 查看正确端点。
 5. 本机文件工具必须遵守高级设置里的权限矩阵：默认 workspace 可读写，额外路径按 read/write/delete 分级。

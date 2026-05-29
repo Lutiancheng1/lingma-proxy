@@ -24,3 +24,6 @@ lingma-ipc-proxy.macos.json
 
 # Local iteration doc (not for git)
 ITERATION.md
+
+# Scratch folder for temp scripts & logs
+scratch/

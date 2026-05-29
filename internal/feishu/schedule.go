@@ -79,7 +79,7 @@ func (m *Manager) runDueScheduledTasks(ctx context.Context) {
 	}
 	tasks, err := m.store.DueScheduledTasks(ctx, time.Now(), maxScheduleTasksPerPoll)
 	if err != nil {
-		m.logf("warn", "Feishu bridge 定时任务扫描失败："+err.Error())
+		m.logf("warn", "Feishu Agent 定时任务扫描失败："+err.Error())
 		return
 	}
 	for _, task := range tasks {
@@ -116,7 +116,7 @@ func (m *Manager) runScheduledTask(parent context.Context, task ScheduledTask, m
 	task.LastRunAt = started.Format(time.RFC3339)
 	runCtx, cancel := context.WithTimeout(parent, scheduleTaskTimeout)
 	defer cancel()
-	m.logf("info", "Feishu bridge 定时任务开始："+scheduleTaskLabel(task), meta)
+	m.logf("info", "Feishu Agent 定时任务开始："+scheduleTaskLabel(task), meta)
 	output, err := m.executeScheduledLLMTask(runCtx, task, meta)
 	status := "success"
 	errText := ""
@@ -124,13 +124,13 @@ func (m *Manager) runScheduledTask(parent context.Context, task ScheduledTask, m
 		status = "error"
 		errText = err.Error()
 		output = "定时任务执行失败：" + err.Error()
-		m.logf("warn", "Feishu bridge 定时任务失败："+err.Error(), meta)
+		m.logf("warn", "Feishu Agent 定时任务失败："+err.Error(), meta)
 	}
 	if strings.TrimSpace(output) != "" && !strings.EqualFold(strings.TrimSpace(output), scheduleSilentMarker) {
 		if sendErr := m.sendScheduledTaskMessage(context.Background(), task, output); sendErr != nil {
 			status = "send_error"
 			errText = sendErr.Error()
-			m.logf("warn", "Feishu bridge 定时任务投递失败："+sendErr.Error(), meta)
+			m.logf("warn", "Feishu Agent 定时任务投递失败："+sendErr.Error(), meta)
 		}
 	}
 	nextRunAt, enabled := nextScheduleAfterRun(task, started)
@@ -139,10 +139,10 @@ func (m *Manager) runScheduledTask(parent context.Context, task ScheduledTask, m
 	}
 	if m.store != nil {
 		if err := m.store.FinishScheduledTaskRun(context.Background(), task, status, output, errText, time.Now(), nextRunAt, enabled); err != nil {
-			m.logf("warn", "Feishu bridge 定时任务状态保存失败："+err.Error(), meta)
+			m.logf("warn", "Feishu Agent 定时任务状态保存失败："+err.Error(), meta)
 		}
 	}
-	m.logf("info", "Feishu bridge 定时任务结束："+scheduleTaskLabel(task)+" status="+status, meta)
+	m.logf("info", "Feishu Agent 定时任务结束："+scheduleTaskLabel(task)+" status="+status, meta)
 }
 
 func (m *Manager) executeScheduledLLMTask(ctx context.Context, task ScheduledTask, meta LogMeta) (string, error) {
@@ -171,7 +171,7 @@ func (m *Manager) executeScheduledLLMTask(ctx context.Context, task ScheduledTas
 		importedSkillListing = m.skillService.PromptListing(40)
 	}
 	systemPrompt := buildSystemPrompt(skills, cfg.BotIdentity, buildMCPPromptSection(mcpTools, m.mcp.Resources(), m.mcp.Prompts()), importedSkillListing) + "\n\n" +
-		"当前正在执行 Feishu Bridge 定时任务。最终回复会由 Bridge 自动投递到飞书聊天；不要调用 lark_im_send 或 im +messages-send 自行发送本次结果。若没有新内容，请只回复 [SILENT]。"
+		"当前正在执行 Feishu Agent 定时任务。最终回复会由 Agent 自动投递到飞书聊天；不要调用 lark_im_send 或 im +messages-send 自行发送本次结果。若没有新内容，请只回复 [SILENT]。"
 	messages := []map[string]any{
 		{"role": "system", "content": systemPrompt},
 		{"role": "user", "content": task.Prompt},
@@ -209,7 +209,7 @@ func (m *Manager) executeScheduledLLMTask(ctx context.Context, task ScheduledTas
 			} else {
 				consecutiveFailures = 0
 			}
-			m.logf("info", fmt.Sprintf("Feishu bridge scheduled tool result: %s %s", tc.Function.Name, content), meta)
+			m.logf("info", fmt.Sprintf("Feishu Agent scheduled tool result: %s %s", tc.Function.Name, content), meta)
 			messages = append(messages, map[string]any{
 				"role":         "tool",
 				"tool_call_id": tc.ID,
@@ -228,8 +228,8 @@ func (m *Manager) executeScheduledToolCall(ctx context.Context, task ScheduledTa
 	if tc.Function.Name == "schedule_task" {
 		return ToolExecutionResult{Output: "[error] 定时任务执行过程中不允许递归创建或修改定时任务。", IsError: true}
 	}
-	if isBridgeSkillTool(tc.Function.Name) {
-		return m.executeBridgeSkillTool(ctx, "schedule:"+task.ID, tc.ID, tc.Function.Name, args)
+	if isAgentSkillTool(tc.Function.Name) {
+		return m.executeAgentSkillTool(ctx, "schedule:"+task.ID, tc.ID, tc.Function.Name, args)
 	}
 	return executeToolContextWithRuntime(ctx, m.Config(), m.mcp, tc.Function.Name, args)
 }

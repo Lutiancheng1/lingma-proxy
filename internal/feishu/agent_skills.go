@@ -19,7 +19,7 @@ import (
 
 const maxSkillFileBytes = 512 * 1024
 
-type BridgeSkill struct {
+type AgentSkill struct {
 	ID                     string   `json:"id"`
 	Name                   string   `json:"name"`
 	Description            string   `json:"description,omitempty"`
@@ -37,39 +37,39 @@ type BridgeSkill struct {
 	UpdatedAt              string   `json:"updatedAt,omitempty"`
 }
 
-type BridgeSkillImportResult struct {
-	Imported []BridgeSkill `json:"imported"`
+type AgentSkillImportResult struct {
+	Imported []AgentSkill `json:"imported"`
 	Errors   []string      `json:"errors,omitempty"`
 }
 
-type BridgeSkillService struct {
+type AgentSkillService struct {
 	mu       sync.RWMutex
 	rootDir  string
-	store    *bridgeStore
-	skills   map[string]BridgeSkill
+	store    *agentStore
+	skills   map[string]AgentSkill
 	lastScan time.Time
 }
 
-func NewBridgeSkillService(dataDir string, store *bridgeStore) (*BridgeSkillService, error) {
+func NewAgentSkillService(dataDir string, store *agentStore) (*AgentSkillService, error) {
 	dataDir = strings.TrimSpace(dataDir)
 	if dataDir == "" {
-		return &BridgeSkillService{skills: map[string]BridgeSkill{}}, nil
+		return &AgentSkillService{skills: map[string]AgentSkill{}}, nil
 	}
 	root := filepath.Join(dataDir, "feishu-skills")
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return nil, err
 	}
-	svc := &BridgeSkillService{rootDir: root, store: store, skills: map[string]BridgeSkill{}}
+	svc := &AgentSkillService{rootDir: root, store: store, skills: map[string]AgentSkill{}}
 	if err := svc.Reload(context.Background()); err != nil {
 		return svc, err
 	}
 	return svc, nil
 }
 
-func (s *BridgeSkillService) Reload(ctx context.Context) error {
+func (s *AgentSkillService) Reload(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	loaded := map[string]BridgeSkill{}
+	loaded := map[string]AgentSkill{}
 	if s.store != nil {
 		skills, err := s.store.LoadSkills(ctx)
 		if err == nil {
@@ -86,7 +86,7 @@ func (s *BridgeSkillService) Reload(ctx context.Context) error {
 				continue
 			}
 			path := filepath.Join(s.rootDir, entry.Name())
-			skill, err := parseBridgeSkillDir(path, "local")
+			skill, err := parseAgentSkillDir(path, "local")
 			if err != nil {
 				continue
 			}
@@ -109,10 +109,10 @@ func (s *BridgeSkillService) Reload(ctx context.Context) error {
 	return nil
 }
 
-func (s *BridgeSkillService) List(enabledOnly bool) []BridgeSkill {
+func (s *AgentSkillService) List(enabledOnly bool) []AgentSkill {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]BridgeSkill, 0, len(s.skills))
+	out := make([]AgentSkill, 0, len(s.skills))
 	for _, skill := range s.skills {
 		if enabledOnly && !skill.Enabled {
 			continue
@@ -125,10 +125,10 @@ func (s *BridgeSkillService) List(enabledOnly bool) []BridgeSkill {
 	return out
 }
 
-func (s *BridgeSkillService) Find(nameOrID string) (BridgeSkill, bool) {
+func (s *AgentSkillService) Find(nameOrID string) (AgentSkill, bool) {
 	target := strings.ToLower(strings.TrimSpace(nameOrID))
 	if target == "" {
-		return BridgeSkill{}, false
+		return AgentSkill{}, false
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -140,24 +140,24 @@ func (s *BridgeSkillService) Find(nameOrID string) (BridgeSkill, bool) {
 			return skill, true
 		}
 	}
-	return BridgeSkill{}, false
+	return AgentSkill{}, false
 }
 
-func (s *BridgeSkillService) ImportPath(ctx context.Context, sourcePath string) (BridgeSkillImportResult, error) {
+func (s *AgentSkillService) ImportPath(ctx context.Context, sourcePath string) (AgentSkillImportResult, error) {
 	sourcePath = strings.TrimSpace(sourcePath)
 	if sourcePath == "" {
-		return BridgeSkillImportResult{}, fmt.Errorf("path is required")
+		return AgentSkillImportResult{}, fmt.Errorf("path is required")
 	}
 	if s.rootDir == "" {
-		return BridgeSkillImportResult{}, fmt.Errorf("skill root is not configured")
+		return AgentSkillImportResult{}, fmt.Errorf("skill root is not configured")
 	}
 	info, err := os.Stat(sourcePath)
 	if err != nil {
-		return BridgeSkillImportResult{}, err
+		return AgentSkillImportResult{}, err
 	}
 	tmpDir, err := os.MkdirTemp("", "feishu-skill-import-*")
 	if err != nil {
-		return BridgeSkillImportResult{}, err
+		return AgentSkillImportResult{}, err
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -165,24 +165,24 @@ func (s *BridgeSkillService) ImportPath(ctx context.Context, sourcePath string) 
 	if info.IsDir() {
 		dst := filepath.Join(tmpDir, filepath.Base(sourcePath))
 		if err := copySkillDir(sourcePath, dst); err != nil {
-			return BridgeSkillImportResult{}, err
+			return AgentSkillImportResult{}, err
 		}
 		candidates = append(candidates, dst)
 	} else if strings.EqualFold(filepath.Ext(sourcePath), ".zip") {
 		if err := unzipSkillArchive(sourcePath, tmpDir); err != nil {
-			return BridgeSkillImportResult{}, err
+			return AgentSkillImportResult{}, err
 		}
 		candidates = findSkillDirs(tmpDir)
 	} else {
-		return BridgeSkillImportResult{}, fmt.Errorf("只支持 SKILL.md 文件夹或 zip 压缩包")
+		return AgentSkillImportResult{}, fmt.Errorf("只支持 SKILL.md 文件夹或 zip 压缩包")
 	}
 	if len(candidates) == 0 {
-		return BridgeSkillImportResult{}, fmt.Errorf("未找到包含 SKILL.md 的 skill 目录")
+		return AgentSkillImportResult{}, fmt.Errorf("未找到包含 SKILL.md 的 skill 目录")
 	}
 
-	result := BridgeSkillImportResult{}
+	result := AgentSkillImportResult{}
 	for _, candidate := range candidates {
-		skill, err := parseBridgeSkillDir(candidate, sourcePath)
+		skill, err := parseAgentSkillDir(candidate, sourcePath)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", candidate, err))
 			continue
@@ -210,7 +210,7 @@ func (s *BridgeSkillService) ImportPath(ctx context.Context, sourcePath string) 
 	return result, nil
 }
 
-func (s *BridgeSkillService) SetEnabled(ctx context.Context, id string, enabled bool) error {
+func (s *AgentSkillService) SetEnabled(ctx context.Context, id string, enabled bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	skill, ok := s.skills[id]
@@ -226,7 +226,7 @@ func (s *BridgeSkillService) SetEnabled(ctx context.Context, id string, enabled 
 	return nil
 }
 
-func (s *BridgeSkillService) Delete(ctx context.Context, id string) error {
+func (s *AgentSkillService) Delete(ctx context.Context, id string) error {
 	s.mu.Lock()
 	skill, ok := s.skills[id]
 	if ok {
@@ -245,13 +245,13 @@ func (s *BridgeSkillService) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *BridgeSkillService) ClearAll(ctx context.Context) (int, error) {
+func (s *AgentSkillService) ClearAll(ctx context.Context) (int, error) {
 	s.mu.Lock()
-	skills := make([]BridgeSkill, 0, len(s.skills))
+	skills := make([]AgentSkill, 0, len(s.skills))
 	for _, skill := range s.skills {
 		skills = append(skills, skill)
 	}
-	s.skills = map[string]BridgeSkill{}
+	s.skills = map[string]AgentSkill{}
 	s.mu.Unlock()
 
 	removed := 0
@@ -275,10 +275,10 @@ func (s *BridgeSkillService) ClearAll(ctx context.Context) (int, error) {
 	return removed, nil
 }
 
-func (s *BridgeSkillService) SkillBody(nameOrID string) (string, BridgeSkill, error) {
+func (s *AgentSkillService) SkillBody(nameOrID string) (string, AgentSkill, error) {
 	skill, ok := s.Find(nameOrID)
 	if !ok {
-		return "", BridgeSkill{}, fmt.Errorf("skill not found: %s", nameOrID)
+		return "", AgentSkill{}, fmt.Errorf("skill not found: %s", nameOrID)
 	}
 	if !skill.Enabled {
 		return "", skill, fmt.Errorf("skill is disabled: %s", skill.Name)
@@ -291,7 +291,7 @@ func (s *BridgeSkillService) SkillBody(nameOrID string) (string, BridgeSkill, er
 	return string(data), skill, nil
 }
 
-func (s *BridgeSkillService) PromptListing(limit int) string {
+func (s *AgentSkillService) PromptListing(limit int) string {
 	skills := s.List(true)
 	if len(skills) == 0 {
 		return ""
@@ -313,21 +313,21 @@ func (s *BridgeSkillService) PromptListing(limit int) string {
 	return strings.Join(lines, "\n")
 }
 
-func parseBridgeSkillDir(dir string, source string) (BridgeSkill, error) {
+func parseAgentSkillDir(dir string, source string) (AgentSkill, error) {
 	info, err := os.Lstat(dir)
 	if err != nil {
-		return BridgeSkill{}, err
+		return AgentSkill{}, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return BridgeSkill{}, fmt.Errorf("skill 根目录不能是软链")
+		return AgentSkill{}, fmt.Errorf("skill 根目录不能是软链")
 	}
 	skillFile := filepath.Join(dir, "SKILL.md")
 	data, err := os.ReadFile(skillFile)
 	if err != nil {
-		return BridgeSkill{}, fmt.Errorf("缺少 SKILL.md")
+		return AgentSkill{}, fmt.Errorf("缺少 SKILL.md")
 	}
 	if len(data) > maxSkillFileBytes {
-		return BridgeSkill{}, fmt.Errorf("SKILL.md 超过 %d bytes", maxSkillFileBytes)
+		return AgentSkill{}, fmt.Errorf("SKILL.md 超过 %d bytes", maxSkillFileBytes)
 	}
 	frontmatter, body := parseSkillFrontmatter(string(data))
 	name := strings.TrimSpace(frontmatter["name"])
@@ -340,7 +340,7 @@ func parseBridgeSkillDir(dir string, source string) (BridgeSkill, error) {
 	}
 	hash := hashSkillDir(dir)
 	id := normalizedSkillID(name, hash)
-	return BridgeSkill{
+	return AgentSkill{
 		ID:                     id,
 		Name:                   name,
 		Description:            desc,

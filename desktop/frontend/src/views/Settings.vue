@@ -4,33 +4,33 @@ import { BrowserOpenURL } from '../../wailsjs/runtime'
 import {
   GetConfig,
   GetDetectionInfo,
-  GetFeishuBridgeConfig,
-  GetFeishuBridgeMCPJSON,
-  GetFeishuBridgeSkills,
-  GetFeishuBridgeStatus,
+  GetFeishuAgentConfig,
+  GetFeishuAgentMCPJSON,
+  GetFeishuAgentSkills,
+  GetFeishuAgentStatus,
   GetModels,
-  ChooseFeishuBridgeSkillFolder,
-  ChooseFeishuBridgeSkillZip,
-  CleanupFeishuBridgeArtifacts,
+  ChooseFeishuAgentSkillFolder,
+  ChooseFeishuAgentSkillZip,
+  CleanupFeishuAgentArtifacts,
   CheckForUpdates,
   CheckPromptPackUpdate,
-  DeleteFeishuBridgeSkill,
+  DeleteFeishuAgentSkill,
   DownloadAndInstallUpdate,
   GetOnlineUpdateStatus,
-  ImportFeishuBridgeSkillPath,
+  ImportFeishuAgentSkillPath,
   InstallFeishuCLI,
-  RefreshFeishuBridgeStatus,
+  RefreshFeishuAgentStatus,
   RefreshModels,
   ReinstallFeishuSkills,
-  ReloadFeishuBridgeSkills,
-  SetFeishuBridgeSkillEnabled,
-  StartFeishuBridge,
+  ReloadFeishuAgentSkills,
+  SetFeishuAgentSkillEnabled,
+  StartFeishuAgent,
   StartFeishuCLILogin,
   StartFeishuCLISetupNew,
-  StopFeishuBridge,
+  StopFeishuAgent,
   UpdateConfig,
-  UpdateFeishuBridgeConfig,
-  SaveFeishuBridgeMCPJSON,
+  UpdateFeishuAgentConfig,
+  SaveFeishuAgentMCPJSON,
 } from '../../wailsjs/go/main/App.js'
 import { safeEventsOff, safeEventsOn } from '../utils/wailsSafe'
 
@@ -39,7 +39,7 @@ const emit = defineEmits(['log', 'status-refresh', 'notice'])
 const config = ref({})
 const detection = ref(null)
 const saving = ref(false)
-const bridgeConfig = ref({
+const agentConfig = ref({
   enabled: false,
   autoStart: false,
   brand: 'feishu',
@@ -64,34 +64,34 @@ const bridgeConfig = ref({
   },
   maxToolRounds: 0,
 })
-const bridgeStatus = ref(null)
-const bridgeStatusLoaded = ref(false)
-const bridgeInitialStatusLoading = ref(true)
-const bridgeSaving = ref(false)
-const bridgeBusy = ref(false)
-const bridgeRefreshing = ref(false)
-const bridgeSetupGuideOpen = ref(false)
-const bridgeAdvancedDialogOpen = ref(false)
-const bridgeMCPJSONDialogOpen = ref(false)
-const bridgeBotNameDraft = ref('')
-const bridgeIdentityDraft = ref('')
-const bridgeMCPEnabledDraft = ref(false)
-const bridgeMCPServersDraft = ref([])
-const bridgeMCPExpanded = ref({})
-const bridgeMCPJSONDraft = ref('')
-const bridgeMCPJSONPath = ref('')
-const bridgeMCPJSONError = ref('')
-const bridgeMCPJSONSaving = ref(false)
-const bridgeCleanupDialogOpen = ref(false)
-const bridgeCleanupImportedSkills = ref(false)
-const bridgeCleanupMCPConfig = ref(false)
-const bridgeSkills = ref([])
-const bridgeSkillsLoading = ref(false)
-const bridgeSkillImporting = ref(false)
+const agentStatus = ref(null)
+const agentStatusLoaded = ref(false)
+const agentInitialStatusLoading = ref(true)
+const agentSaving = ref(false)
+const agentBusy = ref(false)
+const agentRefreshing = ref(false)
+const agentSetupGuideOpen = ref(false)
+const agentAdvancedDialogOpen = ref(false)
+const agentMCPJSONDialogOpen = ref(false)
+const agentBotNameDraft = ref('')
+const agentIdentityDraft = ref('')
+const agentMCPEnabledDraft = ref(false)
+const agentMCPServersDraft = ref([])
+const agentMCPExpanded = ref({})
+const agentMCPJSONDraft = ref('')
+const agentMCPJSONPath = ref('')
+const agentMCPJSONError = ref('')
+const agentMCPJSONSaving = ref(false)
+const agentCleanupDialogOpen = ref(false)
+const agentCleanupImportedSkills = ref(false)
+const agentCleanupMCPConfig = ref(false)
+const agentSkills = ref([])
+const agentSkillsLoading = ref(false)
+const agentSkillImporting = ref(false)
 const updateStatus = ref(null)
 const updateBusy = ref(false)
 const promptPackBusy = ref(false)
-const bridgeContextDraft = ref({
+const agentContextDraft = ref({
   autoCompact: true,
   compactWatermark: 75,
   toolResultRetention: 2,
@@ -99,34 +99,34 @@ const bridgeContextDraft = ref({
   skillHttpTimeout: 60,
   skillHttpMaxBytes: 5242880,
 })
-const bridgeSafeFilesDraft = ref({
+const agentSafeFilesDraft = ref({
   enabled: true,
   workspaceDir: '',
   extraPathsText: '',
 })
 const openSelect = ref('')
 const fallbackModelsText = ref('')
-const availableBridgeModels = ref([])
+const availableAgentModels = ref([])
 const isIPCBackend = computed(() => (config.value.Backend || 'ipc') === 'ipc')
 const formattedTokenExpireAt = computed(() => formatDateTime(detection.value?.remoteTokenExpireAt))
 const updateLastCheckedAt = computed(() => formatDateTime(updateStatus.value?.lastCheckedAt))
 const promptPackLastCheckedAt = computed(() => formatDateTime(updateStatus.value?.promptPack?.lastCheckedAt))
-const bridgeCurrentModel = computed(() => bridgeConfig.value.model || bridgeStatus.value?.currentModel || 'kmodel')
-const bridgeModelOptions = computed(() => {
-  const items = Array.isArray(availableBridgeModels.value) ? [...availableBridgeModels.value] : []
-  const currentID = String(bridgeConfig.value.model || bridgeStatus.value?.currentModel || '').trim()
+const agentCurrentModel = computed(() => agentConfig.value.model || agentStatus.value?.currentModel || 'kmodel')
+const agentModelOptions = computed(() => {
+  const items = Array.isArray(availableAgentModels.value) ? [...availableAgentModels.value] : []
+  const currentID = String(agentConfig.value.model || agentStatus.value?.currentModel || '').trim()
   if (currentID && !items.some((item) => item.id === currentID)) {
     items.unshift({ id: currentID, name: currentID })
   }
   return items
 })
-const bridgeModelLabel = computed(() => {
-  const currentID = String(bridgeConfig.value.model || bridgeStatus.value?.currentModel || '').trim()
-  const option = bridgeModelOptions.value.find((item) => item.id === currentID)
+const agentModelLabel = computed(() => {
+  const currentID = String(agentConfig.value.model || agentStatus.value?.currentModel || '').trim()
+  const option = agentModelOptions.value.find((item) => item.id === currentID)
   return option?.name || option?.id || '请选择模型'
 })
-const bridgeReady = computed(() => {
-  const status = bridgeStatus.value
+const agentReady = computed(() => {
+  const status = agentStatus.value
   return Boolean(
     status?.node?.found &&
     status?.npm?.found &&
@@ -137,32 +137,32 @@ const bridgeReady = computed(() => {
     status?.auth?.authorized,
   )
 })
-const bridgeStatusPending = computed(() => {
-  return bridgeInitialStatusLoading.value || !bridgeStatusLoaded.value || bridgeRefreshing.value
+const agentStatusPending = computed(() => {
+  return agentInitialStatusLoading.value || !agentStatusLoaded.value || agentRefreshing.value
 })
 const commandHelpPinned = ref(false)
-const bridgeSetupLinkVisible = computed(() => Boolean(bridgeStatus.value?.setupUrl) && !bridgeStatus.value?.config?.configured)
-const bridgeLoginLinkVisible = computed(() => Boolean(bridgeStatus.value?.loginUrl) && !bridgeStatus.value?.auth?.authorized)
-const bridgeBrowserHintVisible = computed(() => bridgeSetupLinkVisible.value || bridgeLoginLinkVisible.value)
-const bridgeStartButtonLabel = computed(() => {
-  if (bridgeBusy.value) return bridgeStatus.value?.running ? '停止中...' : '启动中...'
-  if (bridgeStatus.value?.running) return '停止 Bridge'
-  if (bridgeConfig.value.enabled) return '启动 Bridge'
-  return '启用并启动 Bridge'
+const agentSetupLinkVisible = computed(() => Boolean(agentStatus.value?.setupUrl) && !agentStatus.value?.config?.configured)
+const agentLoginLinkVisible = computed(() => Boolean(agentStatus.value?.loginUrl) && !agentStatus.value?.auth?.authorized)
+const agentBrowserHintVisible = computed(() => agentSetupLinkVisible.value || agentLoginLinkVisible.value)
+const agentStartButtonLabel = computed(() => {
+  if (agentBusy.value) return agentStatus.value?.running ? '停止中...' : '启动中...'
+  if (agentStatus.value?.running) return '停止 Agent'
+  if (agentConfig.value.enabled) return '启动 Agent'
+  return '启用并启动 Agent'
 })
-const bridgeMCPServers = computed(() => Array.isArray(bridgeStatus.value?.mcpServers) ? bridgeStatus.value.mcpServers : [])
-const bridgeMCPServerGroups = computed(() => groupMCPServersBySource(bridgeMCPServersDraft.value))
-const bridgeAdvancedLabel = computed(() => {
+const agentMCPServers = computed(() => Array.isArray(agentStatus.value?.mcpServers) ? agentStatus.value.mcpServers : [])
+const agentMCPServerGroups = computed(() => groupMCPServersBySource(agentMCPServersDraft.value))
+const agentAdvancedLabel = computed(() => {
   return '设置'
 })
-const bridgeInstallStepDone = computed(() => {
-  const status = bridgeStatus.value
+const agentInstallStepDone = computed(() => {
+  const status = agentStatus.value
   return Boolean(status?.node?.found && status?.npm?.found && status?.npx?.found && status?.cli?.found && status?.skillsReady)
 })
-const bridgeSetupStepDone = computed(() => Boolean(bridgeStatus.value?.config?.configured))
-const bridgeStepItems = computed(() => {
-  const status = bridgeStatus.value
-  if (!bridgeStatusLoaded.value) {
+const agentSetupStepDone = computed(() => Boolean(agentStatus.value?.config?.configured))
+const agentStepItems = computed(() => {
+  const status = agentStatus.value
+  if (!agentStatusLoaded.value) {
     return [
       { key: 'install', title: '安装 CLI 与 Skills', done: false, active: true, detail: '应用已启动后台预检测，正在读取当前安装状态…' },
       { key: 'setup', title: '初始化飞书应用', done: false, active: false, detail: '等待检测当前 CLI 配置和应用初始化结果…' },
@@ -195,12 +195,12 @@ const bridgeStepItems = computed(() => {
     },
   ]
 })
-const lastBridgeSnapshot = ref({
+const lastAgentSnapshot = ref({
   configured: false,
   authorized: false,
   running: false,
 })
-let bridgeStatusPollTimer = null
+let agentStatusPollTimer = null
 const remoteProxyStatus = computed(() => {
   if (!detection.value) return ''
   if (detection.value.remoteProxyError) return detection.value.remoteProxyError
@@ -242,7 +242,7 @@ const selectLabel = computed(() => (field) => {
   return option?.label || '请选择'
 })
 
-const bridgeSetupCommands = [
+const agentSetupCommands = [
   {
     title: 'Windows 一键脚本（推荐兜底）',
     command: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/Lutiancheng1/lingma-ipc-proxy/main/scripts/windows/install-feishu-cli.ps1 -UseBasicParsing -OutFile $env:TEMP\\install-feishu-cli.ps1; & $env:TEMP\\install-feishu-cli.ps1 -PersistPath"',
@@ -276,7 +276,7 @@ const bridgeSetupCommands = [
   {
     title: '验证授权',
     command: 'lark-cli auth status --verify',
-    note: '返回 valid 后即可保存配置并启动 Bridge。',
+    note: '返回 valid 后即可保存配置并启动 Agent。',
   },
 ]
 
@@ -290,8 +290,8 @@ function chooseOption(field, value) {
   refreshDetection()
 }
 
-function chooseBridgeModel(modelID) {
-  bridgeConfig.value.model = modelID
+function chooseAgentModel(modelID) {
+  agentConfig.value.model = modelID
   openSelect.value = ''
 }
 
@@ -310,13 +310,13 @@ function handleDocumentPointerDown(event) {
   commandHelpPinned.value = false
 }
 
-async function refreshAvailableBridgeModels({ background = false } = {}) {
+async function refreshAvailableAgentModels({ background = false } = {}) {
   try {
     const models = background ? await RefreshModels() : await GetModels()
-    availableBridgeModels.value = Array.isArray(models) ? models : []
+    availableAgentModels.value = Array.isArray(models) ? models : []
   } catch (e) {
     if (!background) {
-      emit('log', 'warn', 'Bridge 模型列表读取失败：' + (e.message || String(e)))
+      emit('log', 'warn', 'Agent 模型列表读取失败：' + (e.message || String(e)))
     }
   }
 }
@@ -388,31 +388,31 @@ onMounted(async () => {
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   try {
     config.value = await GetConfig()
-    bridgeConfig.value = await GetFeishuBridgeConfig()
-    await refreshAvailableBridgeModels()
-    if (availableBridgeModels.value.length === 0) {
-      refreshAvailableBridgeModels({ background: true })
+    agentConfig.value = await GetFeishuAgentConfig()
+    await refreshAvailableAgentModels()
+    if (availableAgentModels.value.length === 0) {
+      refreshAvailableAgentModels({ background: true })
     }
     fallbackModelsText.value = Array.isArray(config.value.RemoteFallbackModels)
       ? config.value.RemoteFallbackModels.join('\n')
       : ''
     await refreshDetection()
     await refreshUpdateStatus()
-    bridgeStatus.value = await GetFeishuBridgeStatus()
-    await refreshBridgeStatus(false)
+    agentStatus.value = await GetFeishuAgentStatus()
+    await refreshAgentStatus(false)
   } catch (e) {
     emit('log', 'error', '配置加载失败：' + (e.message || String(e)))
-    if (bridgeStatus.value) {
-      bridgeStatusLoaded.value = true
+    if (agentStatus.value) {
+      agentStatusLoaded.value = true
     }
-    bridgeInitialStatusLoading.value = false
+    agentInitialStatusLoading.value = false
   }
 
   safeEventsOn('feishu:status', (nextStatus) => {
-    applyBridgeStatus(nextStatus, true)
+    applyAgentStatus(nextStatus, true)
   })
   safeEventsOn('models:updated', (models) => {
-    availableBridgeModels.value = Array.isArray(models) ? models : []
+    availableAgentModels.value = Array.isArray(models) ? models : []
   })
   safeEventsOn('updates:status', (status) => {
     updateStatus.value = status
@@ -424,7 +424,7 @@ onUnmounted(() => {
   safeEventsOff('feishu:status')
   safeEventsOff('models:updated')
   safeEventsOff('updates:status')
-  stopBridgeStatusPolling()
+  stopAgentStatusPolling()
 })
 
 async function refreshDetection() {
@@ -435,17 +435,17 @@ async function refreshDetection() {
   }
 }
 
-function applyBridgeStatus(nextStatus, announce = false) {
-  const prev = { ...lastBridgeSnapshot.value }
-  bridgeStatus.value = nextStatus
-  bridgeStatusLoaded.value = true
-  bridgeInitialStatusLoading.value = false
-  lastBridgeSnapshot.value = {
+function applyAgentStatus(nextStatus, announce = false) {
+  const prev = { ...lastAgentSnapshot.value }
+  agentStatus.value = nextStatus
+  agentStatusLoaded.value = true
+  agentInitialStatusLoading.value = false
+  lastAgentSnapshot.value = {
     configured: Boolean(nextStatus?.config?.configured),
     authorized: Boolean(nextStatus?.auth?.authorized),
     running: Boolean(nextStatus?.running),
   }
-  syncBridgeStatusPolling(nextStatus)
+  syncAgentStatusPolling(nextStatus)
   if (!announce) return
   if (!prev.configured && nextStatus?.config?.configured) {
     emit('notice', `飞书 CLI 应用初始化已完成：${nextStatus?.config?.appId || '已配置'}`)
@@ -454,11 +454,11 @@ function applyBridgeStatus(nextStatus, announce = false) {
     emit('notice', `飞书 CLI 授权已完成：${nextStatus?.auth?.userName || '当前账号'}`)
   }
   if (!prev.running && nextStatus?.running) {
-    emit('notice', 'Feishu Bridge 已开始监听飞书消息')
+    emit('notice', 'Feishu Agent 已开始监听飞书消息')
   }
 }
 
-function shouldPollBridgeStatus(status) {
+function shouldPollAgentStatus(status) {
   return Boolean(
     status && (
       status.installRunning ||
@@ -470,35 +470,35 @@ function shouldPollBridgeStatus(status) {
   )
 }
 
-function stopBridgeStatusPolling() {
-  if (bridgeStatusPollTimer) {
-    clearInterval(bridgeStatusPollTimer)
-    bridgeStatusPollTimer = null
+function stopAgentStatusPolling() {
+  if (agentStatusPollTimer) {
+    clearInterval(agentStatusPollTimer)
+    agentStatusPollTimer = null
   }
 }
 
-function syncBridgeStatusPolling(status) {
-  if (!shouldPollBridgeStatus(status)) {
-    stopBridgeStatusPolling()
+function syncAgentStatusPolling(status) {
+  if (!shouldPollAgentStatus(status)) {
+    stopAgentStatusPolling()
     return
   }
-  if (bridgeStatusPollTimer) return
-  bridgeStatusPollTimer = setInterval(() => {
-    refreshBridgeStatus(false, false)
+  if (agentStatusPollTimer) return
+  agentStatusPollTimer = setInterval(() => {
+    refreshAgentStatus(false, false)
   }, 2500)
 }
 
-async function refreshBridgeStatus(announce = true, showLoading = true) {
+async function refreshAgentStatus(announce = true, showLoading = true) {
   try {
     if (showLoading) {
-      bridgeRefreshing.value = true
+      agentRefreshing.value = true
     }
-    applyBridgeStatus(await RefreshFeishuBridgeStatus(), announce)
+    applyAgentStatus(await RefreshFeishuAgentStatus(), announce)
   } catch (e) {
-    emit('log', 'warn', 'Feishu Bridge 状态加载失败：' + (e.message || String(e)))
+    emit('log', 'warn', 'Feishu Agent 状态加载失败：' + (e.message || String(e)))
   } finally {
     if (showLoading) {
-      bridgeRefreshing.value = false
+      agentRefreshing.value = false
     }
   }
 }
@@ -521,29 +521,29 @@ async function save() {
   }
 }
 
-async function saveBridgeConfig() {
-  bridgeSaving.value = true
+async function saveAgentConfig() {
+  agentSaving.value = true
   try {
-    bridgeConfig.value = {
-      ...bridgeConfig.value,
+    agentConfig.value = {
+      ...agentConfig.value,
       brand: 'feishu',
       maxToolRounds: 0,
     }
-    await UpdateFeishuBridgeConfig(bridgeConfig.value)
-    emit('notice', 'Feishu Bridge 配置已保存')
-    emit('log', 'info', 'Feishu Bridge 配置已保存')
+    await UpdateFeishuAgentConfig(agentConfig.value)
+    emit('notice', 'Feishu Agent 配置已保存')
+    emit('log', 'info', 'Feishu Agent 配置已保存')
     return true
   } catch (e) {
-    emit('log', 'error', 'Feishu Bridge 配置保存失败：' + (e.message || String(e)))
+    emit('log', 'error', 'Feishu Agent 配置保存失败：' + (e.message || String(e)))
     return false
   } finally {
-    bridgeSaving.value = false
+    agentSaving.value = false
   }
 }
 
-function bridgeAdvancedServersFromStatus() {
-  const saved = new Map((Array.isArray(bridgeConfig.value.mcpServers) ? bridgeConfig.value.mcpServers : []).map((server) => [String(server.name || '').toLowerCase(), server]))
-  const statusServers = Array.isArray(bridgeStatus.value?.mcpServers) ? bridgeStatus.value.mcpServers : []
+function agentAdvancedServersFromStatus() {
+  const saved = new Map((Array.isArray(agentConfig.value.mcpServers) ? agentConfig.value.mcpServers : []).map((server) => [String(server.name || '').toLowerCase(), server]))
+  const statusServers = Array.isArray(agentStatus.value?.mcpServers) ? agentStatus.value.mcpServers : []
   const merged = new Map()
   for (const item of statusServers) {
     const key = String(item.name || '').toLowerCase()
@@ -579,147 +579,147 @@ function bridgeAdvancedServersFromStatus() {
   return Array.from(merged.values()).sort((a, b) => String(a.name).localeCompare(String(b.name)))
 }
 
-function openBridgeAdvancedDialog() {
-  bridgeBotNameDraft.value = String(bridgeConfig.value.botName || '')
-  bridgeIdentityDraft.value = String(bridgeConfig.value.botIdentity || '')
-  bridgeMCPEnabledDraft.value = Boolean(bridgeConfig.value.mcpEnabled)
-  bridgeMCPServersDraft.value = bridgeAdvancedServersFromStatus()
-  bridgeContextDraft.value = {
-    autoCompact: bridgeConfig.value.context?.autoCompact !== false,
-    compactWatermark: Number(bridgeConfig.value.context?.compactWatermark || 75),
-    toolResultRetention: Number(bridgeConfig.value.context?.toolResultRetention || 2),
-    contextWindowOverride: Number(bridgeConfig.value.context?.contextWindowOverride || 0),
-    skillHttpTimeout: Number(bridgeConfig.value.context?.skillHttpTimeout || 60),
-    skillHttpMaxBytes: Number(bridgeConfig.value.context?.skillHttpMaxBytes || 5242880),
+function openAgentAdvancedDialog() {
+  agentBotNameDraft.value = String(agentConfig.value.botName || '')
+  agentIdentityDraft.value = String(agentConfig.value.botIdentity || '')
+  agentMCPEnabledDraft.value = Boolean(agentConfig.value.mcpEnabled)
+  agentMCPServersDraft.value = agentAdvancedServersFromStatus()
+  agentContextDraft.value = {
+    autoCompact: agentConfig.value.context?.autoCompact !== false,
+    compactWatermark: Number(agentConfig.value.context?.compactWatermark || 75),
+    toolResultRetention: Number(agentConfig.value.context?.toolResultRetention || 2),
+    contextWindowOverride: Number(agentConfig.value.context?.contextWindowOverride || 0),
+    skillHttpTimeout: Number(agentConfig.value.context?.skillHttpTimeout || 60),
+    skillHttpMaxBytes: Number(agentConfig.value.context?.skillHttpMaxBytes || 5242880),
   }
-  bridgeSafeFilesDraft.value = {
-    enabled: bridgeConfig.value.safeFiles?.enabled !== false,
-    workspaceDir: String(bridgeConfig.value.safeFiles?.workspaceDir || ''),
-    extraPathsText: formatSafeFilePaths(bridgeConfig.value.safeFiles?.extraPaths || []),
+  agentSafeFilesDraft.value = {
+    enabled: agentConfig.value.safeFiles?.enabled !== false,
+    workspaceDir: String(agentConfig.value.safeFiles?.workspaceDir || ''),
+    extraPathsText: formatSafeFilePaths(agentConfig.value.safeFiles?.extraPaths || []),
   }
-  refreshBridgeSkills()
-  bridgeAdvancedDialogOpen.value = true
+  refreshAgentSkills()
+  agentAdvancedDialogOpen.value = true
 }
 
-async function refreshBridgeSkills() {
-  bridgeSkillsLoading.value = true
+async function refreshAgentSkills() {
+  agentSkillsLoading.value = true
   try {
-    bridgeSkills.value = await GetFeishuBridgeSkills()
+    agentSkills.value = await GetFeishuAgentSkills()
   } catch (e) {
-    emit('log', 'warn', 'Bridge Skills 读取失败：' + (e.message || String(e)))
-    bridgeSkills.value = []
+    emit('log', 'warn', 'Agent Skills 读取失败：' + (e.message || String(e)))
+    agentSkills.value = []
   } finally {
-    bridgeSkillsLoading.value = false
+    agentSkillsLoading.value = false
   }
 }
 
-async function reloadBridgeSkills() {
-  bridgeSkillsLoading.value = true
+async function reloadAgentSkills() {
+  agentSkillsLoading.value = true
   try {
-    await ReloadFeishuBridgeSkills()
-    bridgeSkills.value = await GetFeishuBridgeSkills()
-    emit('notice', 'Feishu Bridge Skills 已重新扫描')
+    await ReloadFeishuAgentSkills()
+    agentSkills.value = await GetFeishuAgentSkills()
+    emit('notice', 'Feishu Agent Skills 已重新扫描')
   } catch (e) {
     emit('notice', 'Skills 扫描失败：' + (e.message || String(e)))
   } finally {
-    bridgeSkillsLoading.value = false
+    agentSkillsLoading.value = false
   }
 }
 
-async function importBridgeSkill(kind) {
-  bridgeSkillImporting.value = true
+async function importAgentSkill(kind) {
+  agentSkillImporting.value = true
   try {
-    const path = kind === 'zip' ? await ChooseFeishuBridgeSkillZip() : await ChooseFeishuBridgeSkillFolder()
+    const path = kind === 'zip' ? await ChooseFeishuAgentSkillZip() : await ChooseFeishuAgentSkillFolder()
     if (!path) return
-    const result = await ImportFeishuBridgeSkillPath(path)
-    bridgeSkills.value = await GetFeishuBridgeSkills()
+    const result = await ImportFeishuAgentSkillPath(path)
+    agentSkills.value = await GetFeishuAgentSkills()
     const imported = Array.isArray(result?.imported) ? result.imported.length : 0
     const errors = Array.isArray(result?.errors) && result.errors.length > 0 ? `；${result.errors.length} 个错误` : ''
     emit('notice', `导入 ${imported} 个 Skill${errors}`)
   } catch (e) {
     emit('notice', 'Skill 导入失败：' + (e.message || String(e)))
   } finally {
-    bridgeSkillImporting.value = false
+    agentSkillImporting.value = false
   }
 }
 
-async function toggleBridgeSkill(skill) {
+async function toggleAgentSkill(skill) {
   try {
-    await SetFeishuBridgeSkillEnabled(skill.id, !skill.enabled)
-    bridgeSkills.value = await GetFeishuBridgeSkills()
+    await SetFeishuAgentSkillEnabled(skill.id, !skill.enabled)
+    agentSkills.value = await GetFeishuAgentSkills()
   } catch (e) {
     emit('notice', 'Skill 状态更新失败：' + (e.message || String(e)))
   }
 }
 
-async function deleteBridgeSkill(skill) {
+async function deleteAgentSkill(skill) {
   try {
-    await DeleteFeishuBridgeSkill(skill.id)
-    bridgeSkills.value = await GetFeishuBridgeSkills()
+    await DeleteFeishuAgentSkill(skill.id)
+    agentSkills.value = await GetFeishuAgentSkills()
   } catch (e) {
     emit('notice', 'Skill 删除失败：' + (e.message || String(e)))
   }
 }
 
-async function refreshBridgeAdvancedMCP() {
-  await refreshBridgeStatus(true, true)
-  bridgeMCPServersDraft.value = bridgeAdvancedServersFromStatus()
+async function refreshAgentAdvancedMCP() {
+  await refreshAgentStatus(true, true)
+  agentMCPServersDraft.value = agentAdvancedServersFromStatus()
 }
 
-async function openBridgeMCPJSONDialog() {
-  bridgeMCPJSONError.value = ''
+async function openAgentMCPJSONDialog() {
+  agentMCPJSONError.value = ''
   try {
-    const result = await GetFeishuBridgeMCPJSON()
-    bridgeMCPJSONDraft.value = result?.content || ''
-    bridgeMCPJSONPath.value = result?.path || ''
-    bridgeMCPJSONDialogOpen.value = true
+    const result = await GetFeishuAgentMCPJSON()
+    agentMCPJSONDraft.value = result?.content || ''
+    agentMCPJSONPath.value = result?.path || ''
+    agentMCPJSONDialogOpen.value = true
   } catch (e) {
-    bridgeMCPJSONError.value = e.message || String(e)
-    bridgeMCPJSONDraft.value = ''
-    bridgeMCPJSONPath.value = ''
-    bridgeMCPJSONDialogOpen.value = true
+    agentMCPJSONError.value = e.message || String(e)
+    agentMCPJSONDraft.value = ''
+    agentMCPJSONPath.value = ''
+    agentMCPJSONDialogOpen.value = true
   }
 }
 
-async function saveBridgeMCPJSON() {
-  bridgeMCPJSONSaving.value = true
-  bridgeMCPJSONError.value = ''
+async function saveAgentMCPJSON() {
+  agentMCPJSONSaving.value = true
+  agentMCPJSONError.value = ''
   try {
-    const result = await SaveFeishuBridgeMCPJSON(bridgeMCPJSONDraft.value)
-    bridgeMCPJSONDraft.value = result?.content || bridgeMCPJSONDraft.value
-    bridgeMCPJSONPath.value = result?.path || bridgeMCPJSONPath.value
+    const result = await SaveFeishuAgentMCPJSON(agentMCPJSONDraft.value)
+    agentMCPJSONDraft.value = result?.content || agentMCPJSONDraft.value
+    agentMCPJSONPath.value = result?.path || agentMCPJSONPath.value
     emit('notice', `自定义 MCP JSON 已保存，解析到 ${result?.serverCount || 0} 个 server`)
-    await refreshBridgeStatus(false, true)
-    bridgeMCPServersDraft.value = bridgeAdvancedServersFromStatus()
-    bridgeMCPJSONDialogOpen.value = false
+    await refreshAgentStatus(false, true)
+    agentMCPServersDraft.value = agentAdvancedServersFromStatus()
+    agentMCPJSONDialogOpen.value = false
   } catch (e) {
-    bridgeMCPJSONError.value = e.message || String(e)
+    agentMCPJSONError.value = e.message || String(e)
   } finally {
-    bridgeMCPJSONSaving.value = false
+    agentMCPJSONSaving.value = false
   }
 }
 
-function toggleBridgeMCPServer(name) {
-  bridgeMCPServersDraft.value = bridgeMCPServersDraft.value.map((server) => {
+function toggleAgentMCPServer(name) {
+  agentMCPServersDraft.value = agentMCPServersDraft.value.map((server) => {
     if (server.name !== name) return server
     const enabled = !server.enabled
     return { ...server, enabled, message: enabled && server.message === '未启用' ? '' : server.message }
   })
 }
 
-function toggleBridgeMCPTools(name) {
+function toggleAgentMCPTools(name) {
   const key = String(name || '')
-  bridgeMCPExpanded.value = {
-    ...bridgeMCPExpanded.value,
-    [key]: !bridgeMCPExpanded.value[key],
+  agentMCPExpanded.value = {
+    ...agentMCPExpanded.value,
+    [key]: !agentMCPExpanded.value[key],
   }
 }
 
-function bridgeMCPToolLabel(tool) {
+function agentMCPToolLabel(tool) {
   return tool?.function || tool?.name || 'unknown_tool'
 }
 
-function bridgeMCPToolDescription(tool) {
+function agentMCPToolDescription(tool) {
   const rawName = String(tool?.name || '').trim()
   const functionName = String(tool?.function || '').trim()
   const desc = String(tool?.description || '').trim()
@@ -733,17 +733,17 @@ function bridgeMCPToolDescription(tool) {
   return parts.join(' · ')
 }
 
-function bridgeMCPServerMeta(server) {
+function agentMCPServerMeta(server) {
   if (!server?.enabled) return '未启用'
-  if (!bridgeMCPEnabledDraft.value) return '需打开总开关'
+  if (!agentMCPEnabledDraft.value) return '需打开总开关'
   if (server.available) return `${server.toolCount || 0} tools`
   const message = String(server.message || '').trim()
   if (message && message !== '未启用') return message
-  const saved = Array.isArray(bridgeConfig.value.mcpServers)
-    ? bridgeConfig.value.mcpServers.find((item) => String(item.name || '').toLowerCase() === String(server.name || '').toLowerCase())
+  const saved = Array.isArray(agentConfig.value.mcpServers)
+    ? agentConfig.value.mcpServers.find((item) => String(item.name || '').toLowerCase() === String(server.name || '').toLowerCase())
     : null
-  if (!bridgeConfig.value.mcpEnabled || !saved?.enabled) return '保存后检测'
-  return bridgeRefreshing.value ? '检测中...' : '待检测'
+  if (!agentConfig.value.mcpEnabled || !saved?.enabled) return '保存后检测'
+  return agentRefreshing.value ? '检测中...' : '待检测'
 }
 
 function formatSafeFilePaths(paths) {
@@ -776,27 +776,27 @@ function parseSafeFilePaths(text) {
   return items
 }
 
-async function saveBridgeAdvancedSettings() {
-  bridgeConfig.value = {
-    ...bridgeConfig.value,
-    botName: bridgeBotNameDraft.value.trim(),
-    botIdentity: bridgeIdentityDraft.value.trim(),
-    mcpEnabled: bridgeMCPEnabledDraft.value,
+async function saveAgentAdvancedSettings() {
+  agentConfig.value = {
+    ...agentConfig.value,
+    botName: agentBotNameDraft.value.trim(),
+    botIdentity: agentIdentityDraft.value.trim(),
+    mcpEnabled: agentMCPEnabledDraft.value,
     context: {
-      autoCompact: bridgeContextDraft.value.autoCompact,
-      compactWatermark: Number(bridgeContextDraft.value.compactWatermark || 75),
-      toolResultRetention: Number(bridgeContextDraft.value.toolResultRetention || 2),
-      contextWindowOverride: Number(bridgeContextDraft.value.contextWindowOverride || 0),
-      skillHttpTimeout: Number(bridgeContextDraft.value.skillHttpTimeout || 60),
-      skillHttpMaxBytes: Number(bridgeContextDraft.value.skillHttpMaxBytes || 5242880),
+      autoCompact: agentContextDraft.value.autoCompact,
+      compactWatermark: Number(agentContextDraft.value.compactWatermark || 75),
+      toolResultRetention: Number(agentContextDraft.value.toolResultRetention || 2),
+      contextWindowOverride: Number(agentContextDraft.value.contextWindowOverride || 0),
+      skillHttpTimeout: Number(agentContextDraft.value.skillHttpTimeout || 60),
+      skillHttpMaxBytes: Number(agentContextDraft.value.skillHttpMaxBytes || 5242880),
     },
     safeFiles: {
       configured: true,
-      enabled: bridgeSafeFilesDraft.value.enabled !== false,
-      workspaceDir: bridgeSafeFilesDraft.value.workspaceDir.trim(),
-      extraPaths: parseSafeFilePaths(bridgeSafeFilesDraft.value.extraPathsText),
+      enabled: agentSafeFilesDraft.value.enabled !== false,
+      workspaceDir: agentSafeFilesDraft.value.workspaceDir.trim(),
+      extraPaths: parseSafeFilePaths(agentSafeFilesDraft.value.extraPathsText),
     },
-    mcpServers: bridgeMCPServersDraft.value.map((server) => ({
+    mcpServers: agentMCPServersDraft.value.map((server) => ({
       name: server.name,
       source: server.source,
       sourceClient: server.sourceClient,
@@ -806,15 +806,15 @@ async function saveBridgeAdvancedSettings() {
       enabled: Boolean(server.enabled),
     })),
   }
-  const saved = await saveBridgeConfig()
+  const saved = await saveAgentConfig()
   if (saved) {
-    bridgeAdvancedDialogOpen.value = false
-    await refreshBridgeStatus(false, false)
+    agentAdvancedDialogOpen.value = false
+    await refreshAgentStatus(false, false)
   }
 }
 
-function clearBridgeIdentity() {
-  bridgeIdentityDraft.value = ''
+function clearAgentIdentity() {
+  agentIdentityDraft.value = ''
 }
 
 function groupMCPServersBySource(servers) {
@@ -851,26 +851,26 @@ function sourceClientFromPath(path) {
   return ''
 }
 
-async function withBridgeAction(message, action) {
-  bridgeBusy.value = true
+async function withAgentAction(message, action) {
+  agentBusy.value = true
   try {
     await action()
     emit('notice', message)
     emit('log', 'info', message)
-    await refreshBridgeStatus(true, false)
+    await refreshAgentStatus(true, false)
   } catch (e) {
     emit('log', 'error', message + '失败：' + (e.message || String(e)))
   } finally {
-    bridgeBusy.value = false
+    agentBusy.value = false
   }
 }
 
-function openBridgeURL(url) {
+function openAgentURL(url) {
   if (!url) return
   BrowserOpenURL(url)
 }
 
-async function copyBridgeSetupCommand(command) {
+async function copyAgentSetupCommand(command) {
   try {
     await navigator.clipboard?.writeText(command)
     emit('notice', '命令已复制')
@@ -879,109 +879,109 @@ async function copyBridgeSetupCommand(command) {
   }
 }
 
-async function installBridgeCLI() {
-  await withBridgeAction('飞书 CLI 安装已触发', () => InstallFeishuCLI())
+async function installAgentCLI() {
+  await withAgentAction('飞书 CLI 安装已触发', () => InstallFeishuCLI())
 }
 
-async function reinstallBridgeSkills() {
-  await withBridgeAction('飞书 Skills 重新安装已触发', () => ReinstallFeishuSkills())
+async function reinstallAgentSkills() {
+  await withAgentAction('飞书 Skills 重新安装已触发', () => ReinstallFeishuSkills())
 }
 
-function openBridgeCleanupDialog() {
-  bridgeCleanupImportedSkills.value = false
-  bridgeCleanupMCPConfig.value = false
-  bridgeAdvancedDialogOpen.value = false
-  bridgeCleanupDialogOpen.value = true
+function openAgentCleanupDialog() {
+  agentCleanupImportedSkills.value = false
+  agentCleanupMCPConfig.value = false
+  agentAdvancedDialogOpen.value = false
+  agentCleanupDialogOpen.value = true
 }
 
-async function cleanupBridgeArtifacts() {
-  await withBridgeAction('飞书 CLI/Skills/授权信息已清理', async () => {
-    const results = await CleanupFeishuBridgeArtifacts({
-      includeImportedSkills: bridgeCleanupImportedSkills.value,
-      includeMcpConfig: bridgeCleanupMCPConfig.value,
+async function cleanupAgentArtifacts() {
+  await withAgentAction('飞书 CLI/Skills/授权信息已清理', async () => {
+    const results = await CleanupFeishuAgentArtifacts({
+      includeImportedSkills: agentCleanupImportedSkills.value,
+      includeMcpConfig: agentCleanupMCPConfig.value,
     })
     if (Array.isArray(results) && results.length > 0) {
       emit('log', 'info', results.join('；'))
     }
   })
-  bridgeCleanupDialogOpen.value = false
+  agentCleanupDialogOpen.value = false
 }
 
-async function startBridgeSetupNew() {
-  await withBridgeAction('飞书 CLI 首次初始化已启动', () => StartFeishuCLISetupNew())
+async function startAgentSetupNew() {
+  await withAgentAction('飞书 CLI 首次初始化已启动', () => StartFeishuCLISetupNew())
 }
 
-async function startBridgeLogin() {
-  await withBridgeAction('飞书 CLI 授权流程已启动', () => StartFeishuCLILogin())
+async function startAgentLogin() {
+  await withAgentAction('飞书 CLI 授权流程已启动', () => StartFeishuCLILogin())
 }
 
-async function enableBridgeAndStart() {
-  const saved = await saveBridgeConfig()
+async function enableAgentAndStart() {
+  const saved = await saveAgentConfig()
   if (!saved) return
-  await withBridgeAction('Feishu Bridge 已启动', async () => {
-    bridgeConfig.value.enabled = true
-    await UpdateFeishuBridgeConfig(bridgeConfig.value)
-    await StartFeishuBridge()
+  await withAgentAction('Feishu Agent 已启动', async () => {
+    agentConfig.value.enabled = true
+    await UpdateFeishuAgentConfig(agentConfig.value)
+    await StartFeishuAgent()
   })
 }
 
-async function stopBridge() {
-  await withBridgeAction('Feishu Bridge 已停止', async () => {
-    bridgeConfig.value.enabled = false
-    await UpdateFeishuBridgeConfig(bridgeConfig.value)
-    await StopFeishuBridge()
+async function stopAgent() {
+  await withAgentAction('Feishu Agent 已停止', async () => {
+    agentConfig.value.enabled = false
+    await UpdateFeishuAgentConfig(agentConfig.value)
+    await StopFeishuAgent()
   })
 }
 
-async function handleBridgePrimaryAction() {
-  if (bridgeStatus.value?.running) {
-    await stopBridge()
+async function handleAgentPrimaryAction() {
+  if (agentStatus.value?.running) {
+    await stopAgent()
     return
   }
-  await enableBridgeAndStart()
+  await enableAgentAndStart()
 }
 
-function isBridgeStepClickable(step) {
+function isAgentStepClickable(step) {
   if (!step || step.done) return false
-  if (bridgeBusy.value || bridgeRefreshing.value) return false
-  if (!bridgeStatusLoaded.value) return false
+  if (agentBusy.value || agentRefreshing.value) return false
+  if (!agentStatusLoaded.value) return false
   if (step.key === 'install') return true
-  if (step.key === 'setup') return bridgeInstallStepDone.value
-  if (step.key === 'auth') return bridgeInstallStepDone.value && bridgeSetupStepDone.value
+  if (step.key === 'setup') return agentInstallStepDone.value
+  if (step.key === 'auth') return agentInstallStepDone.value && agentSetupStepDone.value
   return false
 }
 
-function bridgeStepCTA(step) {
-  if (!isBridgeStepClickable(step)) return ''
+function agentStepCTA(step) {
+  if (!isAgentStepClickable(step)) return ''
   return {
     install: '点击安装',
-    setup: bridgeStatus.value?.setupUrl ? '继续初始化' : '开始初始化',
-    auth: bridgeStatus.value?.loginUrl ? '继续授权' : '开始授权',
+    setup: agentStatus.value?.setupUrl ? '继续初始化' : '开始初始化',
+    auth: agentStatus.value?.loginUrl ? '继续授权' : '开始授权',
   }[step.key] || '继续'
 }
 
-async function handleBridgeStepClick(step) {
-  if (!isBridgeStepClickable(step)) return
+async function handleAgentStepClick(step) {
+  if (!isAgentStepClickable(step)) return
   if (step.key === 'install') {
-    await installBridgeCLI()
+    await installAgentCLI()
     return
   }
   if (step.key === 'setup') {
-    if (bridgeStatus.value?.setupUrl) {
-      openBridgeURL(bridgeStatus.value.setupUrl)
+    if (agentStatus.value?.setupUrl) {
+      openAgentURL(agentStatus.value.setupUrl)
       emit('notice', '已打开飞书应用初始化链接')
       return
     }
-    await startBridgeSetupNew()
+    await startAgentSetupNew()
     return
   }
   if (step.key === 'auth') {
-    if (bridgeStatus.value?.loginUrl) {
-      openBridgeURL(bridgeStatus.value.loginUrl)
+    if (agentStatus.value?.loginUrl) {
+      openAgentURL(agentStatus.value.loginUrl)
       emit('notice', '已打开飞书授权链接')
       return
     }
-    await startBridgeLogin()
+    await startAgentLogin()
   }
 }
 </script>
@@ -1002,7 +1002,7 @@ async function handleBridgeStepClick(step) {
       <div class="panel-header">
         <div>
           <h2>在线更新</h2>
-          <p>Feishu Bridge 专用通道。App 只读取公开 manifest，下载前会校验 sha256 和签名，安装由你手动完成。</p>
+          <p>Feishu Agent 专用通道。App 只读取公开 manifest，下载前会校验 sha256 和签名，安装由你手动完成。</p>
         </div>
         <span class="status-chip" :class="updateStatus?.available ? 'warn' : 'ok'">
           {{ updateStatus?.available ? `发现 ${updateStatus.latest}` : '已就绪' }}
@@ -1292,7 +1292,7 @@ async function handleBridgeStepClick(step) {
           <div class="panel-header">
             <div>
               <div class="panel-title-row">
-                <h2>Feishu Bot Bridge</h2>
+                <h2>Feishu Bot Agent</h2>
                 <div class="inline-help inline-help--commands" :class="{ pinned: commandHelpPinned }">
                   <button type="button" class="inline-help-trigger" aria-label="查看会话命令说明" @click="toggleCommandHelp">
                     <i class="bi bi-question-circle" aria-hidden="true"></i>
@@ -1338,40 +1338,40 @@ async function handleBridgeStepClick(step) {
               </div>
               <p>通过本机 lark-cli 把飞书 Bot 消息桥接到 Lingma Proxy。默认关闭，不影响现有代理功能。</p>
             </div>
-            <span class="status-chip" :class="bridgeStatus?.running ? 'ok' : 'warn'">
-              {{ bridgeStatus?.running ? '运行中' : '未运行' }}
+            <span class="status-chip" :class="agentStatus?.running ? 'ok' : 'warn'">
+              {{ agentStatus?.running ? '运行中' : '未运行' }}
             </span>
           </div>
 
           <div class="form-grid compact-form-grid">
             <div class="field">
-              <label>启用 Bridge</label>
+              <label>启用 Agent</label>
               <label class="switch">
-                <input v-model="bridgeConfig.enabled" type="checkbox" />
+                <input v-model="agentConfig.enabled" type="checkbox" />
                 <span></span>
               </label>
             </div>
             <div class="field">
               <label>随代理自动启动</label>
               <label class="switch">
-                <input v-model="bridgeConfig.autoStart" type="checkbox" />
+                <input v-model="agentConfig.autoStart" type="checkbox" />
                 <span></span>
               </label>
             </div>
             <div class="field">
               <label>模型</label>
-              <div class="custom-select" :class="{ open: openSelect === 'BridgeModel' }">
-                <button type="button" @click="toggleSelect('BridgeModel')">
-                  <span>{{ bridgeModelLabel }}</span>
+              <div class="custom-select" :class="{ open: openSelect === 'AgentModel' }">
+                <button type="button" @click="toggleSelect('AgentModel')">
+                  <span>{{ agentModelLabel }}</span>
                   <i class="bi bi-chevron-down" aria-hidden="true"></i>
                 </button>
-                <div v-if="openSelect === 'BridgeModel'" class="select-menu">
+                <div v-if="openSelect === 'AgentModel'" class="select-menu">
                   <button
-                    v-for="model in bridgeModelOptions"
+                    v-for="model in agentModelOptions"
                     :key="model.id"
-                    :class="{ selected: model.id === bridgeConfig.model }"
+                    :class="{ selected: model.id === agentConfig.model }"
                     type="button"
-                    @click="chooseBridgeModel(model.id)"
+                    @click="chooseAgentModel(model.id)"
                   >
                     {{ model.name || model.id }}
                   </button>
@@ -1380,61 +1380,61 @@ async function handleBridgeStepClick(step) {
             </div>
             <div class="field">
               <label>高级设置</label>
-              <button class="identity-config-button" type="button" @click="openBridgeAdvancedDialog">
-                <span>{{ bridgeAdvancedLabel }}</span>
+              <button class="identity-config-button" type="button" @click="openAgentAdvancedDialog">
+                <span>{{ agentAdvancedLabel }}</span>
                 <i class="bi bi-sliders" aria-hidden="true"></i>
               </button>
             </div>
           </div>
 
-        <div class="actions-row bridge-actions-top">
-          <button class="primary-button" type="button" :disabled="bridgeBusy" @click="saveBridgeConfig">
-            {{ bridgeSaving ? '保存中...' : '保存 Bridge 配置' }}
+        <div class="actions-row agent-actions-top">
+          <button class="primary-button" type="button" :disabled="agentBusy" @click="saveAgentConfig">
+            {{ agentSaving ? '保存中...' : '保存 Agent 配置' }}
           </button>
           <button
             class="primary-button"
             type="button"
-            :class="{ 'danger-button': bridgeStatus && bridgeStatus.running }"
-            :disabled="bridgeBusy || (!(bridgeStatus && bridgeStatus.running) && !bridgeReady)"
-            @click="handleBridgePrimaryAction"
+            :class="{ 'danger-button': agentStatus && agentStatus.running }"
+            :disabled="agentBusy || (!(agentStatus && agentStatus.running) && !agentReady)"
+            @click="handleAgentPrimaryAction"
           >
-            {{ bridgeStartButtonLabel }}
+            {{ agentStartButtonLabel }}
           </button>
         </div>
 
-          <div class="hint-box compact-hint bridge-setup-hint">
+          <div class="hint-box compact-hint agent-setup-hint">
           <div class="hint-title-row">
             <strong>推荐接入路径</strong>
             <button
               type="button"
               class="inline-help-trigger guide-help-trigger"
-              aria-label="查看 Feishu Bridge 安装步骤"
-              @click="bridgeSetupGuideOpen = true"
+              aria-label="查看 Feishu Agent 安装步骤"
+              @click="agentSetupGuideOpen = true"
             >
               <i class="bi bi-question-circle" aria-hidden="true"></i>
             </button>
           </div>
-          <span>按顺序完成“安装 CLI 与 Skills” → “初始化飞书应用” → “登录并授权”，全部完成后再保存配置并启动 Bridge。</span>
+          <span>按顺序完成“安装 CLI 与 Skills” → “初始化飞书应用” → “登录并授权”，全部完成后再保存配置并启动 Agent。</span>
         </div>
 
-          <div class="bridge-progress">
+          <div class="agent-progress">
           <button
-            v-for="step in bridgeStepItems"
+            v-for="step in agentStepItems"
             :key="step.key"
-            class="bridge-progress-item"
-            :class="{ done: step.done, active: step.active, clickable: isBridgeStepClickable(step) }"
+            class="agent-progress-item"
+            :class="{ done: step.done, active: step.active, clickable: isAgentStepClickable(step) }"
             type="button"
-            :disabled="!isBridgeStepClickable(step)"
-            @click="handleBridgeStepClick(step)"
+            :disabled="!isAgentStepClickable(step)"
+            @click="handleAgentStepClick(step)"
           >
-            <div class="bridge-progress-head">
+            <div class="agent-progress-head">
               <strong>{{ step.title }}</strong>
-              <div class="bridge-progress-meta">
-                <span class="bridge-progress-state">
+              <div class="agent-progress-meta">
+                <span class="agent-progress-state">
                   {{ step.done ? '已完成' : (step.active ? '进行中' : '待完成') }}
                 </span>
-                <span v-if="isBridgeStepClickable(step)" class="bridge-progress-cta">
-                  {{ bridgeStepCTA(step) }}
+                <span v-if="isAgentStepClickable(step)" class="agent-progress-cta">
+                  {{ agentStepCTA(step) }}
                   <i class="bi bi-arrow-right-short" aria-hidden="true"></i>
                 </span>
               </div>
@@ -1443,45 +1443,45 @@ async function handleBridgeStepClick(step) {
           </button>
         </div>
 
-          <div v-if="bridgeStatus" class="detect-card">
+          <div v-if="agentStatus" class="detect-card">
           <div class="detect-title">
             <strong>当前状态</strong>
             <div class="actions-row compact-actions">
-              <button type="button" :disabled="bridgeRefreshing || bridgeBusy" @click="refreshBridgeStatus">
-                {{ bridgeStatusPending ? '检测中...' : (bridgeRefreshing ? '检测中...' : '刷新状态') }}
+              <button type="button" :disabled="agentRefreshing || agentBusy" @click="refreshAgentStatus">
+                {{ agentStatusPending ? '检测中...' : (agentRefreshing ? '检测中...' : '刷新状态') }}
               </button>
             </div>
           </div>
-          <div v-if="bridgeStatusPending" class="status-loading-row">
+          <div v-if="agentStatusPending" class="status-loading-row">
             <span class="loading-dot"></span>
-            <span>正在检测 Feishu Bridge 运行环境...</span>
+            <span>正在检测 Feishu Agent 运行环境...</span>
           </div>
           <dl>
             <div>
               <dt>平台</dt>
-              <dd>{{ bridgeStatusPending ? '检测中...' : `${bridgeStatus.platform} · ${bridgeStatus.arch}` }}</dd>
+              <dd>{{ agentStatusPending ? '检测中...' : `${agentStatus.platform} · ${agentStatus.arch}` }}</dd>
             </div>
             <div>
               <dt>Node / npm / npx</dt>
-              <dd :class="{ 'warn-text': !bridgeStatusPending && (!bridgeStatus.node?.found || !bridgeStatus.npm?.found || !bridgeStatus.npx?.found) }">
-                {{ bridgeStatusPending ? '检测中...' : `${bridgeStatus.node?.version || '缺失'} / ${bridgeStatus.npm?.version || '缺失'} / ${bridgeStatus.npx?.version || '缺失'}` }}
+              <dd :class="{ 'warn-text': !agentStatusPending && (!agentStatus.node?.found || !agentStatus.npm?.found || !agentStatus.npx?.found) }">
+                {{ agentStatusPending ? '检测中...' : `${agentStatus.node?.version || '缺失'} / ${agentStatus.npm?.version || '缺失'} / ${agentStatus.npx?.version || '缺失'}` }}
               </dd>
             </div>
             <div>
               <dt>lark-cli</dt>
-              <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.cli?.found }">
-                {{ bridgeStatusPending ? '检测中...' : (bridgeStatus.cli?.version || '未安装') }}
+              <dd :class="{ 'warn-text': !agentStatusPending && !agentStatus.cli?.found }">
+                {{ agentStatusPending ? '检测中...' : (agentStatus.cli?.version || '未安装') }}
               </dd>
             </div>
             <div>
               <dt>Skills</dt>
-              <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.skillsReady }">
-                <span>{{ bridgeStatusPending ? '检测中...' : (bridgeStatus.installRunning && !bridgeStatus.skillsReady ? '安装中…' : (bridgeStatus.skillsReady ? '已就绪' : '缺失或未完整安装')) }}</span>
+              <dd :class="{ 'warn-text': !agentStatusPending && !agentStatus.skillsReady }">
+                <span>{{ agentStatusPending ? '检测中...' : (agentStatus.installRunning && !agentStatus.skillsReady ? '安装中…' : (agentStatus.skillsReady ? '已就绪' : '缺失或未完整安装')) }}</span>
                 <button
-                  v-if="!bridgeStatusPending && !bridgeStatus.skillsReady && bridgeStatus.cli?.found && !bridgeStatus.installRunning"
+                  v-if="!agentStatusPending && !agentStatus.skillsReady && agentStatus.cli?.found && !agentStatus.installRunning"
                   type="button"
                   class="inline-action-btn"
-                  @click="reinstallBridgeSkills"
+                  @click="reinstallAgentSkills"
                 >
                   重新安装 Skills
                 </button>
@@ -1489,70 +1489,70 @@ async function handleBridgeStepClick(step) {
             </div>
             <div>
               <dt>MCP</dt>
-              <dd :class="{ 'warn-text': !bridgeStatusPending && bridgeConfig.mcpEnabled && bridgeMCPServers.filter((server) => server.enabled && server.available).length === 0 }">
-                {{ bridgeStatusPending ? '检测中...' : (bridgeConfig.mcpEnabled ? `${bridgeMCPServers.filter((server) => server.enabled && server.available).length}/${bridgeMCPServers.filter((server) => server.enabled).length} 已启用可用` : '未启用') }}
+              <dd :class="{ 'warn-text': !agentStatusPending && agentConfig.mcpEnabled && agentMCPServers.filter((server) => server.enabled && server.available).length === 0 }">
+                {{ agentStatusPending ? '检测中...' : (agentConfig.mcpEnabled ? `${agentMCPServers.filter((server) => server.enabled && server.available).length}/${agentMCPServers.filter((server) => server.enabled).length} 已启用可用` : '未启用') }}
               </dd>
             </div>
             <div>
               <dt>CLI 配置</dt>
-              <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.config?.configured }">
-                {{ bridgeStatusPending ? '检测中...' : (bridgeStatus.config?.configured ? `${bridgeStatus.config?.appId || '已配置'} · ${bridgeStatus.config?.brand || 'feishu'}` : (bridgeStatus.config?.message || '未初始化')) }}
+              <dd :class="{ 'warn-text': !agentStatusPending && !agentStatus.config?.configured }">
+                {{ agentStatusPending ? '检测中...' : (agentStatus.config?.configured ? `${agentStatus.config?.appId || '已配置'} · ${agentStatus.config?.brand || 'feishu'}` : (agentStatus.config?.message || '未初始化')) }}
               </dd>
             </div>
             <div>
               <dt>授权状态</dt>
-              <dd :class="{ 'warn-text': !bridgeStatusPending && !bridgeStatus.auth?.authorized }">
-                {{ bridgeStatusPending ? '检测中...' : (bridgeStatus.auth?.authorized ? `${bridgeStatus.auth?.userName || '已授权'} · ${bridgeStatus.auth?.tokenStatus || 'ok'}` : (bridgeStatus.auth?.message || '未授权')) }}
+              <dd :class="{ 'warn-text': !agentStatusPending && !agentStatus.auth?.authorized }">
+                {{ agentStatusPending ? '检测中...' : (agentStatus.auth?.authorized ? `${agentStatus.auth?.userName || '已授权'} · ${agentStatus.auth?.tokenStatus || 'ok'}` : (agentStatus.auth?.message || '未授权')) }}
               </dd>
             </div>
             <div>
               <dt>运行状态</dt>
-              <dd>{{ bridgeStatusPending ? '检测中...' : (bridgeStatus.running ? `运行中 · ${formatDateTime(bridgeStatus.lastStartedAt) || bridgeStatus.lastStartedAt || ''}` : '未运行') }}</dd>
+              <dd>{{ agentStatusPending ? '检测中...' : (agentStatus.running ? `运行中 · ${formatDateTime(agentStatus.lastStartedAt) || agentStatus.lastStartedAt || ''}` : '未运行') }}</dd>
             </div>
-            <div v-if="bridgeStatusPending || bridgeStatus.lastCheckedAt">
+            <div v-if="agentStatusPending || agentStatus.lastCheckedAt">
               <dt>最近检测</dt>
-              <dd>{{ bridgeStatusPending ? '-' : (formatDateTime(bridgeStatus.lastCheckedAt) || bridgeStatus.lastCheckedAt) }}</dd>
+              <dd>{{ agentStatusPending ? '-' : (formatDateTime(agentStatus.lastCheckedAt) || agentStatus.lastCheckedAt) }}</dd>
             </div>
-            <div v-if="bridgeStatus.lastOutput">
+            <div v-if="agentStatus.lastOutput">
               <dt>最近输出</dt>
-              <dd>{{ bridgeStatus.lastOutput }}</dd>
+              <dd>{{ agentStatus.lastOutput }}</dd>
             </div>
-            <div v-if="bridgeStatus.lastError">
+            <div v-if="agentStatus.lastError">
               <dt>最近错误</dt>
-              <dd class="warn-text">{{ bridgeStatus.lastError }}</dd>
+              <dd class="warn-text">{{ agentStatus.lastError }}</dd>
             </div>
           </dl>
         </div>
 
-          <div v-if="bridgeBrowserHintVisible" class="hint-box">
+          <div v-if="agentBrowserHintVisible" class="hint-box">
           <strong>浏览器继续</strong>
           <span>首次初始化和登录授权需要在浏览器中完成，点击下方链接继续。</span>
           <div class="actions-row">
-            <button v-if="bridgeSetupLinkVisible" type="button" @click="openBridgeURL(bridgeStatus.setupUrl)">打开初始化链接</button>
-            <button v-if="bridgeLoginLinkVisible" type="button" @click="openBridgeURL(bridgeStatus.loginUrl)">打开授权链接</button>
+            <button v-if="agentSetupLinkVisible" type="button" @click="openAgentURL(agentStatus.setupUrl)">打开初始化链接</button>
+            <button v-if="agentLoginLinkVisible" type="button" @click="openAgentURL(agentStatus.loginUrl)">打开授权链接</button>
           </div>
         </div>
         </div>
       </div>
     </section>
 
-    <div v-if="bridgeSetupGuideOpen" class="modal-backdrop" @click.self="bridgeSetupGuideOpen = false">
-      <section class="modal-card bridge-guide-modal">
+    <div v-if="agentSetupGuideOpen" class="modal-backdrop" @click.self="agentSetupGuideOpen = false">
+      <section class="modal-card agent-guide-modal">
         <div class="modal-header">
           <div>
-            <h2>Feishu Bridge 安装指南</h2>
+            <h2>Feishu Agent 安装指南</h2>
             <p>优先使用设置页三张卡片完成接入；自动安装失败时，再按下方命令手动兜底。</p>
           </div>
-          <button class="secondary-button" type="button" @click="bridgeSetupGuideOpen = false">关闭</button>
+          <button class="secondary-button" type="button" @click="agentSetupGuideOpen = false">关闭</button>
         </div>
-        <div class="modal-body bridge-guide-body">
+        <div class="modal-body agent-guide-body">
           <div class="guide-section">
             <h3>推荐流程</h3>
             <ol>
               <li>点击“安装 CLI 与 Skills”，等待状态变为“已完成”。</li>
               <li>点击“初始化飞书应用”，在浏览器里创建或选择已有飞书应用。</li>
               <li>点击“登录并授权”，在浏览器里完成账号授权。</li>
-              <li>三步都完成后，保存 Bridge 配置并启动 Bridge。</li>
+              <li>三步都完成后，保存 Agent 配置并启动 Agent。</li>
             </ol>
           </div>
 
@@ -1560,10 +1560,10 @@ async function handleBridgeStepClick(step) {
             <h3>手动兜底命令</h3>
             <p>如果自动安装因为 npm registry、公司网络、PATH 或临时目录清理失败，可以逐条执行下面命令。</p>
             <div class="command-list">
-              <div v-for="item in bridgeSetupCommands" :key="item.command" class="command-card">
+              <div v-for="item in agentSetupCommands" :key="item.command" class="command-card">
                 <div class="command-card-head">
                   <strong>{{ item.title }}</strong>
-                  <button class="secondary-button" type="button" @click="copyBridgeSetupCommand(item.command)">复制</button>
+                  <button class="secondary-button" type="button" @click="copyAgentSetupCommand(item.command)">复制</button>
                 </div>
                 <code>{{ item.command }}</code>
                 <span>{{ item.note }}</span>
@@ -1583,61 +1583,61 @@ async function handleBridgeStepClick(step) {
       </section>
     </div>
 
-    <div v-if="bridgeCleanupDialogOpen" class="modal-backdrop" @click.self="bridgeCleanupDialogOpen = false">
-      <section class="modal-card bridge-cleanup-modal">
+    <div v-if="agentCleanupDialogOpen" class="modal-backdrop" @click.self="agentCleanupDialogOpen = false">
+      <section class="modal-card agent-cleanup-modal">
         <div class="modal-header">
           <div>
-            <h2>清理 Feishu Bridge 环境</h2>
+            <h2>清理 Feishu Agent 环境</h2>
             <p>用于排查 CLI、Skills 或授权异常。默认不动 Node/npm/npx。</p>
           </div>
-          <button class="secondary-button" type="button" @click="bridgeCleanupDialogOpen = false">关闭</button>
+          <button class="secondary-button" type="button" @click="agentCleanupDialogOpen = false">关闭</button>
         </div>
-        <div class="modal-body bridge-cleanup-body">
+        <div class="modal-body agent-cleanup-body">
           <div class="hint-box compact-hint">
             <strong>默认清理</strong>
             <span>会卸载全局 @larksuite/cli，移除官方 lark-* Skills，并清理 ~/.lark-cli 下的配置、授权、事件和缓存。</span>
           </div>
           <div class="checkbox-grid cleanup-checkbox-grid">
             <label class="checkbox-item">
-              <input v-model="bridgeCleanupImportedSkills" type="checkbox" />
-              <span>同时清理用户导入的 Bridge Skills</span>
+              <input v-model="agentCleanupImportedSkills" type="checkbox" />
+              <span>同时清理用户导入的 Agent Skills</span>
             </label>
             <label class="checkbox-item">
-              <input v-model="bridgeCleanupMCPConfig" type="checkbox" />
+              <input v-model="agentCleanupMCPConfig" type="checkbox" />
               <span>同时清理自定义 MCP JSON，并关闭 MCP</span>
             </label>
           </div>
-          <div v-if="bridgeBusy || bridgeStatus?.lastOutput || bridgeStatus?.lastError" class="cleanup-progress-box">
-            <strong>{{ bridgeBusy ? '清理进度' : '最近清理结果' }}</strong>
-            <span v-if="bridgeStatus?.lastOutput">{{ bridgeStatus.lastOutput }}</span>
-            <span v-if="bridgeStatus?.lastError" class="warn-text">{{ bridgeStatus.lastError }}</span>
+          <div v-if="agentBusy || agentStatus?.lastOutput || agentStatus?.lastError" class="cleanup-progress-box">
+            <strong>{{ agentBusy ? '清理进度' : '最近清理结果' }}</strong>
+            <span v-if="agentStatus?.lastOutput">{{ agentStatus.lastOutput }}</span>
+            <span v-if="agentStatus?.lastError" class="warn-text">{{ agentStatus.lastError }}</span>
           </div>
           <p class="identity-note">不会删除 Node.js、npm、npx，也不会修改 Cursor / Claude / Lingma / QoderCN 等外部客户端自己的 MCP 配置。</p>
         </div>
         <div class="modal-footer">
-          <button class="secondary-button" type="button" @click="bridgeCleanupDialogOpen = false">取消</button>
-          <button class="danger-button" type="button" :disabled="bridgeBusy" @click="cleanupBridgeArtifacts">
-            {{ bridgeBusy ? '清理中...' : '确认清理' }}
+          <button class="secondary-button" type="button" @click="agentCleanupDialogOpen = false">取消</button>
+          <button class="danger-button" type="button" :disabled="agentBusy" @click="cleanupAgentArtifacts">
+            {{ agentBusy ? '清理中...' : '确认清理' }}
           </button>
         </div>
       </section>
     </div>
 
-    <div v-if="bridgeAdvancedDialogOpen" class="modal-backdrop" @click.self="bridgeAdvancedDialogOpen = false">
-      <section class="modal-card bridge-advanced-modal">
+    <div v-if="agentAdvancedDialogOpen" class="modal-backdrop" @click.self="agentAdvancedDialogOpen = false">
+      <section class="modal-card agent-advanced-modal">
         <div class="modal-header">
           <div>
-            <h2>Feishu Bridge 高级设置</h2>
+            <h2>Feishu Agent 高级设置</h2>
             <p>Bot 名称只影响飞书回复卡片显示；MCP 工具默认只扫描展示，启用后才会暴露给 Bot 调用。</p>
           </div>
-          <button class="secondary-button" type="button" @click="bridgeAdvancedDialogOpen = false">关闭</button>
+          <button class="secondary-button" type="button" @click="agentAdvancedDialogOpen = false">关闭</button>
         </div>
-        <div class="modal-body bridge-advanced-body">
+        <div class="modal-body agent-advanced-body">
           <div class="advanced-section">
             <div class="field">
               <label>Bot 名称</label>
               <input
-                v-model="bridgeBotNameDraft"
+                v-model="agentBotNameDraft"
                 maxlength="40"
                 placeholder="留空时卡片只显示“正在思考 / 已完成”"
               />
@@ -1645,7 +1645,7 @@ async function handleBridgeStepClick(step) {
             <div class="field">
               <label>Bot 身份描述</label>
               <textarea
-                v-model="bridgeIdentityDraft"
+                v-model="agentIdentityDraft"
                 maxlength="2000"
                 placeholder="例如：你是研发效能助手，面向内部开发同学。回复要直接、简洁，优先给可执行结论。"
               ></textarea>
@@ -1659,7 +1659,7 @@ async function handleBridgeStepClick(step) {
                 <h3>环境维护</h3>
                 <p>排查飞书 CLI、官方 Skills 或授权异常时使用。默认不动 Node/npm/npx。</p>
               </div>
-              <button type="button" class="danger-outline-button" :disabled="bridgeBusy || bridgeRefreshing" @click="openBridgeCleanupDialog">
+              <button type="button" class="danger-outline-button" :disabled="agentBusy || agentRefreshing" @click="openAgentCleanupDialog">
                 清理 CLI/Skills/授权
               </button>
             </div>
@@ -1672,21 +1672,21 @@ async function handleBridgeStepClick(step) {
                 <p>默认只允许应用 workspace 可读写；其他目录读取需授权，写入和删除必须在这里显式配置。</p>
               </div>
               <label class="switch">
-                <input v-model="bridgeSafeFilesDraft.enabled" type="checkbox" />
+                <input v-model="agentSafeFilesDraft.enabled" type="checkbox" />
                 <span></span>
               </label>
             </div>
             <div class="field">
               <label>默认 workspace</label>
               <input
-                v-model="bridgeSafeFilesDraft.workspaceDir"
+                v-model="agentSafeFilesDraft.workspaceDir"
                 placeholder="留空使用应用默认 workspace"
               />
             </div>
             <div class="field">
               <label>额外授权路径</label>
               <textarea
-                v-model="bridgeSafeFilesDraft.extraPathsText"
+                v-model="agentSafeFilesDraft.extraPathsText"
                 class="safe-files-textarea"
                 placeholder="每行一条：read /绝对路径&#10;write /绝对路径&#10;delete /绝对路径"
               ></textarea>
@@ -1698,33 +1698,33 @@ async function handleBridgeStepClick(step) {
             <div class="advanced-section-head">
               <div>
                 <h3>上下文管理</h3>
-                <p>Bridge 会在请求前估算上下文水位，并按水位压缩旧工具结果或刷新摘要。</p>
+                <p>Agent 会在请求前估算上下文水位，并按水位压缩旧工具结果或刷新摘要。</p>
               </div>
               <label class="switch">
-                <input v-model="bridgeContextDraft.autoCompact" type="checkbox" />
+                <input v-model="agentContextDraft.autoCompact" type="checkbox" />
                 <span></span>
               </label>
             </div>
             <div class="context-grid">
               <label>
                 <span>模型窗口覆盖</span>
-                <input v-model.number="bridgeContextDraft.contextWindowOverride" type="number" min="0" step="1000" placeholder="0 表示自动" />
+                <input v-model.number="agentContextDraft.contextWindowOverride" type="number" min="0" step="1000" placeholder="0 表示自动" />
               </label>
               <label>
                 <span>压缩水位 %</span>
-                <input v-model.number="bridgeContextDraft.compactWatermark" type="number" min="50" max="92" step="1" />
+                <input v-model.number="agentContextDraft.compactWatermark" type="number" min="50" max="92" step="1" />
               </label>
               <label>
                 <span>保留工具结果</span>
-                <input v-model.number="bridgeContextDraft.toolResultRetention" type="number" min="1" max="12" step="1" />
+                <input v-model.number="agentContextDraft.toolResultRetention" type="number" min="1" max="12" step="1" />
               </label>
               <label>
                 <span>HTTP 超时秒</span>
-                <input v-model.number="bridgeContextDraft.skillHttpTimeout" type="number" min="5" max="300" step="5" />
+                <input v-model.number="agentContextDraft.skillHttpTimeout" type="number" min="5" max="300" step="5" />
               </label>
               <label>
                 <span>HTTP 上限 bytes</span>
-                <input v-model.number="bridgeContextDraft.skillHttpMaxBytes" type="number" min="262144" max="52428800" step="262144" />
+                <input v-model.number="agentContextDraft.skillHttpMaxBytes" type="number" min="262144" max="52428800" step="262144" />
               </label>
             </div>
           </div>
@@ -1735,24 +1735,24 @@ async function handleBridgeStepClick(step) {
                 <h3>用户 Skills</h3>
                 <p>导入 zip 或包含 SKILL.md 的文件夹；Bot 只看索引，使用时再按需读取正文。</p>
               </div>
-              <button class="secondary-button" type="button" :disabled="bridgeSkillsLoading" @click="reloadBridgeSkills">
-                {{ bridgeSkillsLoading ? '扫描中...' : '重新扫描' }}
+              <button class="secondary-button" type="button" :disabled="agentSkillsLoading" @click="reloadAgentSkills">
+                {{ agentSkillsLoading ? '扫描中...' : '重新扫描' }}
               </button>
             </div>
             <div class="actions-row">
-              <button class="secondary-button" type="button" :disabled="bridgeSkillImporting" @click="importBridgeSkill('folder')">
+              <button class="secondary-button" type="button" :disabled="agentSkillImporting" @click="importAgentSkill('folder')">
                 导入文件夹
               </button>
-              <button class="secondary-button" type="button" :disabled="bridgeSkillImporting" @click="importBridgeSkill('zip')">
+              <button class="secondary-button" type="button" :disabled="agentSkillImporting" @click="importAgentSkill('zip')">
                 导入 zip
               </button>
             </div>
             <div class="skill-list">
-              <div v-if="!bridgeSkillsLoading && bridgeSkills.length === 0" class="mcp-empty">
+              <div v-if="!agentSkillsLoading && agentSkills.length === 0" class="mcp-empty">
                 暂未导入用户 Skill。
               </div>
-              <div v-for="skill in bridgeSkills" :key="skill.id" class="skill-card" :class="{ disabled: !skill.enabled, invalid: skill.error }">
-                <button class="skill-row" type="button" @click="toggleBridgeSkill(skill)">
+              <div v-for="skill in agentSkills" :key="skill.id" class="skill-card" :class="{ disabled: !skill.enabled, invalid: skill.error }">
+                <button class="skill-row" type="button" @click="toggleAgentSkill(skill)">
                   <span class="mcp-server-toggle" :class="{ on: skill.enabled }"></span>
                   <span class="skill-main">
                     <strong>{{ skill.name }}</strong>
@@ -1765,7 +1765,7 @@ async function handleBridgeStepClick(step) {
                   scripts: {{ skill.scripts.join(', ') }}
                 </div>
                 <div v-if="skill.error" class="mcp-json-error">{{ skill.error }}</div>
-                <button class="text-danger-button" type="button" @click.stop="deleteBridgeSkill(skill)">删除</button>
+                <button class="text-danger-button" type="button" @click.stop="deleteAgentSkill(skill)">删除</button>
               </div>
             </div>
           </div>
@@ -1777,23 +1777,23 @@ async function handleBridgeStepClick(step) {
                 <p>优先读取本机已有 MCP 配置；单个 server 启用后才会进入 Bot 工具清单。</p>
               </div>
               <label class="switch">
-                <input v-model="bridgeMCPEnabledDraft" type="checkbox" />
+                <input v-model="agentMCPEnabledDraft" type="checkbox" />
                 <span></span>
               </label>
             </div>
             <div class="actions-row">
-              <button class="secondary-button" type="button" @click="openBridgeMCPJSONDialog">
+              <button class="secondary-button" type="button" @click="openAgentMCPJSONDialog">
                 自定义 MCP JSON
               </button>
-              <button class="secondary-button" type="button" :disabled="bridgeRefreshing" @click="refreshBridgeAdvancedMCP">
-                {{ bridgeRefreshing ? '扫描中...' : '扫描本机 MCP' }}
+              <button class="secondary-button" type="button" :disabled="agentRefreshing" @click="refreshAgentAdvancedMCP">
+                {{ agentRefreshing ? '扫描中...' : '扫描本机 MCP' }}
               </button>
             </div>
             <div class="mcp-server-list">
-              <div v-if="bridgeMCPServersDraft.length === 0" class="mcp-empty">
+              <div v-if="agentMCPServersDraft.length === 0" class="mcp-empty">
                 未扫描到 MCP 配置。当前会检查 Cursor、Claude、Codex、QoderCN、Lingma、Antigravity、Windsurf、VS Code、Zed、Continue 和项目级 .mcp.json 等主流路径。
               </div>
-              <div v-for="group in bridgeMCPServerGroups" :key="group.source" class="mcp-source-group">
+              <div v-for="group in agentMCPServerGroups" :key="group.source" class="mcp-source-group">
                 <div class="mcp-source-title">{{ group.source }}</div>
                 <div
                   v-for="server in group.servers"
@@ -1804,7 +1804,7 @@ async function handleBridgeStepClick(step) {
                   <button
                     type="button"
                     class="mcp-server-row"
-                    @click="toggleBridgeMCPServer(server.name)"
+                    @click="toggleAgentMCPServer(server.name)"
                   >
                     <span class="mcp-server-toggle" :class="{ on: server.enabled }"></span>
                     <span class="mcp-server-main">
@@ -1813,22 +1813,22 @@ async function handleBridgeStepClick(step) {
                       <em>{{ server.source || '自定义配置' }}</em>
                     </span>
                     <span class="mcp-server-meta">
-                      {{ bridgeMCPServerMeta(server) }}
+                      {{ agentMCPServerMeta(server) }}
                     </span>
                   </button>
                   <button
                     v-if="Array.isArray(server.tools) && server.tools.length > 0"
                     type="button"
                     class="mcp-tools-toggle"
-                    @click.stop="toggleBridgeMCPTools(server.name)"
+                    @click.stop="toggleAgentMCPTools(server.name)"
                   >
-                    <span>{{ bridgeMCPExpanded[server.name] ? '⌄' : '›' }}</span>
+                    <span>{{ agentMCPExpanded[server.name] ? '⌄' : '›' }}</span>
                     <span>{{ server.tools.length }} 个转换后的 tools</span>
                   </button>
-                  <div v-if="bridgeMCPExpanded[server.name] && Array.isArray(server.tools) && server.tools.length > 0" class="mcp-tool-list">
-                    <div v-for="tool in server.tools" :key="bridgeMCPToolLabel(tool)" class="mcp-tool-chip">
-                      <code>{{ bridgeMCPToolLabel(tool) }}</code>
-                      <small v-if="bridgeMCPToolDescription(tool)">{{ bridgeMCPToolDescription(tool) }}</small>
+                  <div v-if="agentMCPExpanded[server.name] && Array.isArray(server.tools) && server.tools.length > 0" class="mcp-tool-list">
+                    <div v-for="tool in server.tools" :key="agentMCPToolLabel(tool)" class="mcp-tool-chip">
+                      <code>{{ agentMCPToolLabel(tool) }}</code>
+                      <small v-if="agentMCPToolDescription(tool)">{{ agentMCPToolDescription(tool) }}</small>
                     </div>
                   </div>
                 </div>
@@ -1837,46 +1837,46 @@ async function handleBridgeStepClick(step) {
           </div>
         </div>
         <div class="modal-footer">
-          <button class="secondary-button" type="button" @click="clearBridgeIdentity">清空</button>
+          <button class="secondary-button" type="button" @click="clearAgentIdentity">清空</button>
           <div class="actions-row">
-            <button class="secondary-button" type="button" @click="bridgeAdvancedDialogOpen = false">取消</button>
-            <button class="primary-button" type="button" :disabled="bridgeSaving" @click="saveBridgeAdvancedSettings">
-              {{ bridgeSaving ? '保存中...' : '保存生效' }}
+            <button class="secondary-button" type="button" @click="agentAdvancedDialogOpen = false">取消</button>
+            <button class="primary-button" type="button" :disabled="agentSaving" @click="saveAgentAdvancedSettings">
+              {{ agentSaving ? '保存中...' : '保存生效' }}
             </button>
           </div>
         </div>
       </section>
     </div>
 
-    <div v-if="bridgeMCPJSONDialogOpen" class="modal-backdrop" @click.self="bridgeMCPJSONDialogOpen = false">
-      <section class="modal-card bridge-mcp-json-modal">
+    <div v-if="agentMCPJSONDialogOpen" class="modal-backdrop" @click.self="agentMCPJSONDialogOpen = false">
+      <section class="modal-card agent-mcp-json-modal">
         <div class="modal-header">
           <div>
             <h2>自定义 MCP JSON</h2>
             <p>保存到应用自己的 MCP 配置文件，保存成功后会自动解析并刷新 MCP 列表。</p>
           </div>
-          <button class="secondary-button" type="button" @click="bridgeMCPJSONDialogOpen = false">关闭</button>
+          <button class="secondary-button" type="button" @click="agentMCPJSONDialogOpen = false">关闭</button>
         </div>
         <div class="modal-body">
           <div class="field">
             <label>配置文件</label>
-            <input :value="bridgeMCPJSONPath" readonly />
+            <input :value="agentMCPJSONPath" readonly />
           </div>
           <div class="field mcp-json-edit-pane">
             <label>JSON 文件内容</label>
             <textarea
-              v-model="bridgeMCPJSONDraft"
+              v-model="agentMCPJSONDraft"
               class="mcp-json-editor"
               spellcheck="false"
               placeholder='{"mcpServers":{"context7":{"command":"npx","args":["-y","@upstash/context7-mcp@latest"]}}}'
             ></textarea>
           </div>
-          <p v-if="bridgeMCPJSONError" class="mcp-json-error">{{ bridgeMCPJSONError }}</p>
+          <p v-if="agentMCPJSONError" class="mcp-json-error">{{ agentMCPJSONError }}</p>
         </div>
         <div class="modal-footer">
-          <button class="secondary-button" type="button" @click="bridgeMCPJSONDialogOpen = false">取消</button>
-          <button class="primary-button" type="button" :disabled="bridgeMCPJSONSaving" @click="saveBridgeMCPJSON">
-            {{ bridgeMCPJSONSaving ? '保存中...' : '保存并解析' }}
+          <button class="secondary-button" type="button" @click="agentMCPJSONDialogOpen = false">取消</button>
+          <button class="primary-button" type="button" :disabled="agentMCPJSONSaving" @click="saveAgentMCPJSON">
+            {{ agentMCPJSONSaving ? '保存中...' : '保存并解析' }}
           </button>
         </div>
       </section>

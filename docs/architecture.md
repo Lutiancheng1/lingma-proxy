@@ -33,7 +33,7 @@ flowchart LR
 
 ---
 
-## 1.5 Feishu Bridge
+## 1.5 Feishu Agent
 
 An optional subsystem that connects the proxy to Feishu (Lark) as a bot, enabling chat-based AI interactions with streaming card output.
 
@@ -56,7 +56,7 @@ Key components:
 | `internal/feishu/tools.go` | lark-cli tool definitions and execution (IM, Drive, Calendar, etc.) |
 | `internal/feishu/prompt.go` | System prompt construction, skill excerpt injection, tool-use decision logic |
 | `internal/feishu/skills.go` | Skill discovery (disk scan + lock file) |
-| `internal/feishu/config.go` | Feishu Bridge configuration model |
+| `internal/feishu/config.go` | Feishu Agent configuration model |
 | `internal/feishu/install.go` | lark-cli and Skills installation |
 | `internal/feishu/onboarding.go` | lark-cli init and auth flow |
 | `internal/feishu/env.go` | PATH resolution for lark-cli / Node / npm |
@@ -73,12 +73,12 @@ CardKit final-state layering:
 
 - the initial streaming card creates stable `subtitle_md`, `steps_md`, `reply_md`, and `hint_md` elements; normal text deltas only update `reply_md`
 - when a tool step finishes, the card performs a small structural refresh that inserts completed tools as collapsed `collapsible_panel` blocks while keeping `reply_md` available for later text streaming
-- on normal completion, the bridge first disables `/settings.streaming_mode`, then performs a small final card update so the header/status does not remain in the thinking state
+- on normal completion, the Agent first disables `/settings.streaming_mode`, then performs a small final card update so the header/status does not remain in the thinking state
 - long replies or large tool payloads use a compact final card plus chunked markdown; the compact card still keeps recent collapsed tool summaries with bounded count and body size
 
-Authorization and permissions: the model must not run `lark-cli auth login` directly. When tool output reports `need_user_authorization` or missing scopes, the Bridge owns the device-flow login, replies with the authorization URL, and waits for the user to authorize before continuing.
+Authorization and permissions: the model must not run `lark-cli auth login` directly. When tool output reports `need_user_authorization` or missing scopes, the Agent owns the device-flow login, replies with the authorization URL, and waits for the user to authorize before continuing.
 
-Local File Access: safe file tools (`safe_file_read`, `safe_file_write`, `safe_file_list`, `safe_file_delete`) are gated by the Feishu Bridge advanced settings. By default, only the app-managed workspace is writable. Other local paths must be explicitly configured as `read`, `write`, or `delete`. Chat-based `授权目录 /path` or `授权文件 /path` authorization only adds a read-only allowlist entry under the app config directory; it never grants write or delete permission.
+Local File Access: safe file tools (`safe_file_read`, `safe_file_write`, `safe_file_list`, `safe_file_delete`) are gated by the Feishu Agent advanced settings. By default, only the app-managed workspace is writable. Other local paths must be explicitly configured as `read`, `write`, or `delete`. Chat-based `授权目录 /path` or `授权文件 /path` authorization only adds a read-only allowlist entry under the app config directory; it never grants write or delete permission.
 
 Write/Delete Safeguards: overwriting an existing file requires the latest user message to explicitly contain `确认覆盖 <filename or absolute path>`. Deleting files requires both `confirmed: true` and an exact `确认删除 <filename or absolute path>` in the latest user message. Directory deletion is blocked. Path checks resolve real paths and use proper subpath matching to avoid prefix and symlink escapes.
 
@@ -335,8 +335,8 @@ Persisted local state:
 Feedback bundle export:
 
 - default export includes `app-logs.json`, `request-logs.json`, config summary, environment summary, and detection info
-- when Feishu Bridge is available, the bundle also includes `feishu-bridge-status.json`
-- `app-logs.json` preserves Feishu Bridge `source/sessionId/chatId/messageId/level/message` fields with text redaction
+- when Feishu Agent is available, the bundle also includes `feishu-agent-status.json`
+- `app-logs.json` preserves Feishu Agent `source/sessionId/chatId/messageId/level/message` fields with text redaction
 - the UI log list displays `today/yesterday/MM-DD + time` from `createdAt`; old logs without `createdAt` fall back to `time`
 
 Production packaging rules:
@@ -369,7 +369,7 @@ Because the GUI is used as an operational console, not a transient preview. User
 
 ## 8. MCP Client
 
-The Feishu Bridge includes a full MCP (Model Context Protocol 2025-06-18) client that connects to external MCP servers via stdio transport. All three capability domains are supported:
+The Feishu Agent includes a full MCP (Model Context Protocol 2025-06-18) client that connects to external MCP servers via stdio transport. All three capability domains are supported:
 
 | Domain | Operations | Exposure to LLM |
 |--------|-----------|-----------------|
@@ -385,7 +385,7 @@ Key files: `internal/feishu/mcp.go` (client + runtime), `internal/feishu/status.
 
 ## 9. Context Management
 
-The Feishu Bridge implements a 4-tier watermark system for context window management:
+The Feishu Agent implements a 4-tier watermark system for context window management:
 
 | Watermark | Threshold | Action |
 |-----------|-----------|--------|

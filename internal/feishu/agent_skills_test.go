@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestBridgeSkillImportFolder(t *testing.T) {
+func TestAgentSkillImportFolder(t *testing.T) {
 	dataDir := t.TempDir()
 	source := filepath.Join(t.TempDir(), "demo-skill")
 	if err := os.MkdirAll(filepath.Join(source, "scripts"), 0755); err != nil {
@@ -22,12 +22,12 @@ func TestBridgeSkillImportFolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "scripts", "run.sh"), []byte("echo ok\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	store, err := newBridgeStore(dataDir)
+	store, err := newAgentStore(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	svc, err := NewBridgeSkillService(dataDir, store)
+	svc, err := NewAgentSkillService(dataDir, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestBridgeSkillImportFolder(t *testing.T) {
 	}
 }
 
-func TestBridgeSkillYAMLFrontmatterParsesListsAndBooleans(t *testing.T) {
+func TestAgentSkillYAMLFrontmatterParsesListsAndBooleans(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "yaml-skill")
 	if err := os.MkdirAll(source, 0755); err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ disable-model-invocation: true
 	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte(body), 0644); err != nil {
 		t.Fatal(err)
 	}
-	skill, err := parseBridgeSkillDir(source, "test")
+	skill, err := parseAgentSkillDir(source, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ disable-model-invocation: true
 	}
 }
 
-func TestBridgeSkillZipRejectsTraversal(t *testing.T) {
+func TestAgentSkillZipRejectsTraversal(t *testing.T) {
 	zipPath := filepath.Join(t.TempDir(), "bad.zip")
 	file, err := os.Create(zipPath)
 	if err != nil {
@@ -103,7 +103,7 @@ func TestBridgeSkillZipRejectsTraversal(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	svc, err := NewBridgeSkillService(t.TempDir(), nil)
+	svc, err := NewAgentSkillService(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestBridgeSkillZipRejectsTraversal(t *testing.T) {
 	}
 }
 
-func TestBridgeSkillZipImportsMultipleSkills(t *testing.T) {
+func TestAgentSkillZipImportsMultipleSkills(t *testing.T) {
 	zipPath := filepath.Join(t.TempDir(), "skills.zip")
 	file, err := os.Create(zipPath)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestBridgeSkillZipImportsMultipleSkills(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc, err := NewBridgeSkillService(t.TempDir(), nil)
+	svc, err := NewAgentSkillService(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestBridgeSkillZipImportsMultipleSkills(t *testing.T) {
 	}
 }
 
-func TestBridgeSkillZipRejectsLargeFiles(t *testing.T) {
+func TestAgentSkillZipRejectsLargeFiles(t *testing.T) {
 	zipPath := filepath.Join(t.TempDir(), "large.zip")
 	file, err := os.Create(zipPath)
 	if err != nil {
@@ -182,7 +182,7 @@ func TestBridgeSkillZipRejectsLargeFiles(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	svc, err := NewBridgeSkillService(t.TempDir(), nil)
+	svc, err := NewAgentSkillService(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,8 +208,8 @@ func TestExplicitSkillMentionApprovesOneTurnScript(t *testing.T) {
 	}
 
 	manager.setTurnSkillScriptApprovals("oc_test", "使用 aihot 查一下今天 AI 圈有什么")
-	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "aihot"})
-	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_run_script", map[string]any{
+	manager.executeAgentSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "aihot"})
+	result := manager.executeAgentSkillTool(context.Background(), "oc_test", "call_1", "skill_run_script", map[string]any{
 		"skill":  "aihot",
 		"script": "daily.sh",
 	})
@@ -218,8 +218,8 @@ func TestExplicitSkillMentionApprovesOneTurnScript(t *testing.T) {
 	}
 
 	manager.clearTurnSkillScriptApprovals("oc_test")
-	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_2", "skill_view", map[string]any{"name": "aihot"})
-	result = manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_2", "skill_run_script", map[string]any{
+	manager.executeAgentSkillTool(context.Background(), "oc_test", "view_2", "skill_view", map[string]any{"name": "aihot"})
+	result = manager.executeAgentSkillTool(context.Background(), "oc_test", "call_2", "skill_run_script", map[string]any{
 		"skill":  "aihot",
 		"script": "daily.sh",
 	})
@@ -245,8 +245,8 @@ func TestSkillRunScriptPassesArgs(t *testing.T) {
 	}
 
 	manager.setTurnSkillScriptApprovals("oc_test", "使用 arg-skill 执行脚本")
-	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "arg-skill"})
-	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_run_script", map[string]any{
+	manager.executeAgentSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "arg-skill"})
+	result := manager.executeAgentSkillTool(context.Background(), "oc_test", "call_1", "skill_run_script", map[string]any{
 		"skill":  "arg-skill",
 		"script": "run.sh",
 		"args":   []any{"hello", "world"},
@@ -268,8 +268,8 @@ func TestSkillHTTPRequestRejectsUnsupportedMethod(t *testing.T) {
 	if _, err := manager.ImportSkillPath(context.Background(), source); err != nil {
 		t.Fatal(err)
 	}
-	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "api-skill"})
-	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
+	manager.executeAgentSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "api-skill"})
+	result := manager.executeAgentSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
 		"skill":  "api-skill",
 		"method": "TRACE",
 		"url":    "https://example.invalid/items",
@@ -291,9 +291,9 @@ func TestSkillHTTPRequestBlocksLocalhost(t *testing.T) {
 	if _, err := manager.ImportSkillPath(context.Background(), source); err != nil {
 		t.Fatal(err)
 	}
-	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "api-skill"})
+	manager.executeAgentSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "api-skill"})
 
-	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
+	result := manager.executeAgentSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
 		"skill": "api-skill",
 		"url":   "http://127.0.0.1:8080/items",
 	})
@@ -315,7 +315,7 @@ func TestSkillHTTPRequestRequiresSkillView(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
+	result := manager.executeAgentSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
 		"skill": "api-skill",
 		"url":   "https://example.com/api/items",
 	})
@@ -336,9 +336,9 @@ func TestSkillHTTPRequestRejectsURLOutsideSkillDocument(t *testing.T) {
 	if _, err := manager.ImportSkillPath(context.Background(), source); err != nil {
 		t.Fatal(err)
 	}
-	manager.executeBridgeSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "aihot"})
+	manager.executeAgentSkillTool(context.Background(), "oc_test", "view_1", "skill_view", map[string]any{"name": "aihot"})
 
-	result := manager.executeBridgeSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
+	result := manager.executeAgentSkillTool(context.Background(), "oc_test", "call_1", "skill_http_request", map[string]any{
 		"skill": "aihot",
 		"url":   "https://api.virxact.com/aihot/api/v1/articles?limit=10&offset=0",
 	})

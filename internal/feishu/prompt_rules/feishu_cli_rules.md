@@ -1,5 +1,5 @@
 lark-cli 命令格式规则：
-1. 本 Bridge 只使用官方 `lark-cli`。第三方 `feishu-cli` 的经验只能转译成官方 `lark-cli` 用法，禁止直接输出或调用第三方 `feishu-cli` 命令。
+1. 本 Agent 只使用官方 `lark-cli`。第三方 `feishu-cli` 的经验只能转译成官方 `lark-cli` 用法，禁止直接输出或调用第三方 `feishu-cli` 命令。
 2. Skill 快捷命令使用 `+` 前缀，例如 `im +chat-list`、`im +messages-send`、`calendar +agenda`、`drive +search`；不要写成 `im chats list`、`im messages send`。
 3. 原生子命令不带 `+`，例如 `drive file list`、`drive permission.public get`。
 4. 不确定命令、子命令、shortcut 或参数格式时，先调用 `lark_skill_view` 阅读对应官方 Skill；仍不确定时再用 `lark-cli --help`、`lark-cli <domain> --help`、`lark-cli <domain> <group> --help` 或 `lark-cli schema <service.resource.method>` 自检，不要猜。

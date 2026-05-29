@@ -46,7 +46,7 @@ Auto-detection prefers QoderCN runtime files first, then falls back to Lingma ru
 ## Current Version
 
 <!-- VERSION:CURRENT:BEGIN -->
-Current desktop app version: `v1.6.7`.
+Current desktop app version: `v1.6.8`.
 
 The canonical source is [VERSION](./VERSION). Run `./scripts/sync-version.sh` to propagate it into [desktop/wails.json](./desktop/wails.json), the desktop UI, and release-facing docs.
 <!-- VERSION:CURRENT:END -->
@@ -147,8 +147,8 @@ Compared with the original protocol proof of concept, this repository focuses on
 - **Request log image redaction** so large base64 payloads are visible as image markers instead of breaking the desktop log view.
 - **More request parameter compatibility** so stricter clients can connect without custom patches.
 - **Full request and response recording** in the desktop app for debugging 400/500 errors.
-- **Local file CRUD with tiered authorization** using `safe_file_read`, `safe_file_write`, `safe_file_list`, and `safe_file_delete`. Only the app workspace is writable by default. Extra paths must be configured in Feishu Bridge advanced settings as `read`, `write`, or `delete`. Chat-based `授权目录 /path` or `授权文件 /path` only grants read access. Overwriting requires an exact `确认覆盖 <filename>` confirmation, and deletion requires both `confirmed: true` and an exact `确认删除 <filename>` confirmation. Directory deletion is blocked.
-- **Feishu Bridge context management** with model-window watermarks, classified tool-result handling (`preserve`, `summarize`, `stub`, `discard`), SQLite + FTS5 tool memory, `fetch_tool_memory` recall, and `feishu_history_search` for older Feishu chat references outside the active context window.
+- **Local file CRUD with tiered authorization** using `safe_file_read`, `safe_file_write`, `safe_file_list`, and `safe_file_delete`. Only the app workspace is writable by default. Extra paths must be configured in Feishu Agent advanced settings as `read`, `write`, or `delete`. Chat-based `授权目录 /path` or `授权文件 /path` only grants read access. Overwriting requires an exact `确认覆盖 <filename>` confirmation, and deletion requires both `confirmed: true` and an exact `确认删除 <filename>` confirmation. Directory deletion is blocked.
+- **Feishu Agent context management** with model-window watermarks, classified tool-result handling (`preserve`, `summarize`, `stub`, `discard`), SQLite + FTS5 tool memory, `fetch_tool_memory` recall, and `feishu_history_search` for older Feishu chat references outside the active context window.
 - **macOS and Windows desktop app** with start/stop/restart, settings, logs, model discovery, themes, and window lifecycle handling.
 - **Cross-platform release packaging** for CLI and desktop builds.
 
@@ -255,8 +255,8 @@ Important behavior:
 ```mermaid
 flowchart LR
   Client["OpenAI / Anthropic Client"] --> HTTP["HTTP API Layer"]
-  Desktop["Desktop App"] --> AppBridge["Wails Go Bridge"]
-  AppBridge --> Service["Proxy Service"]
+  Desktop["Desktop App"] --> AppAgent["Wails Go Agent"]
+  AppAgent --> Service["Proxy Service"]
   HTTP --> Service
   Service --> Session["Session Manager"]
   Service --> Tools["Tool Emulation"]
@@ -284,7 +284,7 @@ flowchart LR
 | `internal/lingmaipc` | Lingma JSON-RPC transport over Named Pipe and WebSocket |
 | `internal/remote` | remote Lingma login-cache import, signing, model list, and SSE parsing |
 | `internal/toolemulation` | tool definition injection, action block parsing, tool result projection |
-| `desktop` | Wails desktop shell, native window commands, proxy control bridge |
+| `desktop` | Wails desktop shell, native window commands, proxy control agent |
 | `desktop/frontend` | Vue UI for dashboard, requests, models, settings, and logs |
 | `.github/workflows/release.yml` | CI release pipeline for macOS and Windows CLI/Desktop packages |
 

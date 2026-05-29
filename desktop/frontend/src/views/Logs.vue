@@ -39,7 +39,7 @@ const filteredLogs = computed(() => {
   const q = search.value.trim().toLowerCase()
   return visibleLogs.value.filter((log) => {
     const matchesLevel = filter.value === 'all' || log.level === filter.value
-    const matchesSource = sourceFilter.value === 'all' || (sourceFilter.value === 'feishu-bridge' && log.source === 'feishu-bridge')
+    const matchesSource = sourceFilter.value === 'all' || (sourceFilter.value === 'feishu-agent' && log.source === 'feishu-agent')
     const displayTime = formatLogDateTime(log)
     const matchesSearch = !q || `${displayTime} ${log.time || ''} ${log.source || 'app'} ${log.level} ${log.message} ${log.sessionId || ''} ${log.chatId || ''}`.toLowerCase().includes(q)
     return matchesLevel && matchesSource && matchesSearch
@@ -85,7 +85,7 @@ function levelLabel(level) {
 function sourceLabel(source) {
   return {
     app: '应用',
-    'feishu-bridge': 'Feishu Bridge',
+    'feishu-agent': 'Feishu Agent',
   }[source || 'app'] || (source || '应用')
 }
 
@@ -281,7 +281,7 @@ function proceedClearLogs() {
     <div class="page-title">
       <div>
         <h1>日志</h1>
-        <p>记录代理启动、模型同步、健康检查、配置保存，以及 Feishu Bridge 运行事件。</p>
+        <p>记录代理启动、模型同步、健康检查、配置保存，以及 Feishu Agent 运行事件。</p>
       </div>
       <div class="toolbar">
         <button class="secondary-button" type="button" :disabled="filteredLogs.length === 0" @click="copyLogs">复制完整筛选结果</button>
@@ -301,7 +301,7 @@ function proceedClearLogs() {
           </div>
           <div class="segmented">
             <button :class="{ active: sourceFilter === 'all' }" type="button" @click="sourceFilter = 'all'">全部来源</button>
-            <button :class="{ active: sourceFilter === 'feishu-bridge' }" type="button" @click="sourceFilter = 'feishu-bridge'">Feishu Bridge</button>
+            <button :class="{ active: sourceFilter === 'feishu-agent' }" type="button" @click="sourceFilter = 'feishu-agent'">Feishu Agent</button>
           </div>
         </div>
         <div class="logs-toolbar-right">

@@ -27,7 +27,7 @@ const (
 	conversationDebounceDelay        = 600 * time.Millisecond
 	autoCompactTokenThreshold        = 60000
 	feishuMarkdownReplyChunkLimit    = 2800
-	defaultBotDisplayName            = "飞书 Bridge"
+	defaultBotDisplayName            = "飞书 Agent"
 	maxFeishuImageAttachments        = 4
 	maxFeishuImageBytes              = 8 * 1024 * 1024
 	feishuImageDownloadTimeout       = 90 * time.Second
@@ -202,8 +202,8 @@ type Manager struct {
 	conversations  map[string]conversationState
 	runs           map[string]*conversationRunState
 	mcp            *MCPRuntime
-	store          *bridgeStore
-	skillService   *BridgeSkillService
+	store          *agentStore
+	skillService   *AgentSkillService
 	skillApprovals map[string]map[string]struct{}
 	skillViews     map[string]map[string]struct{}
 	scheduleRunner scheduleRunnerState
@@ -234,15 +234,15 @@ func NewManager(opts ManagerOptions) *Manager {
 		scheduleRunner: scheduleRunnerState{running: make(map[string]struct{})},
 	}
 	if strings.TrimSpace(opts.DataDir) != "" {
-		if store, err := newBridgeStore(opts.DataDir); err == nil {
+		if store, err := newAgentStore(opts.DataDir); err == nil {
 			manager.store = store
 		}
 	}
-	if svc, err := NewBridgeSkillService(opts.DataDir, manager.store); err == nil {
+	if svc, err := NewAgentSkillService(opts.DataDir, manager.store); err == nil {
 		manager.skillService = svc
 		manager.status.SkillCount = len(svc.List(true))
 	} else {
-		manager.skillService, _ = NewBridgeSkillService("", nil)
+		manager.skillService, _ = NewAgentSkillService("", nil)
 	}
 	return manager
 }
@@ -280,9 +280,9 @@ func (m *Manager) RefreshProbe(ctx context.Context) Status {
 	return m.status
 }
 
-func (m *Manager) ImportSkillPath(ctx context.Context, path string) (BridgeSkillImportResult, error) {
+func (m *Manager) ImportSkillPath(ctx context.Context, path string) (AgentSkillImportResult, error) {
 	if m.skillService == nil {
-		return BridgeSkillImportResult{}, fmt.Errorf("Skill 服务未初始化")
+		return AgentSkillImportResult{}, fmt.Errorf("Skill 服务未初始化")
 	}
 	result, err := m.skillService.ImportPath(ctx, path)
 	m.mu.Lock()
@@ -292,14 +292,14 @@ func (m *Manager) ImportSkillPath(ctx context.Context, path string) (BridgeSkill
 	return result, err
 }
 
-func (m *Manager) ListBridgeSkills() []BridgeSkill {
+func (m *Manager) ListAgentSkills() []AgentSkill {
 	if m.skillService == nil {
 		return nil
 	}
 	return m.skillService.List(false)
 }
 
-func (m *Manager) ReloadBridgeSkills(ctx context.Context) error {
+func (m *Manager) ReloadAgentSkills(ctx context.Context) error {
 	if m.skillService == nil {
 		return fmt.Errorf("Skill 服务未初始化")
 	}
@@ -312,7 +312,7 @@ func (m *Manager) ReloadBridgeSkills(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) SetBridgeSkillEnabled(ctx context.Context, id string, enabled bool) error {
+func (m *Manager) SetAgentSkillEnabled(ctx context.Context, id string, enabled bool) error {
 	if m.skillService == nil {
 		return fmt.Errorf("Skill 服务未初始化")
 	}
@@ -326,7 +326,7 @@ func (m *Manager) SetBridgeSkillEnabled(ctx context.Context, id string, enabled 
 	return nil
 }
 
-func (m *Manager) DeleteBridgeSkill(ctx context.Context, id string) error {
+func (m *Manager) DeleteAgentSkill(ctx context.Context, id string) error {
 	if m.skillService == nil {
 		return fmt.Errorf("Skill 服务未初始化")
 	}
@@ -695,7 +695,7 @@ func (m *Manager) startRecommendedLogin(ctx context.Context) (string, error) {
 func cliLocationHint() string {
 	cli := detectBinary("lark-cli", "--version")
 	if !cli.Found {
-		return "本机未检测到 lark-cli，请在 Lingma Proxy 的 Feishu Bridge 设置页点击“安装 CLI 与 Skills”。"
+		return "本机未检测到 lark-cli，请在 Lingma Proxy 的 Feishu Agent 设置页点击“安装 CLI 与 Skills”。"
 	}
 	if strings.TrimSpace(cli.Path) == "" {
 		return "本机已检测到 lark-cli，但未能解析到完整路径。"
@@ -830,7 +830,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	status = m.status
 	m.mu.Unlock()
 	m.emit(status)
-	m.logf("info", "Feishu bridge 已启动，等待消息中")
+	m.logf("info", "Feishu Agent 已启动，等待消息中")
 
 	go m.readEvents(runCtx, stdout)
 	go m.readEventStderr(runCtx, stderr)
@@ -850,7 +850,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.mu.Unlock()
 		m.emit(status)
 		if err != nil && runCtx.Err() == nil {
-			m.logf("error", "Feishu bridge 已退出："+err.Error())
+			m.logf("error", "Feishu Agent 已退出："+err.Error())
 		}
 	}()
 	return nil
@@ -863,16 +863,16 @@ func (m *Manager) resetEventBus(ctx context.Context) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if stopCtx.Err() != nil {
-			m.logf("warn", "Feishu bridge 重置事件总线超时，将继续尝试启动监听")
+			m.logf("warn", "Feishu Agent 重置事件总线超时，将继续尝试启动监听")
 			return
 		}
-		m.logf("warn", "Feishu bridge 重置事件总线失败，将继续尝试启动监听："+strings.TrimSpace(decodeCommandOutput(output)))
+		m.logf("warn", "Feishu Agent 重置事件总线失败，将继续尝试启动监听："+strings.TrimSpace(decodeCommandOutput(output)))
 		return
 	}
 	if trimmed := strings.TrimSpace(decodeCommandOutput(output)); trimmed != "" {
-		m.logf("info", "Feishu bridge 已重置事件总线："+trimmed)
+		m.logf("info", "Feishu Agent 已重置事件总线："+trimmed)
 	} else {
-		m.logf("info", "Feishu bridge 已重置事件总线")
+		m.logf("info", "Feishu Agent 已重置事件总线")
 	}
 }
 
@@ -1014,13 +1014,13 @@ func (m *Manager) handleEvent(ctx context.Context, event incomingEvent) {
 		ChatID:    strings.TrimSpace(event.ChatID),
 		MessageID: strings.TrimSpace(event.MessageID),
 	}
-	m.logf("info", fmt.Sprintf("Feishu bridge 收到消息: chat=%s type=%s text=%s",
+	m.logf("info", fmt.Sprintf("Feishu Agent 收到消息: chat=%s type=%s text=%s",
 		trimmedID(event.ChatID),
 		valueOrFallback(strings.TrimSpace(event.MessageType), "unknown"),
 		event.Content,
 	), logMeta)
 	if m.shouldIgnoreGroupMessage(event) {
-		m.logf("info", "Feishu bridge 群聊消息未 @机器人，忽略", logMeta)
+		m.logf("info", "Feishu Agent 群聊消息未 @机器人，忽略", logMeta)
 		return
 	}
 	if m.handleImmediateConversationCommand(ctx, conversationKey, event, logMeta) {
@@ -1035,20 +1035,20 @@ func (m *Manager) handleImmediateConversationCommand(ctx context.Context, conver
 		return false
 	}
 	interrupted := m.stopConversationRun(conversationKey)
-	reply := "当前没有正在处理的 Feishu Bridge 任务。"
+	reply := "当前没有正在处理的 Feishu Agent 任务。"
 	if interrupted {
-		reply = "已请求停止当前 Feishu Bridge 任务。"
+		reply = "已请求停止当前 Feishu Agent 任务。"
 	}
 	if err := m.replyToMessage(ctx, event.MessageID, reply); err != nil {
-		m.logf("warn", "Feishu bridge /stop 回复失败："+err.Error(), meta)
+		m.logf("warn", "Feishu Agent /stop 回复失败："+err.Error(), meta)
 	}
-	m.logf("info", fmt.Sprintf("Feishu bridge 会话命令: /stop interrupted=%t", interrupted), meta)
+	m.logf("info", fmt.Sprintf("Feishu Agent 会话命令: /stop interrupted=%t", interrupted), meta)
 	return true
 }
 
 func (m *Manager) enqueueConversationEvent(ctx context.Context, conversationKey string, event incomingEvent, meta LogMeta) {
 	if strings.TrimSpace(conversationKey) == "" {
-		m.logf("warn", "Feishu bridge 收到消息，但无法解析会话 ID", meta)
+		m.logf("warn", "Feishu Agent 收到消息，但无法解析会话 ID", meta)
 		return
 	}
 	m.mu.Lock()
@@ -1068,15 +1068,15 @@ func (m *Manager) enqueueConversationEvent(ctx context.Context, conversationKey 
 		m.mu.Unlock()
 		if cancel != nil {
 			cancel(errCancelPreempted)
-			m.logf("info", fmt.Sprintf("Feishu bridge 抢占当前任务，队列将合并处理: queue=%d", queueSize), meta)
+			m.logf("info", fmt.Sprintf("Feishu Agent 抢占当前任务，队列将合并处理: queue=%d", queueSize), meta)
 		} else {
-			m.logf("info", fmt.Sprintf("Feishu bridge 消息已排队: queue=%d", queueSize), meta)
+			m.logf("info", fmt.Sprintf("Feishu Agent 消息已排队: queue=%d", queueSize), meta)
 		}
 		return
 	}
 	run.Processing = true
 	m.mu.Unlock()
-	m.logf("info", "Feishu bridge 会话调度已启动", meta)
+	m.logf("info", "Feishu Agent 会话调度已启动", meta)
 	m.processConversationQueue(ctx, conversationKey)
 }
 
@@ -1191,7 +1191,7 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 		proxyURL = strings.TrimSpace(m.opts.ProxyURL())
 	}
 	if proxyURL == "" {
-		m.logf("warn", "Feishu bridge 收到消息，但当前代理地址为空", logMeta)
+		m.logf("warn", "Feishu Agent 收到消息，但当前代理地址为空", logMeta)
 		return
 	}
 	typing := m.addTypingReaction(event.MessageID, logMeta)
@@ -1211,9 +1211,9 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 	commandReply, handled := m.handleConversationCommand(ctx, conversationKey, proxyURL, model, input.Text, logMeta)
 	if handled {
 		if err := m.replyToMessage(ctx, event.MessageID, commandReply); err != nil {
-			m.logf("warn", "Feishu bridge 回复消息失败："+err.Error(), logMeta)
+			m.logf("warn", "Feishu Agent 回复消息失败："+err.Error(), logMeta)
 		} else {
-			m.logf("info", "Feishu bridge 回复已发送: message="+trimmedID(event.MessageID), logMeta)
+			m.logf("info", "Feishu Agent 回复已发送: message="+trimmedID(event.MessageID), logMeta)
 		}
 		return
 	}
@@ -1264,7 +1264,7 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 	if budget.Watermark == "blocking" {
 		replyText := fmt.Sprintf("当前会话上下文已接近模型上限（约 %d%%，%d / %d tokens）。请先发送 /compact 压缩上下文，或 /reset 开启新会话后再继续。", budget.UsedPercent, budget.EstimatedTokens, budget.ContextWindow)
 		if err := m.replyToMessage(ctx, event.MessageID, replyText); err != nil {
-			m.logf("warn", "Feishu bridge 回复消息失败："+err.Error(), logMeta)
+			m.logf("warn", "Feishu Agent 回复消息失败："+err.Error(), logMeta)
 		}
 		return
 	}
@@ -1280,7 +1280,7 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 	if rounds > DefaultMaxToolRounds {
 		rounds = DefaultMaxToolRounds
 	}
-	m.logf("info", fmt.Sprintf("Feishu bridge 开始处理: model=%s forceToolUse=%t plainVision=%t rounds=%d", model, forceToolUse, plainVisionTurn, rounds), logMeta)
+	m.logf("info", fmt.Sprintf("Feishu Agent 开始处理: model=%s forceToolUse=%t plainVision=%t rounds=%d", model, forceToolUse, plainVisionTurn, rounds), logMeta)
 	card := newCardWriter(m, event.MessageID, botDisplayName(cfg), model, logMeta)
 	card.SetStatus("thinking", "正在思考")
 	replyText := ""
@@ -1290,7 +1290,7 @@ func (m *Manager) processConversationBatch(ctx context.Context, conversationKey 
 conversation:
 	for i := 0; i < rounds; i++ {
 		if ctx.Err() != nil {
-			text, status, label, log := m.cancelOutcome(ctx, conversationKey, "Feishu bridge 处理已停止")
+			text, status, label, log := m.cancelOutcome(ctx, conversationKey, "Feishu Agent 处理已停止")
 			replyText = text
 			card.SetStatus(status, label)
 			m.logf("info", log, logMeta)
@@ -1308,7 +1308,7 @@ conversation:
 		var err error
 		requestMessages := applyBudgetCompaction(messages, cfg.Context, budget, nil)
 		if plainVisionTurn {
-			m.logf("info", fmt.Sprintf("Feishu bridge 视觉请求开始: model=%s timeout=%s", model, feishuVisionResponseTimeout), logMeta)
+			m.logf("info", fmt.Sprintf("Feishu Agent 视觉请求开始: model=%s timeout=%s", model, feishuVisionResponseTimeout), logMeta)
 			visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
 			resp, err = callLLMPlainStreamForConversation(visionCtx, proxyURL, model, requestMessages, streamingDelta{
 				onText: func(chunk string) {
@@ -1335,13 +1335,13 @@ conversation:
 		}
 		if err != nil && !streamHadText {
 			if ctx.Err() == nil && isDeadlineError(err) {
-				replyText = "模型响应超时，Bridge 已停止本轮处理。图片消息可能触发了当前模型或代理端的长时间无响应，请换用支持视觉输入的模型后重试。"
+				replyText = "模型响应超时，Agent 已停止本轮处理。图片消息可能触发了当前模型或代理端的长时间无响应，请换用支持视觉输入的模型后重试。"
 				card.SetStatus("error", "模型响应超时")
 				card.AppendStep(cardStep{Kind: "error", Title: "模型响应超时", Body: err.Error()})
-				m.logf("warn", "Feishu bridge 流式调用超时："+err.Error(), logMeta)
+				m.logf("warn", "Feishu Agent 流式调用超时："+err.Error(), logMeta)
 				break
 			}
-			m.logf("info", "Feishu bridge 流式调用失败，回退非流式："+err.Error(), logMeta)
+			m.logf("info", "Feishu Agent 流式调用失败，回退非流式："+err.Error(), logMeta)
 			if plainVisionTurn {
 				visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
 				resp, err = callLLMPlain(visionCtx, proxyURL, model, requestMessages)
@@ -1351,7 +1351,7 @@ conversation:
 			}
 		}
 		if err != nil && isPromptTooLongError(err) {
-			m.logf("warn", "Feishu bridge 检测到 prompt 过长，自动压缩旧工具结果后重试："+err.Error(), logMeta)
+			m.logf("warn", "Feishu Agent 检测到 prompt 过长，自动压缩旧工具结果后重试："+err.Error(), logMeta)
 			requestMessages = forcePromptTooLongCompaction(messages, cfg.Context, budget, nil)
 			if plainVisionTurn {
 				visionCtx, visionCancel := context.WithTimeout(ctx, feishuVisionResponseTimeout)
@@ -1363,7 +1363,7 @@ conversation:
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				text, status, label, log := m.cancelOutcome(ctx, conversationKey, "Feishu bridge 处理已停止")
+				text, status, label, log := m.cancelOutcome(ctx, conversationKey, "Feishu Agent 处理已停止")
 				replyText = text
 				card.SetStatus(status, label)
 				m.logf("info", log, logMeta)
@@ -1372,7 +1372,7 @@ conversation:
 			replyText = "抱歉，LLM 服务暂时不可用，请稍后再试。"
 			card.SetStatus("error", "调用代理失败")
 			card.AppendStep(cardStep{Kind: "error", Title: "调用代理失败", Body: err.Error()})
-			m.logf("warn", "Feishu bridge 调用代理失败："+err.Error(), logMeta)
+			m.logf("warn", "Feishu Agent 调用代理失败："+err.Error(), logMeta)
 			break
 		}
 		if len(resp.Choices) == 0 {
@@ -1396,7 +1396,7 @@ conversation:
 		if len(msg.ToolCalls) == 0 {
 			replyText = strings.TrimSpace(msg.Content)
 			card.SetStatus("done", "已完成")
-			m.logf("info", "Feishu bridge 生成直接回复（无工具调用）", logMeta)
+			m.logf("info", "Feishu Agent 生成直接回复（无工具调用）", logMeta)
 			break
 		}
 		if thought := strings.TrimSpace(msg.Content); thought != "" {
@@ -1409,7 +1409,7 @@ conversation:
 		card.SetReply("")
 		for _, tc := range msg.ToolCalls {
 			if ctx.Err() != nil {
-				text, status, label, log := m.cancelOutcome(ctx, conversationKey, "Feishu bridge 工具调用前已停止")
+				text, status, label, log := m.cancelOutcome(ctx, conversationKey, "Feishu Agent 工具调用前已停止")
 				replyText = text
 				card.SetStatus(status, label)
 				m.logf("info", log, logMeta)
@@ -1418,7 +1418,7 @@ conversation:
 			var args map[string]any
 			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
 			argsSummary := compactJSON(args)
-			m.logf("info", fmt.Sprintf("Feishu bridge tool call: %s %s", tc.Function.Name, argsSummary), logMeta)
+			m.logf("info", fmt.Sprintf("Feishu Agent tool call: %s %s", tc.Function.Name, argsSummary), logMeta)
 			card.SetStatus("tool", "调用工具")
 			card.AppendStep(cardStep{
 				Kind:  "tool",
@@ -1443,8 +1443,8 @@ conversation:
 				result = m.executeFetchToolMemory(toolCtx, conversationKey, args)
 			} else if isScheduleTool(tc.Function.Name) {
 				result = m.executeScheduleTool(toolCtx, conversationKey, model, args)
-			} else if isBridgeSkillTool(tc.Function.Name) {
-				result = m.executeBridgeSkillTool(toolCtx, conversationKey, tc.ID, tc.Function.Name, args)
+			} else if isAgentSkillTool(tc.Function.Name) {
+				result = m.executeAgentSkillTool(toolCtx, conversationKey, tc.ID, tc.Function.Name, args)
 			} else {
 				result = executeToolContextWithRuntime(toolCtx, cfg, m.mcp, tc.Function.Name, args)
 			}
@@ -1453,7 +1453,7 @@ conversation:
 			if result.NeedsLogin {
 				loginURL, authErr := m.startRecommendedLogin(context.Background())
 				if authErr != nil {
-					replyText = "当前操作需要飞书用户授权。我已尝试由 Bridge 自动发起授权，但这次没有成功。请到 Lingma Proxy 的 Feishu Bridge 设置页重新点击“登录授权”，完成后再让我继续。\n\n" + cliLocationHint()
+					replyText = "当前操作需要飞书用户授权。我已尝试由 Agent 自动发起授权，但这次没有成功。请到 Lingma Proxy 的 Feishu Agent 设置页重新点击“登录授权”，完成后再让我继续。\n\n" + cliLocationHint()
 					content = replyText
 					card.UpdateLastStep(func(step *cardStep) {
 						step.Kind = "error"
@@ -1461,11 +1461,11 @@ conversation:
 						step.Body = "需要用户授权（自动授权失败）"
 					})
 					card.RefreshStructure()
-					m.logf("warn", "Feishu bridge 自动发起用户授权失败："+authErr.Error(), logMeta)
+					m.logf("warn", "Feishu Agent 自动发起用户授权失败："+authErr.Error(), logMeta)
 				} else {
 					replyText = "当前操作需要飞书用户授权。我已经为你发起授权流程，请打开下面的授权链接完成授权；授权完成后再对我说一次，我会继续处理。" + loginHint(loginURL)
 					if strings.TrimSpace(loginURL) == "" {
-						replyText = "当前操作需要飞书用户授权。我已经为你发起授权流程，但暂时没有捕获到完整授权链接。请到 Lingma Proxy 的 Feishu Bridge 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。\n\n" + cliLocationHint()
+						replyText = "当前操作需要飞书用户授权。我已经为你发起授权流程，但暂时没有捕获到完整授权链接。请到 Lingma Proxy 的 Feishu Agent 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。\n\n" + cliLocationHint()
 					}
 					content = replyText
 					card.UpdateLastStep(func(step *cardStep) {
@@ -1474,7 +1474,7 @@ conversation:
 						step.Body = "需要用户授权（已自动发起）"
 					})
 					card.RefreshStructure()
-					m.logf("info", "Feishu bridge 检测到需要用户授权，已自动发起登录", logMeta)
+					m.logf("info", "Feishu Agent 检测到需要用户授权，已自动发起登录", logMeta)
 				}
 				messages = append(messages, map[string]any{
 					"role":         "tool",
@@ -1494,7 +1494,7 @@ conversation:
 				scopeLabel := strings.Join(scopes, ", ")
 				loginURL, authErr := m.startScopeLogin(context.Background(), scopes...)
 				if authErr != nil {
-					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已尝试由 Bridge 自动发起授权，但这次没有成功。请到 Lingma Proxy 的 Feishu Bridge 设置页重新点击“登录授权”，完成后再让我继续。\n\n%s", scopeLabel, cliLocationHint())
+					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已尝试由 Agent 自动发起授权，但这次没有成功。请到 Lingma Proxy 的 Feishu Agent 设置页重新点击“登录授权”，完成后再让我继续。\n\n%s", scopeLabel, cliLocationHint())
 					content = replyText
 					card.UpdateLastStep(func(step *cardStep) {
 						step.Kind = "error"
@@ -1502,11 +1502,11 @@ conversation:
 						step.Body = "缺少权限：" + scopeLabel + "（自动授权失败）"
 					})
 					card.RefreshStructure()
-					m.logf("warn", "Feishu bridge 自动发起 scope 授权失败："+authErr.Error(), logMeta)
+					m.logf("warn", "Feishu Agent 自动发起 scope 授权失败："+authErr.Error(), logMeta)
 				} else {
-					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已经为你发起授权流程，请先在浏览器完成授权。如果 Lingma Proxy 已打开，请直接到 Feishu Bridge 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。%s", scopeLabel, loginHint(loginURL))
+					replyText = fmt.Sprintf("当前操作缺少权限 %s。我已经为你发起授权流程，请先在浏览器完成授权。如果 Lingma Proxy 已打开，请直接到 Feishu Agent 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。%s", scopeLabel, loginHint(loginURL))
 					if strings.TrimSpace(loginURL) == "" {
-						replyText = fmt.Sprintf("当前操作缺少权限 %s。我已经为你发起授权流程，但暂时没有捕获到完整授权链接。请到 Lingma Proxy 的 Feishu Bridge 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。\n\n%s", scopeLabel, cliLocationHint())
+						replyText = fmt.Sprintf("当前操作缺少权限 %s。我已经为你发起授权流程，但暂时没有捕获到完整授权链接。请到 Lingma Proxy 的 Feishu Agent 设置页点击“打开授权链接”；授权完成后再对我说一次，我会继续处理。\n\n%s", scopeLabel, cliLocationHint())
 					}
 					content = replyText
 					card.UpdateLastStep(func(step *cardStep) {
@@ -1515,7 +1515,7 @@ conversation:
 						step.Body = "需要授权 " + scopeLabel + "（已自动发起）"
 					})
 					card.RefreshStructure()
-					m.logf("info", "Feishu bridge 检测到缺少权限，已自动发起授权："+scopeLabel, logMeta)
+					m.logf("info", "Feishu Agent 检测到缺少权限，已自动发起授权："+scopeLabel, logMeta)
 				}
 				messages = append(messages, map[string]any{
 					"role":         "tool",
@@ -1546,7 +1546,7 @@ conversation:
 					}
 				}
 			}
-			m.logf("info", fmt.Sprintf("Feishu bridge tool result: %s %s", tc.Function.Name, strings.TrimSpace(result.Output)), logMeta)
+			m.logf("info", fmt.Sprintf("Feishu Agent tool result: %s %s", tc.Function.Name, strings.TrimSpace(result.Output)), logMeta)
 			card.UpdateLastStep(func(step *cardStep) {
 				step.Done = true
 				step.Body = step.Body + "\n结果：" + summarizeText(result.Output, 1200)
@@ -1566,7 +1566,7 @@ conversation:
 					replyText = fmt.Sprintf("同一个工具调用连续失败 %d 次，已停止继续重试。失败工具：%s。最后一次错误：%s", failureFingerprints[fp], tc.Function.Name, summarizeText(content, 220))
 					card.SetStatus("error", "重复工具失败")
 					card.AppendStep(cardStep{Kind: "error", Title: "重复失败，已终止", Body: replyText})
-					m.logf("warn", "Feishu bridge 重复工具失败已终止", logMeta)
+					m.logf("warn", "Feishu Agent 重复工具失败已终止", logMeta)
 					break conversation
 				}
 				if failureFingerprints[fp] >= 2 {
@@ -1585,7 +1585,7 @@ conversation:
 				replyText = fmt.Sprintf("连续 %d 次工具调用失败，已停止以避免循环。最后一次错误：%s", consecutiveToolFailures, summarizeText(content, 200))
 				card.SetStatus("error", "工具连续失败")
 				card.AppendStep(cardStep{Kind: "error", Title: "已终止", Body: replyText})
-				m.logf("warn", "Feishu bridge 连续工具调用失败已终止", logMeta)
+				m.logf("warn", "Feishu Agent 连续工具调用失败已终止", logMeta)
 				break conversation
 			}
 		}
@@ -1600,22 +1600,22 @@ conversation:
 	var orphanIDs []string
 	messages, rawHistory, orphanIDs = sealOrphanToolCalls(messages, rawHistory, "[interrupted: tool call did not complete]")
 	if len(orphanIDs) > 0 {
-		m.logf("info", fmt.Sprintf("Feishu bridge 为未完成的工具调用补占位 tool_result: %s", strings.Join(orphanIDs, ",")), logMeta)
+		m.logf("info", fmt.Sprintf("Feishu Agent 为未完成的工具调用补占位 tool_result: %s", strings.Join(orphanIDs, ",")), logMeta)
 	}
 	if !endsWithAssistantReply(rawHistory, replyText) {
 		rawHistory = append(rawHistory, map[string]any{"role": "assistant", "content": replyText})
 	}
 	m.storeConversation(conversationKey, rawHistory)
-	m.logf("info", "Feishu bridge 准备回复: "+replyText, logMeta)
+	m.logf("info", "Feishu Agent 准备回复: "+replyText, logMeta)
 	if card.IsBroken() {
 		replyCtx := ctx
 		if ctx.Err() != nil {
 			replyCtx = context.Background()
 		}
 		if err := m.replyToMessage(replyCtx, event.MessageID, replyText); err != nil {
-			m.logf("warn", "Feishu bridge 回复消息失败："+err.Error(), logMeta)
+			m.logf("warn", "Feishu Agent 回复消息失败："+err.Error(), logMeta)
 		} else {
-			m.logf("info", "Feishu bridge 回复已发送: message="+trimmedID(event.MessageID), logMeta)
+			m.logf("info", "Feishu Agent 回复已发送: message="+trimmedID(event.MessageID), logMeta)
 		}
 		return
 	}
@@ -1623,7 +1623,7 @@ conversation:
 		card.SetStatus("done", "已完成")
 	}
 	card.Finalize(replyText, "")
-	m.logf("info", "Feishu bridge 卡片回复已完成: message="+trimmedID(event.MessageID), logMeta)
+	m.logf("info", "Feishu Agent 卡片回复已完成: message="+trimmedID(event.MessageID), logMeta)
 }
 
 func shouldPreserveToolResultForModel(content string) bool {
@@ -1642,7 +1642,7 @@ func shouldPreserveToolResultForModel(content string) bool {
 	if data == nil {
 		return false
 	}
-	reading, _ := data["bridge_reading"].(map[string]any)
+	reading, _ := data["agent_reading"].(map[string]any)
 	kind := strings.TrimSpace(fmt.Sprint(reading["kind"]))
 	return kind == "doc_content_chunk" || kind == "sheet_rows_chunk"
 }
@@ -1675,7 +1675,7 @@ func toolRetryGuidance(toolName string, args map[string]any, repeated int) strin
 }
 
 func (m *Manager) synthesizeToolFinalReply(ctx context.Context, proxyURL string, model string, messages []map[string]any, lastToolOutput string, meta LogMeta, card *cardWriter) string {
-	m.logf("info", "Feishu bridge 工具轮次结束，尝试生成最终答复", meta)
+	m.logf("info", "Feishu Agent 工具轮次结束，尝试生成最终答复", meta)
 	finalMessages := cloneMessages(messages)
 	finalMessages = append(finalMessages, map[string]any{
 		"role":    "system",
@@ -1698,23 +1698,23 @@ func (m *Manager) synthesizeToolFinalReply(ctx context.Context, proxyURL string,
 	resp, err := callLLMPlainStreamForFinal(ctx, proxyURL, model, finalMessages, deltas)
 	if err != nil && !streamHadText {
 		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-			m.logf("warn", "Feishu bridge 最终答复流式超时："+err.Error(), meta)
+			m.logf("warn", "Feishu Agent 最终答复流式超时："+err.Error(), meta)
 			return fallbackToolResultReply(lastToolOutput)
 		}
-		m.logf("info", "Feishu bridge 最终答复流式失败，回退非流式："+err.Error(), meta)
+		m.logf("info", "Feishu Agent 最终答复流式失败，回退非流式："+err.Error(), meta)
 		resp, err = callLLMPlain(ctx, proxyURL, model, finalMessages)
 	}
 	if err != nil {
-		m.logf("warn", "Feishu bridge 最终答复生成失败："+err.Error(), meta)
+		m.logf("warn", "Feishu Agent 最终答复生成失败："+err.Error(), meta)
 		return fallbackToolResultReply(lastToolOutput)
 	}
 	if len(resp.Choices) == 0 {
-		m.logf("warn", "Feishu bridge 最终答复生成无 choices", meta)
+		m.logf("warn", "Feishu Agent 最终答复生成无 choices", meta)
 		return fallbackToolResultReply(lastToolOutput)
 	}
 	reply := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if reply == "" {
-		m.logf("warn", "Feishu bridge 最终答复为空，回退到工具结果摘要", meta)
+		m.logf("warn", "Feishu Agent 最终答复为空，回退到工具结果摘要", meta)
 		return fallbackToolResultReply(lastToolOutput)
 	}
 	return reply
@@ -1746,7 +1746,7 @@ func (m *Manager) storeConversation(chatID string, activeTail []map[string]any) 
 	m.mu.Unlock()
 	if m.store != nil {
 		if err := m.store.SaveConversationSnapshot(context.Background(), chatID, snapshot); err != nil {
-			m.logf("warn", "Feishu bridge SQLite 会话写入失败，已降级内存态："+err.Error())
+			m.logf("warn", "Feishu Agent SQLite 会话写入失败，已降级内存态："+err.Error())
 		}
 	}
 	m.notifyConversationChanged()
@@ -1899,7 +1899,7 @@ func applyBudgetCompaction(messages []map[string]any, cfg ContextConfig, budget 
 			continue
 		}
 		next := cloneMessage(compacted[i])
-		next["content"] = "[old tool result compacted; full content is stored in Feishu Bridge tool memory if persistence is available]"
+		next["content"] = "[old tool result compacted; full content is stored in Feishu Agent tool memory if persistence is available]"
 		compacted[i] = next
 	}
 	return compacted
@@ -2077,7 +2077,7 @@ func (m *Manager) buildConversationInput(ctx context.Context, event incomingEven
 	if quoteID != "" && quoteID != strings.TrimSpace(event.MessageID) {
 		quote, err := m.fetchQuotedMessage(ctx, quoteID)
 		if err != nil {
-			m.logf("warn", "Feishu bridge 引用消息读取失败："+err.Error(), LogMeta{
+			m.logf("warn", "Feishu Agent 引用消息读取失败："+err.Error(), LogMeta{
 				ChatID:    event.ChatID,
 				MessageID: event.MessageID,
 			})
@@ -2114,14 +2114,14 @@ func (m *Manager) buildMultimodalConversationInput(ctx context.Context, event in
 	imageKeys := extractFeishuImageKeys(event.Content)
 	if len(imageKeys) == 0 {
 		if strings.EqualFold(strings.TrimSpace(event.MessageType), "image") && strings.TrimSpace(text) == "" {
-			text = "用户发送了一张图片，但消息事件里没有 image_key，Bridge 无法下载图片内容。"
+			text = "用户发送了一张图片，但消息事件里没有 image_key，Agent 无法下载图片内容。"
 		}
 		return conversationInput{Text: text, Content: text}
 	}
 	meta := LogMeta{ChatID: event.ChatID, MessageID: event.MessageID}
-	m.logf("info", fmt.Sprintf("Feishu bridge 图片消息已识别: count=%d keys=%s", len(imageKeys), strings.Join(imageKeys, ",")), meta)
+	m.logf("info", fmt.Sprintf("Feishu Agent 图片消息已识别: count=%d keys=%s", len(imageKeys), strings.Join(imageKeys, ",")), meta)
 	if len(imageKeys) > maxFeishuImageAttachments {
-		m.logf("warn", fmt.Sprintf("Feishu bridge 图片数量超过上限: count=%d limit=%d，已截断", len(imageKeys), maxFeishuImageAttachments), meta)
+		m.logf("warn", fmt.Sprintf("Feishu Agent 图片数量超过上限: count=%d limit=%d，已截断", len(imageKeys), maxFeishuImageAttachments), meta)
 		imageKeys = imageKeys[:maxFeishuImageAttachments]
 	}
 	parts := make([]map[string]any, 0, len(imageKeys)+1)
@@ -2133,18 +2133,18 @@ func (m *Manager) buildMultimodalConversationInput(ctx context.Context, event in
 	for _, imageKey := range imageKeys {
 		dataURL, err := m.downloadFeishuImageDataURL(ctx, event.MessageID, imageKey)
 		if err != nil {
-			m.logf("warn", fmt.Sprintf("Feishu bridge 图片下载失败: key=%s err=%s", imageKey, err.Error()), meta)
+			m.logf("warn", fmt.Sprintf("Feishu Agent 图片下载失败: key=%s err=%s", imageKey, err.Error()), meta)
 			parts[0]["text"] = strings.TrimSpace(parts[0]["text"].(string) + fmt.Sprintf("\n\n[图片 %s 下载失败：%s]", imageKey, err.Error()))
 			continue
 		}
-		m.logf("info", fmt.Sprintf("Feishu bridge 图片下载成功: key=%s payload=%d chars", imageKey, len(dataURL)), meta)
+		m.logf("info", fmt.Sprintf("Feishu Agent 图片下载成功: key=%s payload=%d chars", imageKey, len(dataURL)), meta)
 		parts = append(parts, map[string]any{
 			"type": "image_url",
 			"image_url": map[string]any{
 				"url": dataURL,
 			},
 		})
-		m.logf("info", fmt.Sprintf("Feishu bridge 图片已加入视觉请求: key=%s", imageKey), meta)
+		m.logf("info", fmt.Sprintf("Feishu Agent 图片已加入视觉请求: key=%s", imageKey), meta)
 	}
 	if len(parts) == 1 {
 		return conversationInput{Text: parts[0]["text"].(string), Content: parts[0]["text"], HasImages: true}
@@ -2330,7 +2330,7 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 	args := parts[1:]
 	switch command {
 	case "/help":
-		m.logf("info", "Feishu bridge 会话命令: /help", meta)
+		m.logf("info", "Feishu Agent 会话命令: /help", meta)
 		return "可用会话命令（仅对当前会话生效）：\n" +
 			"- /help：查看命令帮助\n" +
 			"- /init：让我自我介绍当前能力（model、skills、群聊行为）\n" +
@@ -2340,7 +2340,7 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 			"- /model <name>：切换本会话模型；/model 不带参数查看；/model default 恢复全局默认\n" +
 			"- /cost：查看本会话累计 tokens 估算\n" +
 			"- /context：查看本会话上下文预算、压缩水位和 Skill 占用\n" +
-			"- /skills：列出用户导入并启用的 Feishu Bridge Skills\n" +
+			"- /skills：列出用户导入并启用的 Feishu Agent Skills\n" +
 			"- /skill <name>：查看某个 Skill 摘要\n" +
 			"- /reload-skills：重新扫描用户导入 Skills 和官方 lark-cli Skills\n" +
 			"- /skill-run <skill> <script> confirm：确认执行 Skill scripts/ 下的脚本\n" +
@@ -2362,17 +2362,17 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 		m.mu.Unlock()
 		if m.store != nil {
 			if err := m.store.ClearConversation(ctx, chatID); err != nil {
-				m.logf("warn", "Feishu bridge 清理持久化会话失败："+err.Error(), meta)
+				m.logf("warn", "Feishu Agent 清理持久化会话失败："+err.Error(), meta)
 			}
 			if err := m.store.SaveConversationSnapshot(ctx, chatID, resetState.toSnapshot()); err != nil {
-				m.logf("warn", "Feishu bridge 保存 reset 边界失败："+err.Error(), meta)
+				m.logf("warn", "Feishu Agent 保存 reset 边界失败："+err.Error(), meta)
 			}
 		}
 		m.notifyConversationChanged()
-		m.logf("info", "Feishu bridge 会话命令: "+command, meta)
+		m.logf("info", "Feishu Agent 会话命令: "+command, meta)
 		return "当前飞书会话上下文已清空。接下来我会把后续消息当成一个新的任务重新开始。", true
 	case "/summary":
-		m.logf("info", "Feishu bridge 会话命令: /summary", meta)
+		m.logf("info", "Feishu Agent 会话命令: /summary", meta)
 		summary, err := m.ensureConversationSummary(ctx, chatID, proxyURL, model, false)
 		if err != nil {
 			return "当前会话摘要生成失败，请稍后再试。", true
@@ -2382,7 +2382,7 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 		}
 		return "当前会话摘要：\n" + summary, true
 	case "/compact":
-		m.logf("info", "Feishu bridge 会话命令: /compact", meta)
+		m.logf("info", "Feishu Agent 会话命令: /compact", meta)
 		summary, err := m.ensureConversationSummary(ctx, chatID, proxyURL, model, true)
 		if err != nil {
 			return "当前会话压缩失败，请稍后再试。", true
@@ -2392,34 +2392,34 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 		}
 		return "当前飞书会话已压缩完成。后续我会基于这段摘要继续处理：\n" + summary, true
 	case "/status":
-		m.logf("info", "Feishu bridge 会话命令: /status", meta)
+		m.logf("info", "Feishu Agent 会话命令: /status", meta)
 		return m.conversationStatusText(chatID), true
 	case "/mcp":
-		m.logf("info", "Feishu bridge 会话命令: /mcp", meta)
+		m.logf("info", "Feishu Agent 会话命令: /mcp", meta)
 		return m.commandMCPText(ctx), true
 	case "/init":
-		m.logf("info", "Feishu bridge 会话命令: /init", meta)
+		m.logf("info", "Feishu Agent 会话命令: /init", meta)
 		return m.commandInitText(chatID, model), true
 	case "/cost":
-		m.logf("info", "Feishu bridge 会话命令: /cost", meta)
+		m.logf("info", "Feishu Agent 会话命令: /cost", meta)
 		return m.commandCostText(chatID), true
 	case "/context":
-		m.logf("info", "Feishu bridge 会话命令: /context", meta)
+		m.logf("info", "Feishu Agent 会话命令: /context", meta)
 		return m.commandContextText(chatID), true
 	case "/skills":
-		m.logf("info", "Feishu bridge 会话命令: /skills", meta)
+		m.logf("info", "Feishu Agent 会话命令: /skills", meta)
 		return m.commandSkillsText(), true
 	case "/schedule":
-		m.logf("info", "Feishu bridge 会话命令: /schedule", meta)
+		m.logf("info", "Feishu Agent 会话命令: /schedule", meta)
 		return m.commandScheduleText(ctx, chatID, model, args), true
 	case "/skill":
-		m.logf("info", "Feishu bridge 会话命令: /skill", meta)
+		m.logf("info", "Feishu Agent 会话命令: /skill", meta)
 		if len(args) == 0 {
 			return "用法：/skill <name-or-id>", true
 		}
 		return m.commandSkillText(strings.Join(args, " ")), true
 	case "/reload-skills":
-		m.logf("info", "Feishu bridge 会话命令: /reload-skills", meta)
+		m.logf("info", "Feishu Agent 会话命令: /reload-skills", meta)
 		clearSkillManifestCache()
 		if m.skillService == nil {
 			return "官方 lark-cli Skills 缓存已清理；下一轮请求会重新扫描本机安装状态。用户导入 Skill 服务未初始化。", true
@@ -2441,7 +2441,7 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 		m.mu.Unlock()
 		return fmt.Sprintf("Skills 已重新扫描。用户导入 Skill 启用 %d 个；官方 lark-cli Skills 就绪 %d/%d 个。", len(m.skillService.List(true)), readyOfficial, len(officialSkills)), true
 	case "/skill-run":
-		m.logf("info", "Feishu bridge 会话命令: /skill-run", meta)
+		m.logf("info", "Feishu Agent 会话命令: /skill-run", meta)
 		if len(args) < 3 || !strings.EqualFold(args[len(args)-1], "confirm") {
 			return "用法：/skill-run <skill> <script> confirm。脚本执行前必须由用户显式确认。", true
 		}
@@ -2455,17 +2455,17 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 		if removed == 0 {
 			return "本会话还没有可撤回的消息。", true
 		}
-		m.logf("info", fmt.Sprintf("Feishu bridge 会话命令: /undo removed=%d", removed), meta)
+		m.logf("info", fmt.Sprintf("Feishu Agent 会话命令: /undo removed=%d", removed), meta)
 		return fmt.Sprintf("已撤回最近一轮，共回退 %d 条消息。", removed), true
 	case "/retry":
 		lastUser := m.popLastUserForRetry(chatID)
 		if strings.TrimSpace(lastUser) == "" {
 			return "本会话没有可重试的用户消息。", true
 		}
-		m.logf("info", "Feishu bridge 会话命令: /retry", meta)
+		m.logf("info", "Feishu Agent 会话命令: /retry", meta)
 		return "已撤回最近一轮。请把刚才那条消息再发一次（已为你保留原文）：\n\n```\n" + summarizeText(lastUser, 800) + "\n```", true
 	case "/models":
-		m.logf("info", "Feishu bridge 会话命令: /models", meta)
+		m.logf("info", "Feishu Agent 会话命令: /models", meta)
 		ids, err := listProxyModels(ctx, proxyURL, 32)
 		if err != nil {
 			return "拉取模型列表失败：" + err.Error(), true
@@ -2510,7 +2510,7 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 			if global == "" {
 				global = DefaultModel
 			}
-			m.logf("info", "Feishu bridge 会话命令: /model default", meta)
+			m.logf("info", "Feishu Agent 会话命令: /model default", meta)
 			return "已恢复使用全局默认模型 `" + global + "`。", true
 		}
 		ids, err := listProxyModels(ctx, proxyURL, 64)
@@ -2536,7 +2536,7 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 			target = matched
 		}
 		m.setSessionModelOverride(chatID, target)
-		m.logf("info", "Feishu bridge 会话命令: /model "+target, meta)
+		m.logf("info", "Feishu Agent 会话命令: /model "+target, meta)
 		return "已将本会话模型切换为 `" + target + "`。当前更改仅对本会话生效；如要恢复使用全局默认，发送 `/model default`。", true
 	default:
 		return "", false
@@ -2726,9 +2726,9 @@ func (m *Manager) commandMCPText(ctx context.Context) string {
 	if !cfg.MCPEnabled {
 		discovered := len(statuses)
 		if discovered == 0 {
-			return "MCP：未启用，且暂未扫描到本机 MCP 配置。可在 Lingma Proxy 设置页 → Feishu Bridge → 高级设置中扫描和启用。"
+			return "MCP：未启用，且暂未扫描到本机 MCP 配置。可在 Lingma Proxy 设置页 → Feishu Agent → 高级设置中扫描和启用。"
 		}
-		return fmt.Sprintf("MCP：未启用。已扫描到 %d 个本机 MCP server，可在 Lingma Proxy 设置页 → Feishu Bridge → 高级设置中逐个启用。", discovered)
+		return fmt.Sprintf("MCP：未启用。已扫描到 %d 个本机 MCP server，可在 Lingma Proxy 设置页 → Feishu Agent → 高级设置中逐个启用。", discovered)
 	}
 	enabled := 0
 	available := 0
@@ -2774,7 +2774,7 @@ func (m *Manager) commandMCPText(ctx context.Context) string {
 		}
 	}
 	if enabled == 0 {
-		return "MCP：总开关已开启，但还没有启用任何 server。请到 Lingma Proxy 设置页 → Feishu Bridge → 高级设置中选择 server。"
+		return "MCP：总开关已开启，但还没有启用任何 server。请到 Lingma Proxy 设置页 → Feishu Agent → 高级设置中选择 server。"
 	}
 	lines = append(lines, "", fmt.Sprintf("汇总：%d/%d 个已启用 server 当前可用。", available, enabled))
 	return strings.Join(lines, "\n")
@@ -2886,9 +2886,9 @@ func (m *Manager) commandSkillsText() string {
 	}
 	skills := m.skillService.List(false)
 	if len(skills) == 0 {
-		return "当前未导入用户 Skill。可在 Lingma Proxy → Feishu Bridge 高级设置中导入 zip 或文件夹。"
+		return "当前未导入用户 Skill。可在 Lingma Proxy → Feishu Agent 高级设置中导入 zip 或文件夹。"
 	}
-	lines := []string{"Feishu Bridge Skills："}
+	lines := []string{"Feishu Agent Skills："}
 	for _, skill := range skills {
 		state := "启用"
 		if !skill.Enabled {
@@ -3029,7 +3029,7 @@ func (m *Manager) conversationStatusText(chatID string) string {
 	}
 	active := len(state.activeHistory())
 	folded := len(state.History) - active
-	return fmt.Sprintf("Feishu Bridge 当前会话状态：\n- 运行中：%t\n- 排队消息：%d\n- 活跃消息：%d（已压缩 %d）\n- 摘要：%s", running, queued, active, folded, summaryState)
+	return fmt.Sprintf("Feishu Agent 当前会话状态：\n- 运行中：%t\n- 排队消息：%d\n- 活跃消息：%d（已压缩 %d）\n- 摘要：%s", running, queued, active, folded, summaryState)
 }
 
 func (m *Manager) ensureConversationSummary(ctx context.Context, chatID string, proxyURL string, model string, compact bool) (string, error) {
@@ -3507,15 +3507,15 @@ func (m *Manager) addTypingReaction(messageID string, meta LogMeta) typingReacti
 	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "reactions", "create", "--as", "bot", "--params", string(params), "--data", string(data))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		m.logf("warn", "Feishu bridge 添加输入状态失败："+formatCommandFailure(err, output), meta)
+		m.logf("warn", "Feishu Agent 添加输入状态失败："+formatCommandFailure(err, output), meta)
 		return typingReactionState{}
 	}
 	reactionID := firstJSONStringField(output, "reaction_id")
 	if reactionID == "" {
-		m.logf("warn", "Feishu bridge 添加输入状态成功但未返回 reaction_id", meta)
+		m.logf("warn", "Feishu Agent 添加输入状态成功但未返回 reaction_id", meta)
 		return typingReactionState{MessageID: messageID}
 	}
-	m.logf("info", "Feishu bridge 输入状态已显示", meta)
+	m.logf("info", "Feishu Agent 输入状态已显示", meta)
 	return typingReactionState{MessageID: messageID, ReactionID: reactionID}
 }
 
@@ -3532,10 +3532,10 @@ func (m *Manager) removeTypingReaction(state typingReactionState, meta LogMeta) 
 	cmd := commandContextWithEnv(ctx, "lark-cli", "im", "reactions", "delete", "--as", "bot", "--params", string(params))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		m.logf("warn", "Feishu bridge 清理输入状态失败："+formatCommandFailure(err, output), meta)
+		m.logf("warn", "Feishu Agent 清理输入状态失败："+formatCommandFailure(err, output), meta)
 		return
 	}
-	m.logf("info", "Feishu bridge 输入状态已清理", meta)
+	m.logf("info", "Feishu Agent 输入状态已清理", meta)
 }
 
 func formatCommandFailure(err error, output []byte) string {
@@ -3728,7 +3728,7 @@ func (m *Manager) sendCardReply(ctx context.Context, rootMessageID string, cardJ
 	})
 	if err != nil {
 		if id := strings.TrimSpace(firstJSONStringField(output, "message_id")); id != "" {
-			m.logf("warn", "Feishu bridge send card reply 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{MessageID: rootMessageID})
+			m.logf("warn", "Feishu Agent send card reply 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{MessageID: rootMessageID})
 			return id, nil
 		}
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
@@ -3817,7 +3817,7 @@ func (m *Manager) createCardEntity(ctx context.Context, cardJSON string) (string
 	})
 	if err != nil {
 		if id := strings.TrimSpace(firstJSONStringField(output, "card_id")); id != "" {
-			m.logf("warn", "Feishu bridge create card entity 进程异常但已返回 card_id，按成功处理："+err.Error())
+			m.logf("warn", "Feishu Agent create card entity 进程异常但已返回 card_id，按成功处理："+err.Error())
 			return id, nil
 		}
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
@@ -3853,7 +3853,7 @@ func (m *Manager) sendCardEntityMessage(ctx context.Context, rootMessageID strin
 	})
 	if err != nil {
 		if id := strings.TrimSpace(firstJSONStringField(output, "message_id")); id != "" {
-			m.logf("warn", "Feishu bridge send card entity message 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{MessageID: rootMessageID})
+			m.logf("warn", "Feishu Agent send card entity message 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{MessageID: rootMessageID})
 			return id, nil
 		}
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))

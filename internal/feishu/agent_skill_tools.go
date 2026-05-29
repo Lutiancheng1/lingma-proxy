@@ -21,7 +21,7 @@ var (
 	skillHTTPEndpointPattern = regexp.MustCompile("`(/[^`\\s]+)`")
 )
 
-func (m *Manager) executeBridgeSkillTool(ctx context.Context, conversationKey, toolCallID, toolName string, args map[string]any) ToolExecutionResult {
+func (m *Manager) executeAgentSkillTool(ctx context.Context, conversationKey, toolCallID, toolName string, args map[string]any) ToolExecutionResult {
 	if m.skillService == nil {
 		return ToolExecutionResult{Output: "[error] Skill 服务未初始化", IsError: true}
 	}
@@ -160,7 +160,7 @@ func (m *Manager) executeSkillHTTPRequest(ctx context.Context, conversationKey s
 	if err != nil {
 		return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; FeishuBridgeSkill/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; FeishuAgentSkill/1.0)")
 	if requestBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -243,7 +243,7 @@ func chunkAndAnnotateSkillBody(body string, args map[string]any) skillChunkResul
 	}
 }
 
-func renderSkillViewOutput(skill BridgeSkill, chunk skillChunkResult) string {
+func renderSkillViewOutput(skill AgentSkill, chunk skillChunkResult) string {
 	scripts := "无"
 	if len(skill.Scripts) > 0 {
 		scripts = strings.Join(skill.Scripts, ", ")
@@ -280,7 +280,7 @@ func renderSkillViewOutput(skill BridgeSkill, chunk skillChunkResult) string {
 	)
 	if chunk.hasMore {
 		out += fmt.Sprintf(
-			"\n\nbridge_reading:\n"+
+			"\n\nagent_reading:\n"+
 				"  kind: skill_body_chunk\n"+
 				"  offset: %d\n"+
 				"  end_offset: %d\n"+
@@ -295,7 +295,7 @@ func renderSkillViewOutput(skill BridgeSkill, chunk skillChunkResult) string {
 	return out
 }
 
-func validateSkillHTTPURLFromDocument(skill BridgeSkill, body string, parsed *url.URL) error {
+func validateSkillHTTPURLFromDocument(skill AgentSkill, body string, parsed *url.URL) error {
 	if parsed == nil {
 		return fmt.Errorf("URL 无效")
 	}
@@ -585,7 +585,7 @@ func (m *Manager) clearTurnSkillScriptApprovals(conversationKey string) {
 	m.clearTurnSkillState(conversationKey)
 }
 
-func (m *Manager) markTurnSkillViewed(conversationKey string, skill BridgeSkill) {
+func (m *Manager) markTurnSkillViewed(conversationKey string, skill AgentSkill) {
 	if strings.TrimSpace(conversationKey) == "" {
 		return
 	}

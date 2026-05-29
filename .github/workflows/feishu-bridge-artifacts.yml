@@ -1,4 +1,4 @@
-name: Feishu Bridge Artifacts
+name: Feishu Agent Artifacts
 
 on:
   push:
@@ -258,15 +258,14 @@ jobs:
               "schemaVersion": 1,
               "channel": "feishu-stable",
               "version": os.environ["VERSION"],
-              "minSupportedVersion": "1.6.7",
+              "minSupportedVersion": "1.6.8",
               "mandatory": False,
               "releaseNotes": "\n".join([
-                  "v1.6.7 Feishu Agent 稳定版",
-                  "• 增强飞书文档、云盘、表格、权限、日历和消息工具链。",
-                  "• 支持长文档/长表格分页读取、完整输出和多卡片续发。",
-                  "• 新增上下文预算、自动压缩、工具记忆检索和飞书历史搜索。",
-                  "• 接入 MCP、Bridge Skills、定时任务、Web/HTTP/天气和安全文件工具。",
-                  "• 新增官网下载、教程、更新日志、R2 OTA manifest 和 Prompt Pack 更新。",
+                  "v1.6.8 Feishu Agent 稳定版",
+                  "• 正式重构并更名为 Feishu Agent，清理遗留 Bridge 术语与描述。",
+                  "• 优化 R2 资源发布，采用 S3 分片上传以规避 524 错误超时。",
+                  "• 优化 Cloudflare Pages 静态页面部署策略，支持非阻断发布并闭环打通。",
+                  "• 增强安全路径口诉授权及敏感文件 CRUD 二次确认审计。",
                   "Build " + os.environ.get("GITHUB_SHA", "")[:7],
               ]),
               "assets": {
@@ -301,7 +300,7 @@ jobs:
             "schemaVersion": 1,
             "channel": "feishu-stable",
             "version": "2026.05.28.1",
-            "minAppVersion": "1.6.7",
+            "minAppVersion": "1.6.8",
             "moduleOrder": order,
             "modules": modules,
             "notes": "Built-in Feishu CLI prompt rules."
@@ -317,7 +316,7 @@ jobs:
             "schemaVersion": 1,
             "channel": "feishu-stable",
             "version": "2026.05.28.1",
-            "minAppVersion": "1.6.7",
+            "minAppVersion": "1.6.8",
             "url": os.environ["PUBLIC_BASE"] + "/prompt-pack/feishu/stable/prompt-pack.json",
             "sha256": os.environ["PACK_SHA"],
             "signature": os.environ["PACK_SIG"],

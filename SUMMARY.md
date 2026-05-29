@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-**lingma-ipc-proxy** 是一个 Go 后端服务，将 Lingma / QoderCN 的私有协议转换为标准 OpenAI / Anthropic API，使第三方客户端可无缝接入。同时提供 Feishu Bridge 实验功能，将 Lingma 模型能力接入飞书 Bot。
+**lingma-ipc-proxy** 是一个 Go 后端服务，将 Lingma / QoderCN 的私有协议转换为标准 OpenAI / Anthropic API，使第三方客户端可无缝接入。同时提供 Feishu Agent 实验功能，将 Lingma 模型能力接入飞书 Bot。
 
 ## 双后端模式
 
@@ -20,9 +20,9 @@
 | `internal/remote` | 远端凭证探测、域名发现、模型列表、chat SSE |
 | `internal/lingmaipc` | IPC 传输（WebSocket / Named Pipe） |
 | `internal/toolemulation` | Prompt 注入 + Action Block 解析（兼容无原生 tool calling 的模型） |
-| `internal/feishu` | Feishu Bridge：Bot 收发、CardKit 流式卡片、lark-cli 集成 |
+| `internal/feishu` | Feishu Agent：Bot 收发、CardKit 流式卡片、lark-cli 集成 |
 
-## Feishu Bridge（实验分支 `feat/feishu-bridge-go`）
+## Feishu Agent（实验分支 `feat/feishu-bridge-go`）
 
 通过 `lark-cli` 接入飞书，支持 Bot 消息收发、工具调用（IM/Drive/Calendar）、CardKit 流式卡片打字机效果。
 
@@ -41,6 +41,6 @@
 
 ## 桌面 App
 
-Wails 桌面应用，提供代理管理、请求历史、token 统计、Feishu Bridge 设置页。
+Wails 桌面应用，提供代理管理、请求历史、token 统计、Feishu Agent 设置页。
 
 详细架构见 `docs/architecture.md`。

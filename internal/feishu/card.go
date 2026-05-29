@@ -537,7 +537,7 @@ func (c *cardWriter) RefreshStructure() {
 			c.finishCanceledFlush()
 			return
 		}
-		c.manager.logf("warn", "Feishu bridge 工具折叠卡片刷新失败："+err.Error(), c.logMeta)
+		c.manager.logf("warn", "Feishu Agent 工具折叠卡片刷新失败："+err.Error(), c.logMeta)
 		c.finishCanceledFlush()
 		return
 	}
@@ -647,7 +647,7 @@ func (c *cardWriter) flush(final bool) {
 			c.mu.Lock()
 			c.useCardKit = false
 			c.mu.Unlock()
-			c.manager.logf("warn", "Feishu bridge CardKit 创建重试失败，降级到 legacy card："+err.Error(), c.logMeta)
+			c.manager.logf("warn", "Feishu Agent CardKit 创建重试失败，降级到 legacy card："+err.Error(), c.logMeta)
 			c.flushLegacy(ctx, stateCopy, final, msgIDSnap)
 			return
 		} else {
@@ -659,7 +659,7 @@ func (c *cardWriter) flush(final bool) {
 			c.flushing = false
 			stillDirty := c.dirty
 			c.mu.Unlock()
-			c.manager.logf("info", "Feishu bridge CardKit 流式卡片已创建 card_id="+entityID+" msg_id="+msgID, c.logMeta)
+			c.manager.logf("info", "Feishu Agent CardKit 流式卡片已创建 card_id="+entityID+" msg_id="+msgID, c.logMeta)
 			if stillDirty {
 				c.schedule()
 			}
@@ -669,7 +669,7 @@ func (c *cardWriter) flush(final bool) {
 
 	// Legacy fallback: PATCH the whole card message.
 	if !useCardKitSnap {
-		c.manager.logf("info", "Feishu bridge 使用 legacy PATCH 路径", c.logMeta)
+		c.manager.logf("info", "Feishu Agent 使用 legacy PATCH 路径", c.logMeta)
 		c.flushLegacy(ctx, stateCopy, final, msgIDSnap)
 		return
 	}
@@ -692,7 +692,7 @@ func (c *cardWriter) flush(final bool) {
 				c.finishCanceledFlush()
 				return
 			}
-			c.manager.logf("warn", "Feishu bridge 工具折叠卡片刷新失败："+updateErr.Error(), c.logMeta)
+			c.manager.logf("warn", "Feishu Agent 工具折叠卡片刷新失败："+updateErr.Error(), c.logMeta)
 			c.finishCanceledFlush()
 			return
 		}
@@ -722,7 +722,7 @@ func (c *cardWriter) flush(final bool) {
 			c.finishCanceledFlush()
 			return
 		}
-		c.manager.logf("warn", "Feishu bridge streamUpdateCardContent 失败 seq="+fmt.Sprint(seq)+"，尝试全卡更新："+err.Error(), c.logMeta)
+		c.manager.logf("warn", "Feishu Agent streamUpdateCardContent 失败 seq="+fmt.Sprint(seq)+"，尝试全卡更新："+err.Error(), c.logMeta)
 		// Streaming text update failed — try a full card update as fallback
 		seq2 := c.nextSequence()
 		cardJSON, renderErr := renderStreamingCardV2(stateCopy)
@@ -740,7 +740,7 @@ func (c *cardWriter) flush(final bool) {
 		}
 	} else if !c.streamStarted {
 		c.streamStarted = true
-		c.manager.logf("info", "Feishu bridge CardKit 流式更新已启动 seq="+fmt.Sprint(seq), c.logMeta)
+		c.manager.logf("info", "Feishu Agent CardKit 流式更新已启动 seq="+fmt.Sprint(seq), c.logMeta)
 	}
 
 	// Update hint if present
@@ -775,7 +775,7 @@ func (c *cardWriter) flushLegacy(ctx context.Context, stateCopy cardState, final
 			c.markBroken(sendErr)
 			return
 		}
-		c.manager.logf("info", "Feishu bridge legacy 首次发送卡片 msg_id="+newID, c.logMeta)
+		c.manager.logf("info", "Feishu Agent legacy 首次发送卡片 msg_id="+newID, c.logMeta)
 		c.mu.Lock()
 		c.cardMsgID = newID
 		c.flushing = false
@@ -814,7 +814,7 @@ func (c *cardWriter) createAndSendStreamingCardWithRetry(ctx context.Context, st
 		if ctx.Err() != nil {
 			return "", "", err
 		}
-		c.manager.logf("warn", fmt.Sprintf("Feishu bridge CardKit 创建失败，第 %d/%d 次：%v", attempt, cardOperationRetryCount, err), c.logMeta)
+		c.manager.logf("warn", fmt.Sprintf("Feishu Agent CardKit 创建失败，第 %d/%d 次：%v", attempt, cardOperationRetryCount, err), c.logMeta)
 		if attempt < cardOperationRetryCount {
 			sleepBeforeCardRetry(ctx, attempt)
 		}
@@ -842,7 +842,7 @@ func (c *cardWriter) createAndSendFinalCardWithRetry(ctx context.Context, state 
 		if ctx.Err() != nil {
 			return "", "", lastErr
 		}
-		c.manager.logf("warn", fmt.Sprintf("Feishu bridge 续卡发送失败，第 %d/%d 次：%v", attempt, cardOperationRetryCount, lastErr), c.logMeta)
+		c.manager.logf("warn", fmt.Sprintf("Feishu Agent 续卡发送失败，第 %d/%d 次：%v", attempt, cardOperationRetryCount, lastErr), c.logMeta)
 		if attempt < cardOperationRetryCount {
 			sleepBeforeCardRetry(ctx, attempt)
 		}
@@ -861,7 +861,7 @@ func (c *cardWriter) sendLegacyCardWithRetry(ctx context.Context, cardJSON strin
 		if ctx.Err() != nil {
 			return "", err
 		}
-		c.manager.logf("warn", fmt.Sprintf("Feishu bridge legacy card 发送失败，第 %d/%d 次：%v", attempt, cardOperationRetryCount, err), c.logMeta)
+		c.manager.logf("warn", fmt.Sprintf("Feishu Agent legacy card 发送失败，第 %d/%d 次：%v", attempt, cardOperationRetryCount, err), c.logMeta)
 		if attempt < cardOperationRetryCount {
 			sleepBeforeCardRetry(ctx, attempt)
 		}
@@ -904,7 +904,7 @@ func (c *cardWriter) retryCardOperation(ctx context.Context, label string, run f
 		if ctx.Err() != nil {
 			return err
 		}
-		c.manager.logf("warn", fmt.Sprintf("Feishu bridge %s失败，第 %d/%d 次：%v", label, attempt, cardOperationRetryCount, err), c.logMeta)
+		c.manager.logf("warn", fmt.Sprintf("Feishu Agent %s失败，第 %d/%d 次：%v", label, attempt, cardOperationRetryCount, err), c.logMeta)
 		if attempt < cardOperationRetryCount {
 			sleepBeforeCardRetry(ctx, attempt)
 		}
@@ -928,7 +928,7 @@ func (c *cardWriter) markBroken(err error) {
 	c.flushing = false
 	c.mu.Unlock()
 	if c.manager != nil {
-		c.manager.logf("warn", "Feishu bridge 卡片更新失败："+err.Error(), c.logMeta)
+		c.manager.logf("warn", "Feishu Agent 卡片更新失败："+err.Error(), c.logMeta)
 	}
 }
 
@@ -996,7 +996,7 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 
 	c.cancelActiveFlush()
 	if !c.waitForFlushIdle(3 * time.Second) {
-		c.manager.logf("warn", "Feishu bridge Finalize: 等待流式卡片更新结束超时，继续执行最终兜底", c.logMeta)
+		c.manager.logf("warn", "Feishu Agent Finalize: 等待流式卡片更新结束超时，继续执行最终兜底", c.logMeta)
 	}
 
 	c.mu.Lock()
@@ -1010,7 +1010,7 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 		if strings.TrimSpace(replyText) == "" && len(stateCopy.Steps) == 0 {
 			return
 		}
-		c.manager.logf("info", "Feishu bridge Finalize: CardKit 不可用，使用 legacy card（broken="+fmt.Sprint(broken)+"）", c.logMeta)
+		c.manager.logf("info", "Feishu Agent Finalize: CardKit 不可用，使用 legacy card（broken="+fmt.Sprint(broken)+"）", c.logMeta)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		legacyMsgID := c.cardMsgID
@@ -1018,7 +1018,7 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 			legacyMsgID = ""
 		}
 		if err := c.finalizeLegacyCard(ctx, stateCopy, legacyMsgID); err != nil {
-			c.manager.logf("warn", "Feishu bridge legacy card 最终兜底失败："+err.Error(), c.logMeta)
+			c.manager.logf("warn", "Feishu Agent legacy card 最终兜底失败："+err.Error(), c.logMeta)
 		}
 		return
 	}
@@ -1027,10 +1027,10 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 	defer cancel()
 
 	if useCardKit && entityID == "" {
-		c.manager.logf("info", "Feishu bridge Finalize: 流式卡片尚未创建，先创建 CardKit 卡片", c.logMeta)
+		c.manager.logf("info", "Feishu Agent Finalize: 流式卡片尚未创建，先创建 CardKit 卡片", c.logMeta)
 		newEntityID, newMsgID, createErr := c.createAndSendStreamingCardWithRetry(ctx, stateCopy)
 		if createErr != nil {
-			c.manager.logf("warn", "Feishu bridge Finalize 创建 CardKit 重试失败，降级 legacy card："+createErr.Error(), c.logMeta)
+			c.manager.logf("warn", "Feishu Agent Finalize 创建 CardKit 重试失败，降级 legacy card："+createErr.Error(), c.logMeta)
 			useCardKit = false
 		} else {
 			entityID = newEntityID
@@ -1042,60 +1042,60 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 	}
 
 	if useCardKit && entityID != "" {
-		c.manager.logf("info", "Feishu bridge Finalize: CardKit 关闭流式 card_id="+entityID, c.logMeta)
+		c.manager.logf("info", "Feishu Agent Finalize: CardKit 关闭流式 card_id="+entityID, c.logMeta)
 		finalStates, err := splitFinalCardStates(stateCopy)
 		if err != nil {
 			if legacyErr := c.finalizeLegacyCard(ctx, stateCopy, ""); legacyErr != nil {
-				c.manager.logf("warn", "Feishu bridge legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
+				c.manager.logf("warn", "Feishu Agent legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
 			}
 			return
 		}
 		cardJSON, err := renderFinalCardV2(finalStates[0])
 		if err != nil {
 			if legacyErr := c.finalizeLegacyCard(ctx, stateCopy, ""); legacyErr != nil {
-				c.manager.logf("warn", "Feishu bridge legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
+				c.manager.logf("warn", "Feishu Agent legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
 			}
 			return
 		}
 		if len(finalStates) > 1 {
-			c.manager.logf("info", fmt.Sprintf("Feishu bridge Finalize: 最终内容较长，拆分为 %d 张卡片完整发送", len(finalStates)), c.logMeta)
+			c.manager.logf("info", fmt.Sprintf("Feishu Agent Finalize: 最终内容较长，拆分为 %d 张卡片完整发送", len(finalStates)), c.logMeta)
 			if err := c.updateCardEntityWithRetry(ctx, entityID, cardJSON, "最终卡片分片更新"); err != nil {
-				c.manager.logf("warn", "Feishu bridge 最终卡片分片更新失败，降级 legacy card："+err.Error(), c.logMeta)
+				c.manager.logf("warn", "Feishu Agent 最终卡片分片更新失败，降级 legacy card："+err.Error(), c.logMeta)
 				if legacyErr := c.finalizeLegacyCard(ctx, stateCopy, ""); legacyErr != nil {
-					c.manager.logf("warn", "Feishu bridge legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
+					c.manager.logf("warn", "Feishu Agent legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
 				}
 				return
 			}
 			for i := 1; i < len(finalStates); i++ {
 				_, msgID, sendErr := c.createAndSendFinalCardWithRetry(ctx, finalStates[i])
 				if sendErr != nil {
-					c.manager.logf("warn", fmt.Sprintf("Feishu bridge 第 %d 张续卡发送失败，降级 legacy card：%v", i+1, sendErr), c.logMeta)
+					c.manager.logf("warn", fmt.Sprintf("Feishu Agent 第 %d 张续卡发送失败，降级 legacy card：%v", i+1, sendErr), c.logMeta)
 					if legacyErr := c.finalizeLegacyCard(ctx, finalStates[i], ""); legacyErr != nil {
-						c.manager.logf("warn", "Feishu bridge legacy card 续卡兜底失败："+legacyErr.Error(), c.logMeta)
+						c.manager.logf("warn", "Feishu Agent legacy card 续卡兜底失败："+legacyErr.Error(), c.logMeta)
 					}
 					continue
 				}
-				c.manager.logf("info", fmt.Sprintf("Feishu bridge 续卡已发送: part=%d/%d msg_id=%s", i+1, len(finalStates), msgID), c.logMeta)
+				c.manager.logf("info", fmt.Sprintf("Feishu Agent 续卡已发送: part=%d/%d msg_id=%s", i+1, len(finalStates), msgID), c.logMeta)
 			}
 			return
 		}
 		if err := c.closeStreamingCard(ctx, entityID, stateCopy); err == nil {
 			if updateErr := c.updateFinalCardHeader(ctx, entityID, cardJSON, stateCopy); updateErr != nil {
-				c.manager.logf("warn", "Feishu bridge 最终卡片状态更新重试失败，降级 legacy card："+updateErr.Error(), c.logMeta)
+				c.manager.logf("warn", "Feishu Agent 最终卡片状态更新重试失败，降级 legacy card："+updateErr.Error(), c.logMeta)
 				if legacyErr := c.finalizeLegacyCard(ctx, stateCopy, ""); legacyErr != nil {
-					c.manager.logf("warn", "Feishu bridge legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
+					c.manager.logf("warn", "Feishu Agent legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
 				}
 			}
 			return
 		} else {
-			c.manager.logf("warn", "Feishu bridge 关闭 CardKit 流式失败，尝试全卡更新："+err.Error(), c.logMeta)
+			c.manager.logf("warn", "Feishu Agent 关闭 CardKit 流式失败，尝试全卡更新："+err.Error(), c.logMeta)
 		}
 		if err := c.updateCardEntityWithRetry(ctx, entityID, cardJSON, "最终卡片更新"); err != nil {
-			c.manager.logf("warn", "Feishu bridge 最终卡片更新重试失败，尝试极简卡片："+err.Error(), c.logMeta)
+			c.manager.logf("warn", "Feishu Agent 最终卡片更新重试失败，尝试极简卡片："+err.Error(), c.logMeta)
 			if compactErr := c.updateCompactFinalCard(ctx, entityID, stateCopy); compactErr != nil {
-				c.manager.logf("warn", "Feishu bridge 极简最终卡片更新重试失败，降级 legacy card："+compactErr.Error(), c.logMeta)
+				c.manager.logf("warn", "Feishu Agent 极简最终卡片更新重试失败，降级 legacy card："+compactErr.Error(), c.logMeta)
 				if legacyErr := c.finalizeLegacyCard(ctx, stateCopy, ""); legacyErr != nil {
-					c.manager.logf("warn", "Feishu bridge legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
+					c.manager.logf("warn", "Feishu Agent legacy card 最终兜底失败："+legacyErr.Error(), c.logMeta)
 				}
 			}
 		}
@@ -1103,9 +1103,9 @@ func (c *cardWriter) Finalize(replyText string, hint string) {
 	}
 
 	// Legacy path — must use schema 1.0 format for PATCH /im/v1/messages
-	c.manager.logf("info", "Feishu bridge Finalize: legacy PATCH 路径 msg_id="+c.cardMsgID, c.logMeta)
+	c.manager.logf("info", "Feishu Agent Finalize: legacy PATCH 路径 msg_id="+c.cardMsgID, c.logMeta)
 	if err := c.finalizeLegacyCard(ctx, stateCopy, c.cardMsgID); err != nil {
-		c.manager.logf("warn", "Feishu bridge legacy card 最终更新失败："+err.Error(), c.logMeta)
+		c.manager.logf("warn", "Feishu Agent legacy card 最终更新失败："+err.Error(), c.logMeta)
 	}
 }
 
@@ -1148,13 +1148,13 @@ func (c *cardWriter) finalizeLegacyCard(ctx context.Context, state cardState, ms
 		c.cardMsgID = newID
 		c.useCardKit = false
 		c.mu.Unlock()
-		c.manager.logf("info", "Feishu bridge legacy card 最终兜底已发送 msg_id="+newID, c.logMeta)
+		c.manager.logf("info", "Feishu Agent legacy card 最终兜底已发送 msg_id="+newID, c.logMeta)
 		return nil
 	}
 	if err := c.patchLegacyCardWithRetry(ctx, msgID, cardJSON); err != nil {
 		return err
 	}
-	c.manager.logf("info", "Feishu bridge legacy card 最终更新完成 msg_id="+msgID, c.logMeta)
+	c.manager.logf("info", "Feishu Agent legacy card 最终更新完成 msg_id="+msgID, c.logMeta)
 	return nil
 }
 
@@ -1309,7 +1309,7 @@ func streamingReplyContent(reply string) string {
 
 func compactFinalCardState(state cardState) cardState {
 	state.Steps = compactFinalSteps(state.Steps)
-	state.Hint = strings.TrimSpace(firstNonEmptyString(state.Hint, "卡片更新遇到平台限制，Bridge 已保留可发送的最长内容；不会补写或编造未发送内容。"))
+	state.Hint = strings.TrimSpace(firstNonEmptyString(state.Hint, "卡片更新遇到平台限制，Agent 已保留可发送的最长内容；不会补写或编造未发送内容。"))
 	reply := strings.TrimSpace(state.Reply)
 	if reply != "" {
 		state.Reply = summarizeText(reply, compactFinalReplyLimit)

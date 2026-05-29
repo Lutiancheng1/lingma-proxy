@@ -55,9 +55,9 @@ ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 Dev
 - `internal/ipc/` — Lingma IPC 传输层（pipe/stdio）
 - `internal/service/` — 业务逻辑（prompt 构建、session 管理、图片处理）
 - `internal/toolemulation/` — Tool Emulation（prompt 注入 + action block 解析）
-- `internal/feishu/` — Feishu Bridge（飞书 Bot 收发 + CardKit 流式卡片 + lark-cli 集成 + MCP 客户端 + 上下文管理 + 系统提示词构建）
+- `internal/feishu/` — Feishu Agent（飞书 Bot 收发 + CardKit 流式卡片 + lark-cli 集成 + MCP 客户端 + 上下文管理 + 系统提示词构建）
 
-## Feishu Bridge 踩坑警示
+## Feishu Agent 踩坑警示
 
 - **lark-cli `api` 子命令格式**：位置参数 `lark-cli api <method> <path> [flags]`，不是 `--method`/`--path`
 - **lark-cli `+` 前缀命令**：skill 快捷命令用 `+` 前缀（`im +chat-list`、`im +messages-send`、`im +messages-search`、`im +messages-reply`、`calendar +agenda`、`calendar +create`、`docs +create`、`docs +fetch`），不带 `+` 的写法（`im chats list`、`im messages send`）无效。原生子命令不带 `+`（如 `drive file list`）
@@ -77,7 +77,7 @@ ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 Dev
 - **Session 复用**：首次请求创建 session，后续请求复用以保持对话上下文
 - **流式输出**：SSE 格式，Anthropic 使用 `content_block_start/delta/stop` 事件序列
 
-## Feishu Bridge 工具与 MCP
+## Feishu Agent 工具与 MCP
 
 - **MCP 客户端**：支持 tools/resources/prompts 三大能力域，配置在 `config.toml` 的 `[mcp_servers]` 或 JSON。资源和提示词通过 `mcp_resource_read`/`mcp_prompt_get` 伪工具暴露给 LLM
 - **工具结果分类**：`classifyToolResult` 按工具类型分为 preserve/summarize/stub/discard 四级，不再一刀切截断。修改分类逻辑在 `context_budget.go`

@@ -104,13 +104,13 @@ func TestBackfillRequestCreatedAtAcrossDays(t *testing.T) {
 
 func TestParseDesktopConfigMigratesMissingGroupOnlyAtBotDefault(t *testing.T) {
 	baseProxy := defaultConfig()
-	baseBridge := feishu.DefaultConfig()
+	baseAgent := feishu.DefaultConfig()
 	data := []byte(`{
 		"proxyConfig": {
 			"host": "127.0.0.1",
 			"port": "8095"
 		},
-		"feishuBridge": {
+		"feishuAgent": {
 			"enabled": true,
 			"brand": "feishu",
 			"model": "kmodel",
@@ -118,27 +118,27 @@ func TestParseDesktopConfigMigratesMissingGroupOnlyAtBotDefault(t *testing.T) {
 		}
 	}`)
 
-	_, bridgeCfg, ok := parseDesktopConfig(data, baseProxy, baseBridge)
+	_, agentCfg, ok := parseDesktopConfig(data, baseProxy, baseAgent)
 	if !ok {
 		t.Fatal("parseDesktopConfig returned ok=false")
 	}
-	if !bridgeCfg.GroupOnlyAtBot {
+	if !agentCfg.GroupOnlyAtBot {
 		t.Fatal("missing groupOnlyAtBot in old config should inherit the safe default true")
 	}
-	if bridgeCfg.MaxToolRounds != feishu.DefaultMaxToolRounds {
-		t.Fatalf("legacy maxToolRounds should migrate to default, got %d", bridgeCfg.MaxToolRounds)
+	if agentCfg.MaxToolRounds != feishu.DefaultMaxToolRounds {
+		t.Fatalf("legacy maxToolRounds should migrate to default, got %d", agentCfg.MaxToolRounds)
 	}
 }
 
 func TestParseDesktopConfigPreservesExplicitGroupOnlyAtBotFalse(t *testing.T) {
 	baseProxy := defaultConfig()
-	baseBridge := feishu.DefaultConfig()
+	baseAgent := feishu.DefaultConfig()
 	data := []byte(`{
 		"proxyConfig": {
 			"host": "127.0.0.1",
 			"port": "8095"
 		},
-		"feishuBridge": {
+		"feishuAgent": {
 			"enabled": true,
 			"brand": "feishu",
 			"model": "kmodel",
@@ -147,19 +147,19 @@ func TestParseDesktopConfigPreservesExplicitGroupOnlyAtBotFalse(t *testing.T) {
 		}
 	}`)
 
-	_, bridgeCfg, ok := parseDesktopConfig(data, baseProxy, baseBridge)
+	_, agentCfg, ok := parseDesktopConfig(data, baseProxy, baseAgent)
 	if !ok {
 		t.Fatal("parseDesktopConfig returned ok=false")
 	}
-	if bridgeCfg.GroupOnlyAtBot {
+	if agentCfg.GroupOnlyAtBot {
 		t.Fatal("explicit groupOnlyAtBot=false should be preserved")
 	}
-	if bridgeCfg.MaxToolRounds != 12 {
-		t.Fatalf("explicit maxToolRounds should be preserved, got %d", bridgeCfg.MaxToolRounds)
+	if agentCfg.MaxToolRounds != 12 {
+		t.Fatalf("explicit maxToolRounds should be preserved, got %d", agentCfg.MaxToolRounds)
 	}
 }
 
-func TestSaveConfigPreservesExistingFeishuBridgeConfig(t *testing.T) {
+func TestSaveConfigPreservesExistingFeishuAgentConfig(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	configDir := filepath.Join(tmp, ".config", "lingma-proxy")
@@ -173,7 +173,7 @@ func TestSaveConfigPreservesExistingFeishuBridgeConfig(t *testing.T) {
 			"port": 8095,
 			"backend": "remote"
 		},
-		"feishuBridge": {
+		"feishuAgent": {
 			"enabled": true,
 			"brand": "feishu",
 			"model": "kmodel",
@@ -182,7 +182,7 @@ func TestSaveConfigPreservesExistingFeishuBridgeConfig(t *testing.T) {
 			"mcpEnabled": true,
 			"safeFiles": {
 				"enabled": true,
-				"workspaceDir": "/tmp/bridge-workspace",
+				"workspaceDir": "/tmp/agent-workspace",
 				"extraPaths": [
 					{"path": "/tmp/read-only", "mode": "read"},
 					{"path": "/tmp/write", "mode": "write"}
@@ -196,7 +196,7 @@ func TestSaveConfigPreservesExistingFeishuBridgeConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	app := &App{cfg: defaultConfig(), bridgeCfg: feishu.DefaultConfig()}
+	app := &App{cfg: defaultConfig(), agentCfg: feishu.DefaultConfig()}
 	nextProxy := app.cfg
 	nextProxy.Port = 18095
 	if err := app.saveConfig(nextProxy); err != nil {
@@ -207,24 +207,24 @@ func TestSaveConfigPreservesExistingFeishuBridgeConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, bridgeCfg, ok := parseDesktopConfig(data, defaultConfig(), feishu.DefaultConfig())
+	_, agentCfg, ok := parseDesktopConfig(data, defaultConfig(), feishu.DefaultConfig())
 	if !ok {
 		t.Fatal("saved desktop config should parse")
 	}
-	if bridgeCfg.BotName != "aily" {
-		t.Fatalf("botName was not preserved: %#v", bridgeCfg)
+	if agentCfg.BotName != "aily" {
+		t.Fatalf("botName was not preserved: %#v", agentCfg)
 	}
-	if bridgeCfg.BotIdentity != "custom identity" {
-		t.Fatalf("botIdentity was not preserved: %#v", bridgeCfg)
+	if agentCfg.BotIdentity != "custom identity" {
+		t.Fatalf("botIdentity was not preserved: %#v", agentCfg)
 	}
-	if !bridgeCfg.MCPEnabled {
-		t.Fatalf("mcpEnabled was not preserved: %#v", bridgeCfg)
+	if !agentCfg.MCPEnabled {
+		t.Fatalf("mcpEnabled was not preserved: %#v", agentCfg)
 	}
-	if bridgeCfg.GroupOnlyAtBot {
-		t.Fatalf("groupOnlyAtBot=false was not preserved: %#v", bridgeCfg)
+	if agentCfg.GroupOnlyAtBot {
+		t.Fatalf("groupOnlyAtBot=false was not preserved: %#v", agentCfg)
 	}
-	if bridgeCfg.SafeFiles.WorkspaceDir != "/tmp/bridge-workspace" || len(bridgeCfg.SafeFiles.ExtraPaths) != 2 {
-		t.Fatalf("safeFiles config was not preserved: %#v", bridgeCfg.SafeFiles)
+	if agentCfg.SafeFiles.WorkspaceDir != "/tmp/agent-workspace" || len(agentCfg.SafeFiles.ExtraPaths) != 2 {
+		t.Fatalf("safeFiles config was not preserved: %#v", agentCfg.SafeFiles)
 	}
 }
 
@@ -242,15 +242,15 @@ func TestShouldRetryFeishuAutoStartForTransientProbeFailures(t *testing.T) {
 		}
 	}
 	if shouldRetryFeishuAutoStart(errors.New("event consume failed")) {
-		t.Fatal("should not retry non-prerequisite bridge errors")
+		t.Fatal("should not retry non-prerequisite agent errors")
 	}
 }
 
 func TestEmitLogDedupesRecentNonAdjacentDuplicates(t *testing.T) {
 	app := &App{}
-	app.emitLogWithSourceMeta("feishu-bridge", "info", "same message", "s1", "c1", "m1")
-	app.emitLogWithSourceMeta("feishu-bridge", "info", "different message", "s1", "c1", "m1")
-	app.emitLogWithSourceMeta("feishu-bridge", "info", "same message", "s1", "c1", "m1")
+	app.emitLogWithSourceMeta("feishu-agent", "info", "same message", "s1", "c1", "m1")
+	app.emitLogWithSourceMeta("feishu-agent", "info", "different message", "s1", "c1", "m1")
+	app.emitLogWithSourceMeta("feishu-agent", "info", "same message", "s1", "c1", "m1")
 
 	if got, want := len(app.logs), 2; got != want {
 		t.Fatalf("logs len = %d, want %d: %#v", got, want, app.logs)
@@ -260,14 +260,14 @@ func TestEmitLogDedupesRecentNonAdjacentDuplicates(t *testing.T) {
 func TestEmitLogDedupesAgainstExistingRecentLogs(t *testing.T) {
 	app := &App{}
 	app.logs = []AppLog{{
-		Source:    "feishu-bridge",
+		Source:    "feishu-agent",
 		Level:     "info",
 		SessionID: "s1",
 		ChatID:    "c1",
 		MessageID: "m1",
 		Message:   "same message",
 	}}
-	app.emitLogWithSourceMeta("feishu-bridge", "info", "same message", "s1", "c1", "m1")
+	app.emitLogWithSourceMeta("feishu-agent", "info", "same message", "s1", "c1", "m1")
 
 	if got, want := len(app.logs), 1; got != want {
 		t.Fatalf("logs len = %d, want %d: %#v", got, want, app.logs)
@@ -278,8 +278,8 @@ func TestGetLogDetailUsesIDForSameSecondLogs(t *testing.T) {
 	app := &App{}
 	createdAt := "2026-05-27T10:47:35+08:00"
 	app.logs = []AppLog{
-		{ID: "first", CreatedAt: createdAt, Time: "10:47:35", Source: "feishu-bridge", Level: "info", Message: "first full message"},
-		{ID: "second", CreatedAt: createdAt, Time: "10:47:35", Source: "feishu-bridge", Level: "info", Message: "second full message"},
+		{ID: "first", CreatedAt: createdAt, Time: "10:47:35", Source: "feishu-agent", Level: "info", Message: "first full message"},
+		{ID: "second", CreatedAt: createdAt, Time: "10:47:35", Source: "feishu-agent", Level: "info", Message: "second full message"},
 	}
 
 	got, err := app.GetLogDetail("first")

@@ -112,8 +112,8 @@ type App struct {
 
 	mu        sync.RWMutex
 	cfg       service.Config
-	bridgeCfg feishu.Config
-	bridge    *feishu.Manager
+	agentCfg feishu.Config
+	agent    *feishu.Manager
 	server    *httpapi.Server
 	running   bool
 	quitting  bool
@@ -211,14 +211,14 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.bootStartedAt = time.Now()
 	a.logBootMilestone("startup:begin")
-	a.cfg, a.bridgeCfg = loadDesktopConfig()
+	a.cfg, a.agentCfg = loadDesktopConfig()
 	if path, err := customMCPConfigFilePath(); err == nil {
 		feishu.SetCustomMCPConfigPath(path)
 	}
 	a.logBootMilestone("startup:config-loaded")
-	bridgeDataDir, _ := lingmaProxyConfigDir()
-	a.configureOnlineUpdates(bridgeDataDir)
-	a.bridge = feishu.NewManager(feishu.ManagerOptions{
+	agentDataDir, _ := lingmaProxyConfigDir()
+	a.configureOnlineUpdates(agentDataDir)
+	a.agent = feishu.NewManager(feishu.ManagerOptions{
 		ProxyURL: func() string {
 			a.mu.RLock()
 			defer a.mu.RUnlock()
@@ -228,7 +228,7 @@ func (a *App) startup(ctx context.Context) {
 			return fmt.Sprintf("http://%s:%d/v1/chat/completions", a.cfg.Host, a.cfg.Port)
 		},
 		Logf: func(level, message string, meta feishu.LogMeta) {
-			a.emitLogWithSourceMeta("feishu-bridge", level, message, meta.SessionID, meta.ChatID, meta.MessageID)
+			a.emitLogWithSourceMeta("feishu-agent", level, message, meta.SessionID, meta.ChatID, meta.MessageID)
 		},
 		Emit: func(status feishu.Status) {
 			runtime.EventsEmit(a.ctx, "feishu:status", status)
@@ -238,9 +238,9 @@ func (a *App) startup(ctx context.Context) {
 			defer a.mu.Unlock()
 			a.saveAppStateLocked()
 		},
-		DataDir: bridgeDataDir,
+		DataDir: agentDataDir,
 	})
-	a.bridge.SetConfig(a.bridgeCfg)
+	a.agent.SetConfig(a.agentCfg)
 	a.logBootMilestone("startup:app-state-load:begin")
 	if err := a.loadAppState(); err != nil {
 		runtime.LogWarningf(a.ctx, "failed to load app state: %v", err)
@@ -276,10 +276,10 @@ func (a *App) onDomReady(ctx context.Context) {
 		time.Sleep(900 * time.Millisecond)
 		a.logBootMilestone("feishu-probe:scheduled")
 		a.mu.RLock()
-		bridge := a.bridge
+		agent := a.agent
 		a.mu.RUnlock()
-		if bridge != nil {
-			bridge.Probe(context.Background())
+		if agent != nil {
+			agent.Probe(context.Background())
 		}
 	}()
 }
@@ -702,37 +702,37 @@ func (a *App) StartProxy() error {
 	}()
 	go func() {
 		a.mu.RLock()
-		bridgeCfg := a.bridgeCfg
-		bridge := a.bridge
+		agentCfg := a.agentCfg
+		agent := a.agent
 		a.mu.RUnlock()
-		if bridge == nil || !bridgeCfg.Enabled || !bridgeCfg.AutoStart {
+		if agent == nil || !agentCfg.Enabled || !agentCfg.AutoStart {
 			return
 		}
-		a.autoStartFeishuBridge(bridge, bridgeCfg)
+		a.autoStartFeishuAgent(agent, agentCfg)
 	}()
 
 	return nil
 }
 
-func (a *App) autoStartFeishuBridge(bridge *feishu.Manager, bridgeCfg feishu.Config) {
+func (a *App) autoStartFeishuAgent(agent *feishu.Manager, agentCfg feishu.Config) {
 	delays := []time.Duration{0, 3 * time.Second, 8 * time.Second}
 	for attempt, delay := range delays {
 		if delay > 0 {
 			time.Sleep(delay)
 		}
-		bridge.SetConfig(bridgeCfg)
-		err := bridge.Start(context.Background())
+		agent.SetConfig(agentCfg)
+		err := agent.Start(context.Background())
 		if err == nil {
 			if attempt > 0 {
-				a.emitLog("info", "Feishu bridge auto-started after environment retry")
+				a.emitLog("info", "Feishu Agent auto-started after environment retry")
 			}
 			return
 		}
 		if attempt == len(delays)-1 || !shouldRetryFeishuAutoStart(err) {
-			a.emitLog("warn", fmt.Sprintf("Feishu bridge auto-start failed: %v", err))
+			a.emitLog("warn", fmt.Sprintf("Feishu Agent auto-start failed: %v", err))
 			return
 		}
-		a.emitLog("info", fmt.Sprintf("Feishu bridge auto-start waiting for environment (%d/%d): %v", attempt+1, len(delays)-1, err))
+		a.emitLog("info", fmt.Sprintf("Feishu Agent auto-start waiting for environment (%d/%d): %v", attempt+1, len(delays)-1, err))
 	}
 }
 
@@ -908,8 +908,8 @@ func (a *App) ExportFeedbackBundle(options FeedbackExportOptions) (FeedbackExpor
 	if options.IncludeDetectionInfo {
 		entries = append(entries, feedbackZipEntry{name: "detection-info.json", body: mustJSON(a.GetDetectionInfo())})
 	}
-	if a.bridge != nil {
-		entries = append(entries, feedbackZipEntry{name: "feishu-bridge-status.json", body: mustJSON(sanitizeFeishuStatus(a.bridge.Status()))})
+	if a.agent != nil {
+		entries = append(entries, feedbackZipEntry{name: "feishu-agent-status.json", body: mustJSON(sanitizeFeishuStatus(a.agent.Status()))})
 	}
 	note := strings.TrimSpace(options.IssueDescription)
 	if note != "" {
@@ -989,8 +989,8 @@ func (a *App) StopProxy() error {
 		a.emitLog("warn", fmt.Sprintf("Proxy stop forced after graceful shutdown timeout: %v", err))
 		return err
 	}
-	if a.bridge != nil {
-		_ = a.bridge.Stop()
+	if a.agent != nil {
+		_ = a.agent.Stop()
 	}
 
 	runtime.LogInfo(a.ctx, "proxy stopped")
@@ -1297,8 +1297,8 @@ func (a *App) loadAppState() error {
 	a.logs = state.Logs
 	a.stats = state.Stats
 	a.models = state.Models
-	if a.bridge != nil {
-		a.bridge.LoadConversationSnapshot(state.FeishuConversations)
+	if a.agent != nil {
+		a.agent.LoadConversationSnapshot(state.FeishuConversations)
 	}
 	if a.stats.ByModel == nil {
 		a.stats.ByModel = map[string]int{}
@@ -1359,10 +1359,10 @@ func (a *App) flushAppStateLocked() {
 }
 
 func (a *App) feishuConversationSnapshotLocked() map[string]feishu.ConversationSnapshot {
-	if a.bridge == nil {
+	if a.agent == nil {
 		return nil
 	}
-	return a.bridge.ConversationSnapshot()
+	return a.agent.ConversationSnapshot()
 }
 
 func trimPersistedRequests(records []RequestRecord) []RequestRecord {

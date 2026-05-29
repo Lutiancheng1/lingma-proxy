@@ -354,7 +354,7 @@ func resolveLarkSkillStatus(name string, statuses []SkillStatus) (SkillStatus, e
 	if path := findSkillOnDisk(skillName); path != "" {
 		return SkillStatus{Name: skillName, Found: true, Path: path}, nil
 	}
-	return SkillStatus{}, fmt.Errorf("未找到官方飞书 Skill `%s`。请先在 Feishu Bridge 设置页安装 CLI 与 Skills，或执行 /reload-skills 后重试。", skillName)
+	return SkillStatus{}, fmt.Errorf("未找到官方飞书 Skill `%s`。请先在 Feishu Agent 设置页安装 CLI 与 Skills，或执行 /reload-skills 后重试。", skillName)
 }
 
 func normalizeLarkSkillName(name string) string {
@@ -513,7 +513,7 @@ func formatLarkSkillGuide(status SkillStatus, text string, args map[string]any) 
 
 	if end < total {
 		out += fmt.Sprintf(
-			"\n\nbridge_reading:\n"+
+			"\n\nagent_reading:\n"+
 				"  kind: skill_body_chunk\n"+
 				"  offset: %d\n"+
 				"  end_offset: %d\n"+

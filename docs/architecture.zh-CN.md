@@ -33,7 +33,7 @@ flowchart LR
 
 ---
 
-## 1.5 Feishu Bridge
+## 1.5 Feishu Agent
 
 可选子系统，将代理接入飞书（Lark）Bot，支持基于聊天的 AI 交互和流式卡片输出。
 
@@ -56,7 +56,7 @@ flowchart LR
 | `internal/feishu/tools.go` | lark-cli 工具定义与执行（IM、云盘、日历等） |
 | `internal/feishu/prompt.go` | 系统提示词构建、skill 摘要注入、工具使用决策 |
 | `internal/feishu/skills.go` | 技能发现（磁盘扫描 + lock 文件） |
-| `internal/feishu/config.go` | Feishu Bridge 配置模型 |
+| `internal/feishu/config.go` | Feishu Agent 配置模型 |
 | `internal/feishu/install.go` | lark-cli 和 Skills 安装 |
 | `internal/feishu/onboarding.go` | lark-cli 初始化和授权流程 |
 | `internal/feishu/env.go` | lark-cli / Node / npm 的 PATH 解析 |
@@ -76,9 +76,9 @@ CardKit 最终态分层：
 - 正常完成时先关闭 `/settings.streaming_mode`，再做小尺寸最终卡片更新刷新 header/status，避免标题停留在“正在思考”
 - 长文本或大工具结果走极简最终卡片 + 分段 markdown；极简卡片仍保留最近工具折叠摘要，但压缩数量和正文长度
 
-授权与权限：模型不得直接执行 `lark-cli auth login`。工具结果出现 `need_user_authorization` 或缺少 scope 时，由 Bridge 接管 device flow，回复授权链接并等待用户授权后继续。
+授权与权限：模型不得直接执行 `lark-cli auth login`。工具结果出现 `need_user_authorization` 或缺少 scope 时，由 Agent 接管 device flow，回复授权链接并等待用户授权后继续。
 
-本机文件访问系统：内置 `safe_file_read`、`safe_file_write`、`safe_file_list`、`safe_file_delete` 等文件工具。默认只开放应用自己的 workspace 目录用于读写；其他本机目录默认不可写、不可删。用户可在 Feishu Bridge 高级设置的“本机文件访问”中为额外路径配置 `read`、`write` 或 `delete` 权限。聊天中的 `授权目录 /path/to/dir` 或 `授权文件 /path/to/file` 只会追加只读白名单，不会授予写入或删除权限；白名单持久化到应用配置目录下的 `allowed_paths.json`。
+本机文件访问系统：内置 `safe_file_read`、`safe_file_write`、`safe_file_list`、`safe_file_delete` 等文件工具。默认只开放应用自己的 workspace 目录用于读写；其他本机目录默认不可写、不可删。用户可在 Feishu Agent 高级设置的“本机文件访问”中为额外路径配置 `read`、`write` 或 `delete` 权限。聊天中的 `授权目录 /path/to/dir` 或 `授权文件 /path/to/file` 只会追加只读白名单，不会授予写入或删除权限；白名单持久化到应用配置目录下的 `allowed_paths.json`。
 
 文件写入/删除物理安全防线：`safe_file_write` 覆盖已有文件时要求用户最新消息精确包含 `确认覆盖 <文件名或绝对路径>`；`safe_file_delete` 禁止删除目录，且删除单个文件时必须同时满足 `confirmed: true` 与用户最新消息精确包含 `确认删除 <文件名或绝对路径>`。路径判断使用真实路径和子路径关系，避免字符串前缀和软链逃逸问题。
 
@@ -336,8 +336,8 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 反馈包导出：
 
 - 默认包含 `app-logs.json`、`request-logs.json`、配置摘要、环境摘要和探测信息
-- Feishu Bridge 可用时额外包含 `feishu-bridge-status.json`
-- `app-logs.json` 会保留 Feishu Bridge 的 `source/sessionId/chatId/messageId/level/message`，并对文本做脱敏
+- Feishu Agent 可用时额外包含 `feishu-agent-status.json`
+- `app-logs.json` 会保留 Feishu Agent 的 `source/sessionId/chatId/messageId/level/message`，并对文本做脱敏
 - UI 日志列表基于 `createdAt` 显示 `今天/昨天/MM-DD + 时间`；旧日志缺少 `createdAt` 时回退 `time`
 
 打包要求：
@@ -368,9 +368,9 @@ Wails 桌面端不是简单预览壳，而是本地代理的运维控制台。
 
 ---
 
-## 8. Feishu Bridge 上下文管理
+## 8. Feishu Agent 上下文管理
 
-Feishu Bridge 的上下文管理不再只是“保留最近几轮”。当前实现由预算估算、工具结果分类、结构化摘要、工具记忆检索和飞书历史检索共同组成。
+Feishu Agent 的上下文管理不再只是“保留最近几轮”。当前实现由预算估算、工具结果分类、结构化摘要、工具记忆检索和飞书历史检索共同组成。
 
 ### 8.1 水位策略
 
@@ -411,7 +411,7 @@ Feishu Bridge 的上下文管理不再只是“保留最近几轮”。当前实
 - 非工具消息保留首尾边界，避免丢失用户意图和上下文转折。
 - 压缩 prompt 强调保留目标、决策、待办、错误恢复、文档 token、URL 和工具记忆 ID。
 
-这保证用户说“继续”时，Bridge 仍能恢复未完成任务，而不是只保留一段自然语言摘要。
+这保证用户说“继续”时，Agent 仍能恢复未完成任务，而不是只保留一段自然语言摘要。
 
 ### 8.4 工具记忆检索
 
@@ -444,7 +444,7 @@ Feishu Bridge 的上下文管理不再只是“保留最近几轮”。当前实
 - 图片类请求在本地持久化时会做裁剪/脱敏，避免状态文件过大
 - Remote 模式下如果启用了 fallback，最近一次“聊天模型”可能与客户端最初指定模型不同
 - 飞书历史搜索依赖当前 `lark-cli im +messages-search` 能力和授权范围；不是所有租户/账号都一定可用
-- FTS5 工具记忆在 SQLite 不可用时会降级，Bridge 仍能运行，但长期检索能力会减弱
+- FTS5 工具记忆在 SQLite 不可用时会降级，Agent 仍能运行，但长期检索能力会减弱
 
 ---
 

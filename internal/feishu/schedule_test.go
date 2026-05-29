@@ -9,7 +9,7 @@ import (
 
 func TestScheduledTaskStoreCreateListDueAndFinish(t *testing.T) {
 	ctx := context.Background()
-	store, err := newBridgeStore(t.TempDir())
+	store, err := newAgentStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

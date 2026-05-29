@@ -111,7 +111,7 @@ func classifyToolResult(toolName, content string, isError bool) toolResultHandli
 			return toolResultPreserve
 		}
 		data, _ := payload["data"].(map[string]any)
-		if reading, ok := data["bridge_reading"].(map[string]any); ok {
+		if reading, ok := data["agent_reading"].(map[string]any); ok {
 			kind := fmt.Sprint(reading["kind"])
 			if kind == "doc_content_chunk" || kind == "sheet_rows_chunk" {
 				return toolResultPreserve
@@ -205,7 +205,7 @@ func extractToolResultSummary(toolName, content string) string {
 		}
 	default:
 		if data, ok := payload["data"].(map[string]any); ok {
-			if br, ok := data["bridge_reading"].(map[string]any); ok {
+			if br, ok := data["agent_reading"].(map[string]any); ok {
 				kind := fmt.Sprint(br["kind"])
 				total := fmt.Sprint(br["total_chars"])
 				if total == "" {
@@ -281,7 +281,7 @@ func smartToolSummary(toolName, fullResult string, isError bool) string {
 			}
 		}
 		if data, ok := payload["data"].(map[string]any); ok {
-			if br, ok := data["bridge_reading"].(map[string]any); ok {
+			if br, ok := data["agent_reading"].(map[string]any); ok {
 				parts = append(parts, fmt.Sprintf("chunk=%s", br["kind"]))
 			}
 		}

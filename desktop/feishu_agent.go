@@ -18,7 +18,7 @@ import (
 
 type desktopConfigEnvelope struct {
 	ProxyConfig  *proxyConfigFile `json:"proxyConfig,omitempty"`
-	FeishuBridge *feishu.Config   `json:"feishuBridge,omitempty"`
+	FeishuAgent *feishu.Config   `json:"feishuAgent,omitempty"`
 }
 
 type proxyConfigFile struct {
@@ -50,17 +50,17 @@ type MCPJSONFile struct {
 	ServerCount int    `json:"serverCount"`
 }
 
-type FeishuBridgeSkillImportResult = feishu.BridgeSkillImportResult
-type FeishuBridgeSkill = feishu.BridgeSkill
+type FeishuAgentSkillImportResult = feishu.AgentSkillImportResult
+type FeishuAgentSkill = feishu.AgentSkill
 
-type FeishuBridgeCleanupOptions struct {
+type FeishuAgentCleanupOptions struct {
 	IncludeImportedSkills bool `json:"includeImportedSkills"`
 	IncludeMCPConfig      bool `json:"includeMcpConfig"`
 }
 
 func loadDesktopConfig() (service.Config, feishu.Config) {
 	cfg := defaultConfig()
-	bridgeCfg := feishu.DefaultConfig()
+	agentCfg := feishu.DefaultConfig()
 
 	for _, configPath := range configSearchPaths() {
 		info, err := os.Stat(configPath)
@@ -71,69 +71,76 @@ func loadDesktopConfig() (service.Config, feishu.Config) {
 		if err != nil {
 			continue
 		}
-		nextProxy, nextBridge, ok := parseDesktopConfig(data, cfg, bridgeCfg)
+		nextProxy, nextAgent, ok := parseDesktopConfig(data, cfg, agentCfg)
 		if !ok {
 			continue
 		}
 		cfg = nextProxy
-		bridgeCfg = nextBridge
+		agentCfg = nextAgent
 		break
 	}
-	return cfg, bridgeCfg
+	return cfg, agentCfg
 }
 
-func parseDesktopConfig(data []byte, baseProxy service.Config, baseBridge feishu.Config) (service.Config, feishu.Config, bool) {
+func parseDesktopConfig(data []byte, baseProxy service.Config, baseAgent feishu.Config) (service.Config, feishu.Config, bool) {
 	cfg := baseProxy
-	bridgeCfg := baseBridge
+	agentCfg := baseAgent
 
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return cfg, bridgeCfg, false
+		return cfg, agentCfg, false
 	}
 	if rawProxy, ok := probe["proxyConfig"]; ok {
 		var proxyFile proxyConfigFile
 		if err := json.Unmarshal(rawProxy, &proxyFile); err == nil {
 			applyProxyConfigFile(&cfg, proxyFile)
 		}
-		if rawBridge, ok := probe["feishuBridge"]; ok {
-			savedBridge := baseBridge
-			if err := json.Unmarshal(rawBridge, &savedBridge); err == nil {
-				bridgeCfg = feishu.NormalizeConfig(savedBridge)
+		rawAgent, ok := probe["feishuAgent"]
+		if !ok {
+			rawAgent, ok = probe["feishuBridge"] // backward compat
+		}
+		if ok {
+			savedAgent := baseAgent
+			if err := json.Unmarshal(rawAgent, &savedAgent); err == nil {
+				agentCfg = feishu.NormalizeConfig(savedAgent)
 			}
 		}
-		return cfg, bridgeCfg, true
+		return cfg, agentCfg, true
 	}
 
 	var legacy proxyConfigFile
 	if err := json.Unmarshal(data, &legacy); err != nil {
-		return cfg, bridgeCfg, false
+		return cfg, agentCfg, false
 	}
 	applyProxyConfigFile(&cfg, legacy)
-	return cfg, bridgeCfg, true
+	return cfg, agentCfg, true
 }
 
-func loadSavedFeishuBridgeConfig(baseBridge feishu.Config) (feishu.Config, bool) {
+func loadSavedFeishuAgentConfig(baseAgent feishu.Config) (feishu.Config, bool) {
 	dir, err := lingmaProxyConfigDir()
 	if err != nil {
-		return baseBridge, false
+		return baseAgent, false
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err != nil {
-		return baseBridge, false
+		return baseAgent, false
 	}
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return baseBridge, false
+		return baseAgent, false
 	}
-	rawBridge, ok := probe["feishuBridge"]
+	rawAgent, ok := probe["feishuAgent"]
 	if !ok {
-		return baseBridge, false
+		rawAgent, ok = probe["feishuBridge"] // backward compat
 	}
-	savedBridge := baseBridge
-	if err := json.Unmarshal(rawBridge, &savedBridge); err != nil {
-		return baseBridge, false
+	if !ok {
+		return baseAgent, false
 	}
-	return feishu.NormalizeConfig(savedBridge), true
+	savedAgent := baseAgent
+	if err := json.Unmarshal(rawAgent, &savedAgent); err != nil {
+		return baseAgent, false
+	}
+	return feishu.NormalizeConfig(savedAgent), true
 }
 
 func applyProxyConfigFile(cfg *service.Config, fileCfg proxyConfigFile) {
@@ -226,7 +233,7 @@ func buildProxyConfigFile(cfg service.Config) proxyConfigFile {
 	}
 }
 
-func (a *App) saveDesktopConfig(proxyCfg service.Config, bridgeCfg feishu.Config) error {
+func (a *App) saveDesktopConfig(proxyCfg service.Config, agentCfg feishu.Config) error {
 	dir, err := lingmaProxyConfigDir()
 	if err != nil {
 		return err
@@ -235,10 +242,10 @@ func (a *App) saveDesktopConfig(proxyCfg service.Config, bridgeCfg feishu.Config
 		return err
 	}
 	proxyFile := buildProxyConfigFile(proxyCfg)
-	normalizedBridge := feishu.NormalizeConfig(bridgeCfg)
+	normalizedAgent := feishu.NormalizeConfig(agentCfg)
 	envelope := desktopConfigEnvelope{
 		ProxyConfig:  &proxyFile,
-		FeishuBridge: &normalizedBridge,
+		FeishuAgent: &normalizedAgent,
 	}
 	data, err := json.MarshalIndent(envelope, "", "  ")
 	if err != nil {
@@ -263,7 +270,7 @@ func customMCPConfigFilePath() (string, error) {
 	return filepath.Join(dir, "mcp.json"), nil
 }
 
-func (a *App) GetFeishuBridgeMCPJSON() (MCPJSONFile, error) {
+func (a *App) GetFeishuAgentMCPJSON() (MCPJSONFile, error) {
 	path, err := customMCPConfigFilePath()
 	if err != nil {
 		return MCPJSONFile{}, err
@@ -283,7 +290,7 @@ func (a *App) GetFeishuBridgeMCPJSON() (MCPJSONFile, error) {
 	return result, nil
 }
 
-func (a *App) SaveFeishuBridgeMCPJSON(content string) (MCPJSONFile, error) {
+func (a *App) SaveFeishuAgentMCPJSON(content string) (MCPJSONFile, error) {
 	path, err := customMCPConfigFilePath()
 	if err != nil {
 		return MCPJSONFile{}, err
@@ -312,9 +319,9 @@ func (a *App) SaveFeishuBridgeMCPJSON(content string) (MCPJSONFile, error) {
 		return MCPJSONFile{}, err
 	}
 	feishu.SetCustomMCPConfigPath(path)
-	if a.bridge != nil {
-		a.bridge.SetConfig(a.GetFeishuBridgeConfig())
-		_ = a.bridge.Probe(context.Background())
+	if a.agent != nil {
+		a.agent.SetConfig(a.GetFeishuAgentConfig())
+		_ = a.agent.Probe(context.Background())
 	}
 	return MCPJSONFile{Path: path, Content: content, ServerCount: len(servers)}, nil
 }
@@ -332,32 +339,32 @@ func defaultCustomMCPJSON() string {
 
 func (a *App) saveConfig(cfg service.Config) error {
 	a.mu.RLock()
-	bridgeCfg := a.bridgeCfg
+	agentCfg := a.agentCfg
 	a.mu.RUnlock()
-	if savedBridge, ok := loadSavedFeishuBridgeConfig(bridgeCfg); ok {
-		bridgeCfg = savedBridge
+	if savedAgent, ok := loadSavedFeishuAgentConfig(agentCfg); ok {
+		agentCfg = savedAgent
 		a.mu.Lock()
-		a.bridgeCfg = savedBridge
-		if a.bridge != nil {
-			a.bridge.SetConfig(savedBridge)
+		a.agentCfg = savedAgent
+		if a.agent != nil {
+			a.agent.SetConfig(savedAgent)
 		}
 		a.mu.Unlock()
 	}
-	return a.saveDesktopConfig(cfg, bridgeCfg)
+	return a.saveDesktopConfig(cfg, agentCfg)
 }
 
-func (a *App) GetFeishuBridgeConfig() feishu.Config {
+func (a *App) GetFeishuAgentConfig() feishu.Config {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.bridgeCfg
+	return a.agentCfg
 }
 
-func (a *App) UpdateFeishuBridgeConfig(cfg feishu.Config) error {
+func (a *App) UpdateFeishuAgentConfig(cfg feishu.Config) error {
 	cfg = feishu.NormalizeConfig(cfg)
 	a.mu.Lock()
-	a.bridgeCfg = cfg
-	if a.bridge != nil {
-		a.bridge.SetConfig(cfg)
+	a.agentCfg = cfg
+	if a.agent != nil {
+		a.agent.SetConfig(cfg)
 	}
 	proxyCfg := a.cfg
 	a.mu.Unlock()
@@ -367,26 +374,26 @@ func (a *App) UpdateFeishuBridgeConfig(cfg feishu.Config) error {
 	return nil
 }
 
-func (a *App) GetFeishuBridgeStatus() feishu.Status {
-	if a.bridge == nil {
+func (a *App) GetFeishuAgentStatus() feishu.Status {
+	if a.agent == nil {
 		manager := feishu.NewManager(feishu.ManagerOptions{})
-		manager.SetConfig(a.GetFeishuBridgeConfig())
+		manager.SetConfig(a.GetFeishuAgentConfig())
 		return manager.Status()
 	}
-	a.bridge.SetConfig(a.GetFeishuBridgeConfig())
-	return a.bridge.Status()
+	a.agent.SetConfig(a.GetFeishuAgentConfig())
+	return a.agent.Status()
 }
 
-func (a *App) RefreshFeishuBridgeStatus() feishu.Status {
-	if a.bridge == nil {
+func (a *App) RefreshFeishuAgentStatus() feishu.Status {
+	if a.agent == nil {
 		manager := feishu.NewManager(feishu.ManagerOptions{})
-		manager.SetConfig(a.GetFeishuBridgeConfig())
+		manager.SetConfig(a.GetFeishuAgentConfig())
 		status := manager.RefreshProbe(context.Background())
 		a.logFeishuProbeStatus(status)
 		return status
 	}
-	a.bridge.SetConfig(a.GetFeishuBridgeConfig())
-	status := a.bridge.RefreshProbe(context.Background())
+	a.agent.SetConfig(a.GetFeishuAgentConfig())
+	status := a.agent.RefreshProbe(context.Background())
 	a.logFeishuProbeStatus(status)
 	return status
 }
@@ -407,7 +414,7 @@ func (a *App) logFeishuProbeStatus(status feishu.Status) {
 	}
 	a.mu.Unlock()
 	if shouldLog {
-		a.emitLogWithSource("feishu-bridge", "info", message)
+		a.emitLogWithSource("feishu-agent", "info", message)
 	}
 }
 
@@ -420,30 +427,30 @@ func displayBinaryPath(path string) string {
 }
 
 func (a *App) InstallFeishuCLI() error {
-	if a.bridge == nil {
-		return fmt.Errorf("feishu bridge manager not initialized")
+	if a.agent == nil {
+		return fmt.Errorf("feishu agent manager not initialized")
 	}
-	return a.bridge.InstallCLI(context.Background())
+	return a.agent.InstallCLI(context.Background())
 }
 
 func (a *App) ReinstallFeishuSkills() error {
-	if a.bridge == nil {
-		return fmt.Errorf("feishu bridge manager not initialized")
+	if a.agent == nil {
+		return fmt.Errorf("feishu agent manager not initialized")
 	}
-	return a.bridge.ReinstallSkills(context.Background())
+	return a.agent.ReinstallSkills(context.Background())
 }
 
-func (a *App) CleanupFeishuBridgeArtifacts(opts FeishuBridgeCleanupOptions) ([]string, error) {
-	if a.bridge == nil {
-		return nil, fmt.Errorf("feishu bridge manager not initialized")
+func (a *App) CleanupFeishuAgentArtifacts(opts FeishuAgentCleanupOptions) ([]string, error) {
+	if a.agent == nil {
+		return nil, fmt.Errorf("feishu agent manager not initialized")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	results, err := a.bridge.CleanupArtifacts(ctx, feishu.CleanupOptions{
+	results, err := a.agent.CleanupArtifacts(ctx, feishu.CleanupOptions{
 		IncludeImportedSkills: opts.IncludeImportedSkills,
 	})
 	if opts.IncludeMCPConfig {
-		if mcpResults, mcpErr := a.cleanupFeishuBridgeMCPConfig(); mcpErr != nil {
+		if mcpResults, mcpErr := a.cleanupFeishuAgentMCPConfig(); mcpErr != nil {
 			if err != nil {
 				err = fmt.Errorf("%v; %w", err, mcpErr)
 			} else {
@@ -454,12 +461,12 @@ func (a *App) CleanupFeishuBridgeArtifacts(opts FeishuBridgeCleanupOptions) ([]s
 		}
 	}
 	if err == nil {
-		a.emitLogWithSource("feishu-bridge", "info", "Feishu Bridge CLI/Skills/授权信息已清理")
+		a.emitLogWithSource("feishu-agent", "info", "Feishu Agent CLI/Skills/授权信息已清理")
 	}
 	return results, err
 }
 
-func (a *App) cleanupFeishuBridgeMCPConfig() ([]string, error) {
+func (a *App) cleanupFeishuAgentMCPConfig() ([]string, error) {
 	path, err := customMCPConfigFilePath()
 	if err != nil {
 		return nil, err
@@ -472,15 +479,15 @@ func (a *App) cleanupFeishuBridgeMCPConfig() ([]string, error) {
 	}
 
 	a.mu.Lock()
-	a.bridgeCfg.MCPEnabled = false
-	a.bridgeCfg.MCPServers = nil
-	bridgeCfg := a.bridgeCfg
+	a.agentCfg.MCPEnabled = false
+	a.agentCfg.MCPServers = nil
+	agentCfg := a.agentCfg
 	proxyCfg := a.cfg
-	if a.bridge != nil {
-		a.bridge.SetConfig(bridgeCfg)
+	if a.agent != nil {
+		a.agent.SetConfig(agentCfg)
 	}
 	a.mu.Unlock()
-	if err := a.saveDesktopConfig(proxyCfg, bridgeCfg); err != nil {
+	if err := a.saveDesktopConfig(proxyCfg, agentCfg); err != nil {
 		return nil, err
 	}
 	feishu.SetCustomMCPConfigPath(path)
@@ -491,42 +498,42 @@ func (a *App) cleanupFeishuBridgeMCPConfig() ([]string, error) {
 }
 
 func (a *App) StartFeishuCLISetupNew() error {
-	if a.bridge == nil {
-		return fmt.Errorf("feishu bridge manager not initialized")
+	if a.agent == nil {
+		return fmt.Errorf("feishu agent manager not initialized")
 	}
-	return a.bridge.StartSetupNew(context.Background())
+	return a.agent.StartSetupNew(context.Background())
 }
 
 func (a *App) StartFeishuCLILogin() error {
-	if a.bridge == nil {
-		return fmt.Errorf("feishu bridge manager not initialized")
+	if a.agent == nil {
+		return fmt.Errorf("feishu agent manager not initialized")
 	}
-	return a.bridge.StartLogin(context.Background())
+	return a.agent.StartLogin(context.Background())
 }
 
-func (a *App) StartFeishuBridge() error {
-	if a.bridge == nil {
-		return fmt.Errorf("feishu bridge manager not initialized")
+func (a *App) StartFeishuAgent() error {
+	if a.agent == nil {
+		return fmt.Errorf("feishu agent manager not initialized")
 	}
-	a.bridge.SetConfig(a.GetFeishuBridgeConfig())
-	return a.bridge.Start(context.Background())
+	a.agent.SetConfig(a.GetFeishuAgentConfig())
+	return a.agent.Start(context.Background())
 }
 
-func (a *App) StopFeishuBridge() error {
-	if a.bridge == nil {
+func (a *App) StopFeishuAgent() error {
+	if a.agent == nil {
 		return nil
 	}
-	return a.bridge.Stop()
+	return a.agent.Stop()
 }
 
-func (a *App) GetFeishuBridgeSkills() []feishu.BridgeSkill {
-	if a.bridge == nil {
+func (a *App) GetFeishuAgentSkills() []feishu.AgentSkill {
+	if a.agent == nil {
 		return nil
 	}
-	return a.bridge.ListBridgeSkills()
+	return a.agent.ListAgentSkills()
 }
 
-func (a *App) ChooseFeishuBridgeSkillZip() (string, error) {
+func (a *App) ChooseFeishuAgentSkillZip() (string, error) {
 	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "选择 Skill zip",
 		Filters: []runtime.FileFilter{
@@ -535,40 +542,40 @@ func (a *App) ChooseFeishuBridgeSkillZip() (string, error) {
 	})
 }
 
-func (a *App) ChooseFeishuBridgeSkillFolder() (string, error) {
+func (a *App) ChooseFeishuAgentSkillFolder() (string, error) {
 	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "选择包含 SKILL.md 的文件夹",
 	})
 }
 
-func (a *App) ImportFeishuBridgeSkillPath(path string) (feishu.BridgeSkillImportResult, error) {
-	if a.bridge == nil {
-		return feishu.BridgeSkillImportResult{}, fmt.Errorf("feishu bridge manager not initialized")
+func (a *App) ImportFeishuAgentSkillPath(path string) (feishu.AgentSkillImportResult, error) {
+	if a.agent == nil {
+		return feishu.AgentSkillImportResult{}, fmt.Errorf("feishu agent manager not initialized")
 	}
-	result, err := a.bridge.ImportSkillPath(context.Background(), path)
+	result, err := a.agent.ImportSkillPath(context.Background(), path)
 	if err == nil {
-		a.emitLogWithSource("feishu-bridge", "info", fmt.Sprintf("Feishu Bridge Skill 导入完成：%d 个", len(result.Imported)))
+		a.emitLogWithSource("feishu-agent", "info", fmt.Sprintf("Feishu Agent Skill 导入完成：%d 个", len(result.Imported)))
 	}
 	return result, err
 }
 
-func (a *App) ReloadFeishuBridgeSkills() error {
-	if a.bridge == nil {
-		return fmt.Errorf("feishu bridge manager not initialized")
+func (a *App) ReloadFeishuAgentSkills() error {
+	if a.agent == nil {
+		return fmt.Errorf("feishu agent manager not initialized")
 	}
-	return a.bridge.ReloadBridgeSkills(context.Background())
+	return a.agent.ReloadAgentSkills(context.Background())
 }
 
-func (a *App) SetFeishuBridgeSkillEnabled(id string, enabled bool) error {
-	if a.bridge == nil {
-		return fmt.Errorf("feishu bridge manager not initialized")
+func (a *App) SetFeishuAgentSkillEnabled(id string, enabled bool) error {
+	if a.agent == nil {
+		return fmt.Errorf("feishu agent manager not initialized")
 	}
-	return a.bridge.SetBridgeSkillEnabled(context.Background(), id, enabled)
+	return a.agent.SetAgentSkillEnabled(context.Background(), id, enabled)
 }
 
-func (a *App) DeleteFeishuBridgeSkill(id string) error {
-	if a.bridge == nil {
-		return fmt.Errorf("feishu bridge manager not initialized")
+func (a *App) DeleteFeishuAgentSkill(id string) error {
+	if a.agent == nil {
+		return fmt.Errorf("feishu agent manager not initialized")
 	}
-	return a.bridge.DeleteBridgeSkill(context.Background(), id)
+	return a.agent.DeleteAgentSkill(context.Background(), id)
 }

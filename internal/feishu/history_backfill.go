@@ -33,17 +33,17 @@ func (m *Manager) fetchFeishuConversationBackfill(ctx context.Context, chatID st
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if runCtx.Err() == context.DeadlineExceeded {
-			m.logf("warn", "Feishu bridge 历史消息回填超时，跳过本轮回填", meta)
+			m.logf("warn", "Feishu Agent 历史消息回填超时，跳过本轮回填", meta)
 			return ""
 		}
-		m.logf("info", "Feishu bridge 历史消息回填不可用，跳过："+decodeCommandOutput(output), meta)
+		m.logf("info", "Feishu Agent 历史消息回填不可用，跳过："+decodeCommandOutput(output), meta)
 		return ""
 	}
 	text := renderFeishuHistoryBackfill(decodeCommandOutput(output), currentMessageID, resetAt, resetMessageID)
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	m.logf("info", "Feishu bridge 已从飞书 CLI 回填最近会话消息", meta)
+	m.logf("info", "Feishu Agent 已从飞书 CLI 回填最近会话消息", meta)
 	return text
 }
 

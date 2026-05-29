@@ -68,7 +68,7 @@ func TestRemoveOfficialLarkSkillsKeepsNonLarkSkills(t *testing.T) {
 	}
 }
 
-func TestCleanupBridgeArtifactsEmitsProgress(t *testing.T) {
+func TestCleanupAgentArtifactsEmitsProgress(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("USERPROFILE", tmp)
@@ -89,7 +89,7 @@ func TestCleanupBridgeArtifactsEmitsProgress(t *testing.T) {
 	}()
 
 	var progress []string
-	_, err := cleanupBridgeArtifacts(context.Background(), func(output, errText string) {
+	_, err := cleanupAgentArtifacts(context.Background(), func(output, errText string) {
 		if output != "" {
 			progress = append(progress, output)
 		}
@@ -136,14 +136,14 @@ func TestRemoveLarkCLIStateUsesUserHome(t *testing.T) {
 	}
 }
 
-func TestBridgeSkillServiceClearAllRemovesImportedSkills(t *testing.T) {
+func TestAgentSkillServiceClearAllRemovesImportedSkills(t *testing.T) {
 	tmp := t.TempDir()
-	store, err := newBridgeStore(tmp)
+	store, err := newAgentStore(tmp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	svc, err := NewBridgeSkillService(tmp, store)
+	svc, err := NewAgentSkillService(tmp, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestBridgeSkillServiceClearAllRemovesImportedSkills(t *testing.T) {
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	skill := BridgeSkill{ID: "demo", Name: "demo", Path: skillDir, Enabled: true}
+	skill := AgentSkill{ID: "demo", Name: "demo", Path: skillDir, Enabled: true}
 	if err := store.UpsertSkill(context.Background(), skill); err != nil {
 		t.Fatal(err)
 	}
