@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased (target: v1.6.8)
+## v1.6.8 - 2026-05-29
+
+- Feishu Agent branch only; no GitHub Release assets are published from this branch.
+- Fully renamed and refactored from Feishu Bridge to Feishu Agent, cleaning up legacy terminology in docs, source files, and tests.
+- Upgraded GitHub Actions build & publish pipeline: large uploads now use the AWS S3 API to avoid Cloudflare 524 timeouts.
+- Optimized Cloudflare Pages deployment: supports non-blocking background deploys, closing the loop on site auto-publishing and OTA check updates.
+- Hardened safe file operations: added verbal authorization checks for sensitive paths.
+- Added a two-step validation (param confirmed check + verbal admin instruction check) to `safe_file_delete` to prevent malicious injection or accidental deletion.
+- 仅 Feishu Agent 分支使用；本分支不发布 GitHub Release assets。
+- 完成项目从 Bridge 到 Agent 的全面更名，并清理文档、源码及测试中的遗留 Bridge 字段与描述。
+- 升级 GitHub Actions 自动化构建与发布，大文件发布改走 AWS S3 API 规避 524 错误超时。
+- 优化 Cloudflare Pages 静态页面部署策略，支持非阻断式静默发布，打通官网自动发布及 R2 OTA 升级包检测闭环。
+- 增强敏感路径文件操作的口诉授权追加逻辑。
+- 敏感文件删除（safe_file_delete）新增“参数 confirmed 校验 + 管理员口头指令确认”双保险二次验证，预防恶意注入越权误删。
 
 ## v1.6.7 - 2026-05-27
 
