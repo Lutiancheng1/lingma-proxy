@@ -79,6 +79,47 @@ func TestBuildScheduledTaskFromArgsParsesOneShotDelay(t *testing.T) {
 	if task.NextRunAt != now.Add(120*time.Second).Format(time.RFC3339) {
 		t.Fatalf("next_run_at = %s", task.NextRunAt)
 	}
+	message, direct := directScheduleMessage(task)
+	if !direct || message != "提交周报" {
+		t.Fatalf("expected direct reminder, direct=%v message=%q prompt=%q", direct, message, task.Prompt)
+	}
+}
+
+func TestBuildScheduledTaskFromArgsPreservesAgentTask(t *testing.T) {
+	now := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	task, err := buildScheduledTaskFromArgs("oc_test", "kmodel", map[string]any{
+		"name":          "新闻摘要",
+		"prompt":        "每天总结 AI 新闻",
+		"delivery_mode": "agent",
+		"schedule_kind": "every",
+		"every_seconds": float64(3600),
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, direct := directScheduleMessage(task); direct {
+		t.Fatalf("agent task should not be treated as direct reminder: %#v", task)
+	}
+	if task.Prompt != "每天总结 AI 新闻" {
+		t.Fatalf("prompt = %q", task.Prompt)
+	}
+}
+
+func TestDirectScheduleMessageSupportsExplicitMode(t *testing.T) {
+	now := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	task, err := buildScheduledTaskFromArgs("oc_test", "kmodel", map[string]any{
+		"name":          "吃药",
+		"prompt":        "吃药",
+		"delivery_mode": "direct",
+		"delay_seconds": float64(300),
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, direct := directScheduleMessage(task)
+	if !direct || message != "吃药" {
+		t.Fatalf("expected explicit direct reminder, direct=%v message=%q prompt=%q", direct, message, task.Prompt)
+	}
 }
 
 func TestBuildScheduledTaskFromArgsParsesRecurringAnchor(t *testing.T) {

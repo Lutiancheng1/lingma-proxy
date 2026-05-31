@@ -56,6 +56,9 @@ func TestBuildSystemPromptGuidesIdentityAndDriveQueries(t *testing.T) {
 		"工具失败恢复协议",
 		"下一步只允许调用 lark_skill_view",
 		"drive +inspect 成功只说明文档存在",
+		"list_authorized_paths",
+		"不要在调用这些工具前声称",
+		"delivery_mode=direct",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q", want)

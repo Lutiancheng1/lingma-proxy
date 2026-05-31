@@ -22,6 +22,7 @@ const (
 	maxScheduleTasksPerPoll   = 3
 	scheduleMessageChunkLimit = 3200
 	scheduleSilentMarker      = "[SILENT]"
+	scheduleDirectMarker      = "[DIRECT_REMINDER]"
 )
 
 type ScheduledTask struct {
@@ -54,6 +55,54 @@ func newScheduleTaskID(chatID, name string) string {
 	seed := fmt.Sprintf("%s:%s:%d:%x", chatID, name, time.Now().UnixNano(), random)
 	sum := sha256.Sum256([]byte(seed))
 	return "sched_" + hex.EncodeToString(sum[:8])
+}
+
+func encodeDirectSchedulePrompt(message string) string {
+	return scheduleDirectMarker + " " + strings.TrimSpace(message)
+}
+
+func directScheduleMessage(task ScheduledTask) (string, bool) {
+	prompt := strings.TrimSpace(task.Prompt)
+	if prompt == "" {
+		return "", false
+	}
+	if strings.HasPrefix(prompt, scheduleDirectMarker) {
+		return strings.TrimSpace(strings.TrimPrefix(prompt, scheduleDirectMarker)), true
+	}
+	if isSimpleReminderPrompt(prompt) {
+		return reminderMessageFromPrompt(prompt), true
+	}
+	return "", false
+}
+
+func isSimpleReminderPrompt(prompt string) bool {
+	text := strings.TrimSpace(prompt)
+	if text == "" {
+		return false
+	}
+	if strings.ContainsAny(text, "\n\r") {
+		return false
+	}
+	lower := strings.ToLower(text)
+	for _, marker := range []string{"总结", "搜索", "查询", "检查", "监控", "同步", "创建", "发送", "读取", "写入", "删除", "分析", "汇报", "报告", "http", "https", "url"} {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	return strings.Contains(text, "提醒") || strings.Contains(text, "叫我") || strings.Contains(text, "通知我")
+}
+
+func reminderMessageFromPrompt(prompt string) string {
+	text := strings.TrimSpace(prompt)
+	prefixes := []string{"提醒我", "提醒一下我", "提醒一下", "提醒", "叫我", "通知我"}
+	for _, prefix := range prefixes {
+		text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
+	}
+	text = strings.Trim(text, " ：:，,。.")
+	if text == "" {
+		text = strings.TrimSpace(prompt)
+	}
+	return text
 }
 
 func (m *Manager) runScheduledTaskLoop(ctx context.Context) {
@@ -117,7 +166,13 @@ func (m *Manager) runScheduledTask(parent context.Context, task ScheduledTask, m
 	runCtx, cancel := context.WithTimeout(parent, scheduleTaskTimeout)
 	defer cancel()
 	m.logf("info", "Feishu Agent 定时任务开始："+scheduleTaskLabel(task), meta)
-	output, err := m.executeScheduledLLMTask(runCtx, task, meta)
+	var output string
+	var err error
+	if directMessage, ok := directScheduleMessage(task); ok {
+		output = directMessage
+	} else {
+		output, err = m.executeScheduledLLMTask(runCtx, task, meta)
+	}
 	status := "success"
 	errText := ""
 	if err != nil {
@@ -358,9 +413,17 @@ func buildScheduledTaskFromArgs(defaultChatID, defaultModel string, args map[str
 	if prompt == "" {
 		return ScheduledTask{}, fmt.Errorf("prompt 不能为空")
 	}
+	namePrompt := prompt
+	deliveryMode := strings.ToLower(strings.TrimSpace(stringArg(args, "delivery_mode")))
+	if deliveryMode != "" && deliveryMode != "direct" && deliveryMode != "agent" {
+		return ScheduledTask{}, fmt.Errorf("delivery_mode 只支持 direct 或 agent")
+	}
+	if deliveryMode == "direct" || (deliveryMode == "" && isSimpleReminderPrompt(prompt)) {
+		prompt = encodeDirectSchedulePrompt(reminderMessageFromPrompt(prompt))
+	}
 	name := strings.TrimSpace(stringArg(args, "name"))
 	if name == "" {
-		name = summarizeText(prompt, 24)
+		name = summarizeText(reminderMessageFromPrompt(namePrompt), 24)
 	}
 	tzName := strings.TrimSpace(stringArg(args, "timezone"))
 	if tzName == "" {

@@ -160,7 +160,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "schedule_task",
-				"description": "创建、查看和管理 Feishu Agent 定时任务。仅当用户明确要求提醒、稍后执行、每天/每周/定期检查、持续监控时使用；普通飞书操作不要创建定时任务。定时任务到点后会自动执行 prompt 并投递到当前飞书聊天，任务内部最终回复会自动发送，不要再调用 lark_im_send 自行发送。",
+				"description": "创建、查看和管理 Feishu Agent 定时任务。仅当用户明确要求提醒、稍后执行、每天/每周/定期检查、持续监控时使用；普通飞书操作不要创建定时任务。纯提醒任务到点后直接投递 prompt 正文，不再请求大模型；需要搜索、总结、检查、调用工具或生成内容的任务才到点执行 agent 流程。任务内部最终回复会自动发送，不要再调用 lark_im_send 自行发送。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -172,8 +172,9 @@ func toolDefinitions() []map[string]any {
 						"name": map[string]any{"type": "string", "description": "任务名称，create 时可选"},
 						"prompt": map[string]any{
 							"type":        "string",
-							"description": "到点后要执行的完整任务描述，create 时必填。写成自包含指令，不要写“提醒我”这种缺少内容的片段。",
+							"description": "create 时必填。纯提醒时只写到点后要直接发送给用户的提醒正文，例如“吃药”；agent 任务才写成到点后要执行的完整自包含任务描述。",
 						},
+						"delivery_mode": map[string]any{"type": "string", "enum": []string{"direct", "agent"}, "description": "direct=到点直接发送 prompt，不请求大模型；agent=到点后调用模型和工具执行任务。纯提醒必须用 direct。默认会按 prompt 自动判断。"},
 						"schedule_kind": map[string]any{"type": "string", "enum": []string{"at", "every"}, "description": "at=一次性；every=固定间隔循环"},
 						"at":            map[string]any{"type": "string", "description": "首次/一次性执行时间，推荐 RFC3339，也支持 YYYY-MM-DD HH:mm"},
 						"delay_seconds": map[string]any{"type": "integer", "description": "从现在开始延迟多少秒后执行一次"},
@@ -388,7 +389,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "safe_file_read",
-				"description": "读取本地文本文件内容。只支持 Feishu Agent 高级设置允许的路径，或用户最新消息通过“授权目录/授权文件 <绝对路径>”授予的只读路径。",
+				"description": "读取本地文本文件内容。用于用户明确要求读取本机文件时。读取前如不确定权限，先调用 list_authorized_paths；不要在尝试本工具前声称没有本机文件权限。只支持 Feishu Agent 高级设置允许的路径，或用户最新消息通过“授权目录/授权文件 <绝对路径>”授予的只读路径。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -418,7 +419,7 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "safe_file_list",
-				"description": "列出本地已授权路径下的文件和子目录列表。只能列出高级设置允许的路径，或用户口述授权的只读路径。",
+				"description": "列出本地已授权路径下的文件和子目录列表。用于用户明确要求查看本机目录时。列出前如不确定权限，先调用 list_authorized_paths；不要在尝试本工具前声称没有本机文件权限。只能列出高级设置允许的路径，或用户口述授权的只读路径。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{

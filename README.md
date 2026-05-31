@@ -140,7 +140,7 @@ Compared with the original protocol proof of concept, this repository focuses on
 - **Function Calling / Tools** for both OpenAI and Anthropic clients.
 - **Tool result continuation** for multi-step agent loops.
 - **Tool stability hardening** with proxy-side routing hints, core tool examples, missed-tool retry, and common alias mapping such as `Bash` to `terminal` and `Read` to `read_file`.
-- **Anthropic streaming tool-call hardening** so streaming clients such as Claude Code receive final `tool_use` events instead of premature refusal text when tools are present.
+- **Anthropic streaming tool-call hardening** so streaming clients such as Claude Code receive parsed `tool_use` events while default streaming remains incremental; full aggregation is available with `LINGMA_AGGREGATE_TOOL_STREAM=1`.
 - **Image input** for OpenAI `image_url` and Anthropic image blocks.
 - **Local and remote image normalization** for data URLs, HTTP URLs, `file://` URLs, and absolute local paths, with automatic JPEG downscaling for large images.
 - **Remote-mode image fallback** so image requests use the proven Lingma IPC image pipeline; image + tool requests extract image context through IPC and then return to Remote API native tool calling.
@@ -840,7 +840,7 @@ Current proxy hardening includes:
 - dedicated examples for `read_file`, `search_files`, `terminal`, and `web_search`
 - automatic retry when the model says it cannot access files, terminal, or web despite tools being present
 - common tool alias normalization such as `Bash` -> `terminal`, `Read` -> `read_file`, `Grep` -> `search_files`, and `Edit` -> `patch`
-- Anthropic `stream=true` requests with tools are resolved internally before streaming the final `tool_use` blocks, which avoids sending premature "please run this command yourself" text to clients such as Claude Code.
+- Anthropic `stream=true` requests with tools keep incremental streaming by default while filtering parsed action blocks into standard `tool_use` events. Set `LINGMA_AGGREGATE_TOOL_STREAM=1` to resolve the tool turn internally before streaming the final `tool_use` blocks.
 
 In local smoke tests after this hardening, `MiniMax-M2.7`, `Kimi-K2.6`, `Qwen3.6-Plus`, and `Qwen3-Coder` all completed read/search/terminal/web/patch/vision checks. Remote API mode with `kmodel` is now the default because it avoids Lingma IDE IPC session limits and behaved better with Claude Code and Hermes-style local tools.
 
