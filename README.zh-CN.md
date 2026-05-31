@@ -49,7 +49,7 @@
 ## 当前版本
 
 <!-- VERSION:CURRENT:BEGIN -->
-当前桌面端版本：`v1.6.7`。
+当前桌面端版本：`v1.6.8`。
 
 唯一来源是 [VERSION](./VERSION)。执行 `./scripts/sync-version.sh` 会把它同步到 [desktop/wails.json](./desktop/wails.json)、桌面 UI 和面向发布的文档块。
 <!-- VERSION:CURRENT:END -->
@@ -164,7 +164,7 @@ GitHub Actions 会在 Release 中产出：
 - **工具结果接力**：支持多轮 Agent 工具调用，把工具结果继续回灌给 Lingma 生成最终回答。
 - **工具稳定性增强**：代理层自动生成工具路由表，给 `read_file` / `search_files` / `terminal` / `web_search` 注入专门示例；当模型说“无法访问 / 请手动运行 / 请粘贴文件”时自动重试工具调用。
 - **工具别名映射**：兼容常见模型输出的 `Bash` -> `terminal`、`Read` -> `read_file`、`Grep` -> `search_files`、`Edit` -> `patch`。
-- **Anthropic 流式工具调用增强**：当 Claude Code 这类客户端使用 `stream=true` 并携带 tools 时，代理会先在内部完成工具 action block 解析和拒绝重试，再输出标准 `tool_use` 流，避免提前把“请你自己运行命令”这类文本发给客户端。
+- **Anthropic 流式工具调用增强**：当 Claude Code 这类客户端使用 `stream=true` 并携带 tools 时，默认仍保持增量流式输出，同时把可解析的 action block 转成标准 `tool_use` 事件；如需先内部完成工具轮次再输出最终事件，可显式设置 `LINGMA_AGGREGATE_TOOL_STREAM=1`。
 - **图片输入**：兼容 OpenAI `image_url` 和 Anthropic base64 image block。
 - **本地图片路径兼容**：OpenAI `image_url.url` 支持 data URL、HTTP URL、`file://`、绝对路径和 `~/` 路径。
 - **图片自动压缩**：大图会自动缩放并转 JPEG，避免 Lingma 被超大 base64 卡死。
@@ -924,7 +924,7 @@ Lingma 插件本身没有公开标准 OpenAI / Anthropic Tools 协议，所以�
 - 对 `read_file`、`search_files`、`terminal`、`web_search` 注入专门示例。
 - 当模型回答“无法访问文件 / 无法联网 / 请手动运行 / 请粘贴内容”时，代理会自动追加强制工具调用提示并重试一次。
 - 自动归一化常见工具名别名：`Bash`、`Shell`、`Read`、`Grep`、`Edit`、`Fetch` 等。
-- Anthropic `stream=true` 且请求包含 tools 时，会先内部完成生成和重试，再流式输出最终 `tool_use` 事件，避免 Claude Code 这类客户端先收到普通拒绝文本。
+- Anthropic `stream=true` 且请求包含 tools 时，默认保持增量流式输出，并把可解析的 action block 转成标准 `tool_use` 事件；如需先内部完成生成和重试再输出最终 `tool_use`，可显式设置 `LINGMA_AGGREGATE_TOOL_STREAM=1`。
 
 本地压测结果：`MiniMax-M2.7`、`Kimi-K2.6`、`Qwen3.6-Plus`、`Qwen3-Coder` 均通过 read/search/terminal/web/patch/vision 烟测。当前默认推荐远端 API 模式的 `kmodel`，因为它不受 Lingma IDE IPC 会话限制，在 Claude Code 和 Hermes 这类本地 Agent 场景更自然。
 

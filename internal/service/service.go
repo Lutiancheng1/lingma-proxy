@@ -396,6 +396,7 @@ func (s *Service) generateRemoteInternal(
 	onDelta func(StreamEvent),
 	emulateTools bool,
 ) (*ChatResult, error) {
+	emulateTools = emulateTools || shouldEmulateRemoteTools(req)
 	if requestHasImages(req) {
 		if len(req.Tools) > 0 && req.ToolChoice.Mode != "none" {
 			return s.generateRemoteWithImageContext(ctx, req, onDelta)
@@ -467,7 +468,7 @@ func (s *Service) generateRemoteWithModel(
 	remoteResult, err := client.Chat(ctx, remote.ChatRequest{
 		Model:           model,
 		Prompt:          prompt,
-		Messages:        remoteMessagesFromRequest(req),
+		Messages:        remoteMessagesForChat(req, prompt, emulateTools),
 		Images:          remoteImagesFromRequest(req),
 		Stream:          onDelta != nil,
 		Temperature:     req.Temperature,
@@ -482,7 +483,7 @@ func (s *Service) generateRemoteWithModel(
 		retryResult, retryErr := client.Chat(ctx, remote.ChatRequest{
 			Model:           model,
 			Prompt:          prompt,
-			Messages:        remoteMessagesFromRequest(req),
+			Messages:        remoteMessagesForChat(req, prompt, emulateTools),
 			Images:          remoteImagesFromRequest(req),
 			Stream:          false,
 			Temperature:     req.Temperature,
@@ -515,7 +516,7 @@ func (s *Service) generateRemoteWithModel(
 			retryResult, err := client.Chat(ctx, remote.ChatRequest{
 				Model:           model,
 				Prompt:          hintPrompt,
-				Messages:        remoteMessagesFromRequest(req),
+				Messages:        remoteMessagesForChat(req, hintPrompt, emulateTools),
 				Images:          remoteImagesFromRequest(req),
 				Stream:          false,
 				Temperature:     req.Temperature,
@@ -536,6 +537,19 @@ func (s *Service) generateRemoteWithModel(
 		})
 	}
 	return result, emitted, nil
+}
+
+func shouldEmulateRemoteTools(req ChatRequest) bool {
+	return len(req.Tools) > 0 && req.ToolChoice.Mode != "none"
+}
+
+func remoteMessagesForChat(req ChatRequest, prompt string, emulateTools bool) []remote.Message {
+	if emulateTools && shouldEmulateRemoteTools(req) {
+		if prompt = strings.TrimSpace(prompt); prompt != "" {
+			return []remote.Message{{Role: "user", Content: prompt}}
+		}
+	}
+	return remoteMessagesFromRequest(req)
 }
 
 func remoteMessagesFromRequest(req ChatRequest) []remote.Message {

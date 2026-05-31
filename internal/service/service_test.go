@@ -100,7 +100,7 @@ func TestDescribeIPCSetupErrorClarifiesClosedLingmaBackend(t *testing.T) {
 	}
 }
 
-func TestBuildLingmaPromptOnlyInjectsToolingWhenEmulationEnabled(t *testing.T) {
+func TestBuildLingmaPromptInjectsToolingWhenEmulationEnabled(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{{Role: "user", Text: "查看项目结构"}},
 		Tools: []toolemulation.ToolDef{{
@@ -129,6 +129,48 @@ func TestBuildLingmaPromptOnlyInjectsToolingWhenEmulationEnabled(t *testing.T) {
 	}
 	if !strings.Contains(ipcPrompt, "```json action") || !strings.Contains(ipcPrompt, "DIRECT tool access") {
 		t.Fatalf("ipc prompt should include tool emulation:\n%s", ipcPrompt)
+	}
+}
+
+func TestShouldEmulateRemoteToolsForToolRequests(t *testing.T) {
+	req := ChatRequest{
+		Messages: []ChatMessage{{Role: "user", Text: "查看项目结构"}},
+		Tools:    []toolemulation.ToolDef{{Name: "Bash"}},
+		ToolChoice: toolemulation.ToolChoice{
+			Mode: "auto",
+		},
+	}
+	if !shouldEmulateRemoteTools(req) {
+		t.Fatal("remote tool requests should enable prompt tool emulation fallback")
+	}
+
+	req.ToolChoice = toolemulation.ToolChoice{Mode: "none"}
+	if shouldEmulateRemoteTools(req) {
+		t.Fatal("tool_choice none should disable remote prompt tool emulation")
+	}
+}
+
+func TestRemoteMessagesForChatUsesPromptWhenToolEmulationEnabled(t *testing.T) {
+	req := ChatRequest{
+		System:   "original system",
+		Messages: []ChatMessage{{Role: "user", Text: "查看项目结构"}},
+		Tools:    []toolemulation.ToolDef{{Name: "Bash"}},
+		ToolChoice: toolemulation.ToolChoice{
+			Mode: "auto",
+		},
+	}
+
+	messages := remoteMessagesForChat(req, "User: 查看项目结构\n\nDIRECT tool access\n\nAssistant:", true)
+	if len(messages) != 1 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if messages[0].Role != "user" || !strings.Contains(messages[0].Content, "DIRECT tool access") {
+		t.Fatalf("expected emulated prompt message, got %#v", messages)
+	}
+
+	plain := remoteMessagesForChat(req, "ignored", false)
+	if len(plain) != 2 || plain[0].Role != "system" || plain[1].Content != "查看项目结构" {
+		t.Fatalf("expected structured messages without emulation, got %#v", plain)
 	}
 }
 

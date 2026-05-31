@@ -88,6 +88,9 @@ func TestInjectToolingIncludesAutoToolGuidance(t *testing.T) {
 		"conceptual question",
 		"NEVER ask the user to run a command",
 		"Emit at most 5 independent tool actions",
+		"no preamble",
+		"Shell tool calls are stateless",
+		"optional commands such as `tree`",
 		"exclude node_modules",
 	} {
 		if !strings.Contains(prompt, want) {

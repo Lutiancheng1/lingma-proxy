@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased (target: v1.6.7)
+## Unreleased (target: v1.6.8)
+
+## v1.6.8 - 2026-05-31
+
+- Hardened Remote API tool calling for Claude Code-style clients: requests that include tools now enable prompt-based tool emulation fallback while still passing through native `tools/tool_choice`.
+- Fixed Remote API prompt delivery for emulated tools by sending the full tool contract as the upstream chat message when tool emulation is active, instead of building a prompt that the remote message path ignored.
+- Tightened tool instructions for local shell workflows: tool calls should be emitted before explanatory text, `cd` must be combined with the dependent command or replaced by absolute paths, dependent shell commands should not be split across calls, and optional commands such as `tree` should not be assumed available.
+- Preserved the default incremental streaming behavior for tool requests; full tool-turn aggregation remains an explicit compatibility mode via `LINGMA_AGGREGATE_TOOL_STREAM=1`.
+- Verified the fix with real Claude Code v2.1.158 pointed at a temporary Remote API proxy: the natural request to inspect `/Users/tiancheng/ai-workspace` produced an immediate Bash `tool_use` and completed against the correct directory.
+- 加强 Remote API 工具调用兼容：当 Claude Code 这类客户端请求携带 tools 时，代理会启用 prompt tool-emulation 兜底，同时继续透传原生 `tools/tool_choice`。
+- 修复 Remote API 工具提示生成后没有真正进入上游消息的问题：启用工具模拟时，完整工具契约会作为上游 chat message 发送。
+- 收紧本地 shell 工具提示：需要工具时先输出 tool call；`cd` 必须和后续命令放在同一次调用或改用绝对路径；依赖 shell 命令不能跨调用拆分；不默认假设 `tree` 等可选命令存在。
+- 保持 tools 请求默认增量流式输出；如需先内部完成工具轮次再输出最终 `tool_use`，仍通过 `LINGMA_AGGREGATE_TOOL_STREAM=1` 显式开启。
+- 已用真实 Claude Code v2.1.158 指向临时 Remote API 代理验证：自然提示检查 `/Users/tiancheng/ai-workspace` 时首轮直接产出 Bash `tool_use`，并基于正确目录结果完成回答。
 
 ## v1.6.7 - 2026-05-27
 
