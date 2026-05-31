@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased (target: v1.6.8)
+## Unreleased (target: v1.6.9)
+
+## v1.6.9 - 2026-05-31
+
+- Fixed desktop log retention so realtime log events and persisted request records keep their full bodies for detail inspection and feedback export.
+- Kept the Logs list readable by truncating only the table cell preview to 240 characters while preserving the full message for the detail view.
+- 修复桌面日志保留逻辑：实时日志事件和持久化请求记录保留完整正文，方便详情查看和反馈导出。
+- 日志列表只在表格预览层截断到 240 字符，详情视图仍展示完整消息。
 
 ## v1.6.8 - 2026-05-31
 

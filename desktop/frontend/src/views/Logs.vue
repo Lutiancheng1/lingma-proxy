@@ -23,6 +23,13 @@ const rangeAnchorIndex = ref(-1)
 const rangeEndIndex = ref(-1)
 const detailCache = new Map()
 
+const LIST_MESSAGE_LIMIT = 240
+
+function truncateMessage(text) {
+  if (!text) return ''
+  return text.length > LIST_MESSAGE_LIMIT ? text.slice(0, LIST_MESSAGE_LIMIT) + '...' : text
+}
+
 const filteredLogs = computed(() => {
   const q = search.value.trim().toLowerCase()
   return props.logs.filter((log) => {
@@ -300,7 +307,7 @@ function proceedClearLogs() {
           <span class="muted">{{ formatLogDateTime(log) }}</span>
           <span class="log-source-chip">{{ sourceLabel(log.source) }}</span>
           <strong :class="levelClass(log.level)">{{ levelLabel(log.level) }}</strong>
-          <span class="log-message-cell">{{ log.message }}</span>
+          <span class="log-message-cell">{{ truncateMessage(log.message) }}</span>
           <button class="ghost-button log-detail-button" type="button" @click="openLogDetail(log)">详情</button>
         </div>
       </div>

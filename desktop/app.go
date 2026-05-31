@@ -348,7 +348,7 @@ func (a *App) emitLogWithSource(source string, level string, message string) {
 	}
 	a.saveAppStateLocked()
 	a.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "log", summarizeLogEntry(entry))
+	runtime.EventsEmit(a.ctx, "log", entry)
 }
 
 // GetStatus returns the current proxy status
@@ -1227,10 +1227,7 @@ func trimPersistedRequests(records []RequestRecord) []RequestRecord {
 	}
 	out := make([]RequestRecord, 0, len(records)-start)
 	for _, record := range records[start:] {
-		cloned := record
-		cloned.ReqBody = trimStatePayload(record.ReqBody)
-		cloned.RespBody = trimStatePayload(record.RespBody)
-		out = append(out, cloned)
+		out = append(out, record)
 	}
 	return out
 }
