@@ -24,6 +24,7 @@ sync_doc() {
   python3 - "$token" "$title" "$json_tmp" "$tmp" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 token, title, input_path, output_path = sys.argv[1:5]
@@ -33,6 +34,13 @@ markdown = data.get("markdown")
 remote_title = data.get("title") or title
 if not markdown:
     raise SystemExit(f"missing markdown for {token}")
+
+image_count = len(re.findall(r"!\[[^\]]*\]\(", markdown))
+if image_count:
+    print(
+        f"warning: fetched {image_count} image links for {token}; do not overwrite the cloud doc from local markdown unless image handling is verified",
+        file=sys.stderr,
+    )
 
 cloud_note = (
     f"> 本文档对应飞书云盘中的云端源文档（链接：https://www.feishu.cn/docx/{token}"
