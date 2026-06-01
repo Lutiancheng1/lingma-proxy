@@ -74,6 +74,15 @@ Release builds are produced by GitHub Actions for:
 
 Feishu Bridge features live on the `feat/feishu-bridge-go` branch and are not included in the normal `main` release assets.
 
+Current preview focus:
+
+- Feishu/Lark bot messages are routed into Lingma Proxy, so the same Lingma-backed model can answer from a Feishu chat.
+- The bot can call `lark-cli` based tools for Feishu-side work such as messages, docs, calendars, knowledge bases, and related workspace operations, depending on the credentials and permissions configured locally.
+- Replies use Feishu CardKit-style streaming updates where available, so long answers can appear progressively instead of waiting for the whole generation to finish.
+- Local file access is permission-scoped. The app workspace is available by default, and extra read/write/delete paths are configured explicitly in the Feishu Agent advanced settings.
+- Reminder-style scheduled tasks can be delivered directly through the Feishu channel at the due time, while agent-style scheduled tasks can still run through the model when that behavior is needed.
+- Conversation context, tool results, imported skills, and optional MCP tools are managed on the Feishu Agent side to support longer work sessions.
+
 If you want to try or inspect the Feishu integration:
 
 1. switch to the branch:

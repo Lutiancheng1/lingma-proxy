@@ -3,7 +3,9 @@
 ## Unreleased (target: v1.6.10)
 
 - Documented the Feishu Bridge preview build path in both English and Chinese READMEs, including the branch name and GitHub Actions artifact workflow.
+- Added a short Feishu Bridge preview feature summary covering bot routing, Feishu tools, streaming cards, scoped local file access, reminders, and context/tool memory.
 - 在中英文 README 补充飞书分支预览包说明，明确分支名、Actions artifact 获取路径以及与主分支正式 Release 的区别。
+- 补充飞书分支预览能力简介，覆盖 Bot 接入、飞书工具、流式卡片、本地文件分级授权、定时提醒以及上下文 / 工具记忆。
 
 ## v1.6.9 - 2026-05-31
 
