@@ -652,6 +652,29 @@ func (s *agentStore) DueScheduledTasks(ctx context.Context, now time.Time, limit
 	return scanScheduledTasks(rows)
 }
 
+func (s *agentStore) NextScheduledTaskTime(ctx context.Context) (time.Time, bool, error) {
+	if s == nil || s.db == nil {
+		return time.Time{}, false, nil
+	}
+	var value string
+	err := s.db.QueryRowContext(ctx, `SELECT next_run_at
+		FROM scheduled_tasks
+		WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at != ''
+		ORDER BY next_run_at
+		LIMIT 1`).Scan(&value)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	next, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return next, true, nil
+}
+
 func (s *agentStore) FinishScheduledTaskRun(ctx context.Context, task ScheduledTask, status string, output string, errText string, finishedAt time.Time, nextRunAt string, enabled bool) error {
 	if s == nil || s.db == nil || strings.TrimSpace(task.ID) == "" {
 		return nil

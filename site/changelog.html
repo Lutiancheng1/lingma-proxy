@@ -15,6 +15,33 @@
       <section class="panel">
         <h1>更新日志</h1>
         <article class="release-entry">
+          <h2>v1.6.9 · Feishu Agent 稳定版</h2>
+          <p>本次版本集中修复飞书 Agent 的工具感知、本机文件权限、定时任务和 Prompt Pack 下发链路，并新增 AI HOT / AI Radar 内置能力。</p>
+          <h3>工具与权限</h3>
+          <ul>
+            <li>强化模型工具感知与系统提示词路由，减少模型误判“没有工具”或“没有本机文件权限”的情况。</li>
+            <li>本机文件操作会先检查授权路径，再按 read / write / delete 权限执行，避免在工具可用时直接拒绝。</li>
+            <li>思考过程改为折叠面板展示，保留排障信息，同时减少可见重复回复。</li>
+          </ul>
+          <h3>定时任务</h3>
+          <ul>
+            <li>调度器从固定轮询改为最近任务 timer，创建、删除、暂停、恢复后会立即唤醒重新计算执行时间。</li>
+            <li>纯提醒任务到点后直接投递提醒正文，不再二次请求模型。</li>
+            <li>定时任务消息升级为 CardKit 2.0，并具备 legacy card 与 Markdown 三级降级。</li>
+          </ul>
+          <h3>AI 热点能力</h3>
+          <ul>
+            <li>内置 AI Radar 日报定时任务，使用 Agent 默认 workspace 和 AI HOT selected 信号，不需要本机项目路径、虚拟环境或脚本。</li>
+            <li>新增即时 AI HOT 查询工具，用户问“今天 AI 圈有什么”“最近 AI 热点”等问题时可直接抓取真实标题、摘要、分类和链接。</li>
+          </ul>
+          <h3>内部 R2 与 Prompt Pack</h3>
+          <ul>
+            <li>修复 R2 Prompt Pack 打包模块列表，新增的 schedule_templates 会随远端 Prompt Pack 一起发布。</li>
+            <li>App 端增加旧 Prompt Pack 缺模块时的本地嵌入兜底，避免远端规则落后导致新版本启动时报错。</li>
+            <li>内部 OTA manifest 和 Prompt Pack 版本同步迭代，便于公司内部渠道分发。</li>
+          </ul>
+        </article>
+        <article class="release-entry">
           <h2>v1.6.8 · Feishu Agent 稳定版</h2>
           <p>本次版本迭代完成了从 Bridge 到 Agent 架构更名与优化重构，重点打通了 Cloudflare Pages 非阻断部署及 R2 资源发布。</p>
           <h3>重命名与重构</h3>

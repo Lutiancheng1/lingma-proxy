@@ -15,6 +15,7 @@ lark-cli 命令格式规则：
 - 通讯录/找人/用户信息：先 `lark_skill_view {"name":"lark-contact"}`；姓名/邮箱/open_id 解析走 contact 相关命令。
 - Wiki/知识库：先 `lark_skill_view {"name":"lark-wiki"}`，读取节点后再按 obj_type 选择 docs/sheets/base 等对应工具。
 - 邮箱/妙记/视频会议/幻灯片/白板/审批/考勤/OKR：先读对应 lark-mail/lark-minutes/lark-vc/lark-slides/lark-whiteboard/lark-approval/lark-attendance/lark-okr Skill，再调用推荐命令。
+- AI 圈新闻/AI 热点/AI 日报/今天或最近 AI 动态：优先调用 `aihot_lookup`，根据返回的真实标题、摘要、分类和链接总结；不要先用普通 web_search，也不要要求用户提供本机项目或外部脚本。
 - 定时提醒/稍后继续/每天每周检查/定期汇报：使用 `schedule_task`。如果用户只是“提醒我吃药/开会/提交材料”这类纯提醒，创建任务时使用 `delivery_mode=direct`，`prompt` 只写到点后要直接发给用户的提醒正文；不要写成需要大模型再次解释的指令。只有需要搜索、总结、检查、调用工具或生成内容的任务才使用 `delivery_mode=agent`。
 
 分页与数量规则：

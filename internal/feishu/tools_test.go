@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildToolCommandNormalizesCommonShortcutMistakes(t *testing.T) {
@@ -264,6 +265,44 @@ func TestBuiltinWebFetchRejectsUnsupportedScheme(t *testing.T) {
 	result := executeBuiltinWebTool(context.Background(), DefaultConfig(), "web_fetch", map[string]any{"url": "file:///etc/passwd"})
 	if !result.IsError || !strings.Contains(result.Output, "only http/https") {
 		t.Fatalf("expected scheme rejection, got %#v", result)
+	}
+}
+
+func TestAIHotLookupToolFetchesSelectedItems(t *testing.T) {
+	previousBaseURL := aiRadarBaseURL
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/public/items" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		if r.URL.Query().Get("mode") != "selected" || r.URL.Query().Get("since") == "" {
+			t.Fatalf("query=%s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"items":[{"id":"1","title":"今日模型","url":"https://example.com/model","summary":"模型能力更新","category":"ai-models","publishedAt":%q},{"id":"2","title":"行业消息","url":"https://example.com/news","summary":"行业动态","category":"industry","publishedAt":%q}],"hasNext":false}`,
+			time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
+			time.Now().UTC().Add(-2*time.Hour).Format(time.RFC3339),
+		)
+	}))
+	defer server.Close()
+	aiRadarBaseURL = server.URL
+	t.Cleanup(func() { aiRadarBaseURL = previousBaseURL })
+
+	result := executeToolContextWithConfig(context.Background(), DefaultConfig(), "aihot_lookup", map[string]any{
+		"range": "last_24h",
+		"limit": float64(1),
+	})
+	if result.IsError {
+		t.Fatalf("aihot_lookup failed: %s", result.Output)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.Output), &payload); err != nil {
+		t.Fatalf("aihot_lookup output is not json: %v\n%s", err, result.Output)
+	}
+	if payload["kind"] != "aihot_lookup" || payload["total"].(float64) != 2 || payload["returned"].(float64) != 1 {
+		t.Fatalf("unexpected aihot payload: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "今日模型") || !strings.Contains(result.Output, "AI HOT 精选") {
+		t.Fatalf("missing AI HOT content: %s", result.Output)
 	}
 }
 

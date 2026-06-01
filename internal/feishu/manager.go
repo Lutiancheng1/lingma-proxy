@@ -231,7 +231,7 @@ func NewManager(opts ManagerOptions) *Manager {
 		mcp:            NewMCPRuntime(),
 		skillApprovals: make(map[string]map[string]struct{}),
 		skillViews:     make(map[string]map[string]struct{}),
-		scheduleRunner: scheduleRunnerState{running: make(map[string]struct{})},
+		scheduleRunner: scheduleRunnerState{running: make(map[string]struct{}), wake: make(chan struct{}, 1)},
 	}
 	if strings.TrimSpace(opts.DataDir) != "" {
 		if store, err := newAgentStore(opts.DataDir); err == nil {
@@ -1304,6 +1304,7 @@ conversation:
 		// proxy doesn't break replies entirely.
 		var streamingReply strings.Builder
 		streamHadText := false
+		streamSawToolCall := false
 		var resp *llmResponse
 		var err error
 		requestMessages := applyBudgetCompaction(messages, cfg.Context, budget, nil)
@@ -1327,9 +1328,16 @@ conversation:
 					if chunk == "" {
 						return
 					}
+					if streamSawToolCall {
+						return
+					}
 					streamingReply.WriteString(chunk)
 					streamHadText = true
 					card.SetReply(streamingReply.String())
+				},
+				onToolCallProgress: func() {
+					streamSawToolCall = true
+					card.SetReply("")
 				},
 			})
 		}
@@ -2344,7 +2352,7 @@ func (m *Manager) handleConversationCommand(ctx context.Context, chatID string, 
 			"- /skill <name>：查看某个 Skill 摘要\n" +
 			"- /reload-skills：重新扫描用户导入 Skills 和官方 lark-cli Skills\n" +
 			"- /skill-run <skill> <script> confirm：确认执行 Skill scripts/ 下的脚本\n" +
-			"- /schedule：查看当前会话定时任务；支持 list/delete/pause/resume/run\n" +
+			"- /schedule：查看当前会话定时任务；支持 list/templates/delete/pause/resume/run\n" +
 			"- /retry：用最近一条用户消息重新跑一次（先自动 /undo）\n" +
 			"- /undo：撤回最近一轮（assistant + 关联 tool 消息）\n" +
 			"- /summary：查看本会话摘要\n" +
@@ -3861,6 +3869,67 @@ func (m *Manager) sendCardEntityMessage(ctx context.Context, rootMessageID strin
 	id := strings.TrimSpace(firstJSONStringField(output, "message_id"))
 	if id == "" {
 		return "", fmt.Errorf("send card entity message: no message_id in response: %s", strings.TrimSpace(decodeCommandOutput(output)))
+	}
+	return id, nil
+}
+
+func (m *Manager) sendCardEntityToChat(ctx context.Context, chatID string, cardEntityID string) (string, error) {
+	content, err := json.Marshal(map[string]any{
+		"type": "card",
+		"data": map[string]any{"card_id": cardEntityID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal card entity content: %w", err)
+	}
+	var output []byte
+	err = m.runFeishuCardOperation(ctx, "cardkit send scheduled card", func(opCtx context.Context) error {
+		cmd := commandContextWithEnv(opCtx, "lark-cli", "im", "+messages-send",
+			"--as", "bot",
+			"--chat-id", chatID,
+			"--msg-type", "interactive",
+			"--content", string(content),
+		)
+		var runErr error
+		output, runErr = cmd.CombinedOutput()
+		return runErr
+	})
+	if err != nil {
+		if id := strings.TrimSpace(firstJSONStringField(output, "message_id")); id != "" {
+			m.logf("warn", "Feishu Agent send scheduled card 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{ChatID: chatID})
+			return id, nil
+		}
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
+	}
+	id := strings.TrimSpace(firstJSONStringField(output, "message_id"))
+	if id == "" {
+		return "", fmt.Errorf("send scheduled card: no message_id in response: %s", strings.TrimSpace(decodeCommandOutput(output)))
+	}
+	return id, nil
+}
+
+func (m *Manager) sendLegacyCardToChat(ctx context.Context, chatID string, cardJSON string) (string, error) {
+	var output []byte
+	err := m.runFeishuCardOperation(ctx, "legacy scheduled card", func(opCtx context.Context) error {
+		cmd := commandContextWithEnv(opCtx, "lark-cli", "im", "+messages-send",
+			"--as", "bot",
+			"--chat-id", chatID,
+			"--msg-type", "interactive",
+			"--content", cardJSON,
+		)
+		var runErr error
+		output, runErr = cmd.CombinedOutput()
+		return runErr
+	})
+	if err != nil {
+		if id := strings.TrimSpace(firstJSONStringField(output, "message_id")); id != "" {
+			m.logf("warn", "Feishu Agent send legacy scheduled card 进程异常但已返回 message_id，按成功处理："+err.Error(), LogMeta{ChatID: chatID})
+			return id, nil
+		}
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(decodeCommandOutput(output)))
+	}
+	id := strings.TrimSpace(firstJSONStringField(output, "message_id"))
+	if id == "" {
+		return "", fmt.Errorf("send legacy scheduled card: no message_id in response: %s", strings.TrimSpace(decodeCommandOutput(output)))
 	}
 	return id, nil
 }

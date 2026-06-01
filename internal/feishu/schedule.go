@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	schedulePollInterval      = 15 * time.Second
+	scheduleFallbackPoll      = 60 * time.Second
+	scheduleMinWakeDelay      = 100 * time.Millisecond
 	scheduleTaskTimeout       = 10 * time.Minute
 	scheduleMaxToolRounds     = 8
 	defaultScheduleTimezone   = "Asia/Shanghai"
@@ -23,6 +24,8 @@ const (
 	scheduleMessageChunkLimit = 3200
 	scheduleSilentMarker      = "[SILENT]"
 	scheduleDirectMarker      = "[DIRECT_REMINDER]"
+	scheduleBuiltinMarker     = "[BUILTIN_SCHEDULE_TEMPLATE]"
+	scheduleTemplateAIRadar   = "ai_radar_daily"
 )
 
 type ScheduledTask struct {
@@ -47,6 +50,7 @@ type ScheduledTask struct {
 
 type scheduleRunnerState struct {
 	running map[string]struct{}
+	wake    chan struct{}
 }
 
 func newScheduleTaskID(chatID, name string) string {
@@ -73,6 +77,33 @@ func directScheduleMessage(task ScheduledTask) (string, bool) {
 		return reminderMessageFromPrompt(prompt), true
 	}
 	return "", false
+}
+
+type builtinSchedulePayload struct {
+	Template string `json:"template"`
+	State    string `json:"state,omitempty"`
+}
+
+func encodeBuiltinSchedulePrompt(payload builtinSchedulePayload) string {
+	data, _ := json.Marshal(payload)
+	return scheduleBuiltinMarker + " " + string(data)
+}
+
+func decodeBuiltinSchedulePrompt(prompt string) (builtinSchedulePayload, bool) {
+	prompt = strings.TrimSpace(prompt)
+	if !strings.HasPrefix(prompt, scheduleBuiltinMarker) {
+		return builtinSchedulePayload{}, false
+	}
+	raw := strings.TrimSpace(strings.TrimPrefix(prompt, scheduleBuiltinMarker))
+	if raw == "" {
+		return builtinSchedulePayload{}, false
+	}
+	var payload builtinSchedulePayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return builtinSchedulePayload{}, false
+	}
+	payload.Template = strings.TrimSpace(payload.Template)
+	return payload, payload.Template != ""
 }
 
 func isSimpleReminderPrompt(prompt string) bool {
@@ -109,17 +140,71 @@ func (m *Manager) runScheduledTaskLoop(ctx context.Context) {
 	if m.store == nil {
 		return
 	}
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
 	for {
+		m.runDueScheduledTasks(ctx)
+		wait := m.nextScheduleWait(ctx, time.Now())
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			return
 		case <-timer.C:
-			m.runDueScheduledTasks(ctx)
-			timer.Reset(schedulePollInterval)
+		case <-m.scheduleWakeChannel():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		}
 	}
+}
+
+func (m *Manager) scheduleWakeChannel() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.scheduleRunner.wake == nil {
+		m.scheduleRunner.wake = make(chan struct{}, 1)
+	}
+	return m.scheduleRunner.wake
+}
+
+func (m *Manager) wakeScheduledTaskLoop() {
+	m.mu.Lock()
+	ch := m.scheduleRunner.wake
+	if ch == nil {
+		ch = make(chan struct{}, 1)
+		m.scheduleRunner.wake = ch
+	}
+	m.mu.Unlock()
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Manager) nextScheduleWait(ctx context.Context, now time.Time) time.Duration {
+	next, ok, err := m.store.NextScheduledTaskTime(ctx)
+	if err != nil {
+		m.logf("warn", "Feishu Agent 最近定时任务读取失败："+err.Error())
+		return scheduleFallbackPoll
+	}
+	if !ok {
+		return scheduleFallbackPoll
+	}
+	wait := next.Sub(now)
+	if wait < scheduleMinWakeDelay {
+		return scheduleMinWakeDelay
+	}
+	if wait > scheduleFallbackPoll {
+		return scheduleFallbackPoll
+	}
+	return wait
 }
 
 func (m *Manager) runDueScheduledTasks(ctx context.Context) {
@@ -168,7 +253,9 @@ func (m *Manager) runScheduledTask(parent context.Context, task ScheduledTask, m
 	m.logf("info", "Feishu Agent 定时任务开始："+scheduleTaskLabel(task), meta)
 	var output string
 	var err error
-	if directMessage, ok := directScheduleMessage(task); ok {
+	if _, ok := decodeBuiltinSchedulePrompt(task.Prompt); ok {
+		output, err = m.executeBuiltinScheduledTask(runCtx, task, meta)
+	} else if directMessage, ok := directScheduleMessage(task); ok {
 		output = directMessage
 	} else {
 		output, err = m.executeScheduledLLMTask(runCtx, task, meta)
@@ -198,6 +285,19 @@ func (m *Manager) runScheduledTask(parent context.Context, task ScheduledTask, m
 		}
 	}
 	m.logf("info", "Feishu Agent 定时任务结束："+scheduleTaskLabel(task)+" status="+status, meta)
+}
+
+func (m *Manager) executeBuiltinScheduledTask(ctx context.Context, task ScheduledTask, meta LogMeta) (string, error) {
+	payload, ok := decodeBuiltinSchedulePrompt(task.Prompt)
+	if !ok {
+		return "", fmt.Errorf("定时任务模板配置无效")
+	}
+	switch payload.Template {
+	case scheduleTemplateAIRadar:
+		return m.executeNativeAIRadarDailyTask(ctx, payload, meta)
+	default:
+		return "", fmt.Errorf("未知内置定时任务模板：%s", payload.Template)
+	}
 }
 
 func (m *Manager) executeScheduledLLMTask(ctx context.Context, task ScheduledTask, meta LogMeta) (string, error) {
@@ -298,6 +398,16 @@ func (m *Manager) sendScheduledTaskMessage(ctx context.Context, task ScheduledTa
 	if strings.TrimSpace(task.Name) != "" {
 		title = "定时任务：" + strings.TrimSpace(task.Name)
 	}
+	if err := m.sendScheduledTaskCardV2(ctx, title, task, body); err == nil {
+		return nil
+	} else {
+		m.logf("warn", "Feishu Agent 定时任务 CardKit 投递失败，回退 legacy card："+err.Error(), LogMeta{SessionID: task.ID, ChatID: task.ChatID})
+	}
+	if err := m.sendScheduledTaskLegacyCard(ctx, title, task, body); err == nil {
+		return nil
+	} else {
+		m.logf("warn", "Feishu Agent 定时任务 legacy card 投递失败，回退 Markdown："+err.Error(), LogMeta{SessionID: task.ID, ChatID: task.ChatID})
+	}
 	full := "**" + title + "**\n\n" + body
 	parts := splitMarkdownReply(full, scheduleMessageChunkLimit)
 	for i, part := range parts {
@@ -320,6 +430,60 @@ func (m *Manager) sendScheduledTaskMessage(ctx context.Context, task ScheduledTa
 	return nil
 }
 
+func (m *Manager) sendScheduledTaskCardV2(ctx context.Context, title string, task ScheduledTask, body string) error {
+	parts := splitMarkdownReply(body, scheduleMessageChunkLimit)
+	for i, part := range parts {
+		partTitle := title
+		if len(parts) > 1 {
+			partTitle = fmt.Sprintf("%s（%d/%d）", title, i+1, len(parts))
+		}
+		cardJSON, err := renderFinalCardV2(cardState{
+			Title:       partTitle,
+			Status:      "done",
+			StatusLabel: "已提醒",
+			Model:       strings.TrimSpace(task.Model),
+			Reply:       part,
+			Updated:     time.Now(),
+		})
+		if err != nil {
+			return err
+		}
+		entityID, err := m.createCardEntity(ctx, cardJSON)
+		if err != nil {
+			return err
+		}
+		if _, err := m.sendCardEntityToChat(ctx, task.ChatID, entityID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) sendScheduledTaskLegacyCard(ctx context.Context, title string, task ScheduledTask, body string) error {
+	parts := splitMarkdownReply(body, scheduleMessageChunkLimit)
+	for i, part := range parts {
+		partTitle := title
+		if len(parts) > 1 {
+			partTitle = fmt.Sprintf("%s（%d/%d）", title, i+1, len(parts))
+		}
+		cardJSON, err := renderCardV1(cardState{
+			Title:       partTitle,
+			Status:      "done",
+			StatusLabel: "已提醒",
+			Model:       strings.TrimSpace(task.Model),
+			Reply:       part,
+			Updated:     time.Now(),
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := m.sendLegacyCardToChat(ctx, task.ChatID, cardJSON); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *Manager) executeScheduleTool(ctx context.Context, chatID string, defaultModel string, args map[string]any) ToolExecutionResult {
 	if m.store == nil {
 		return ToolExecutionResult{Output: "[error] 定时任务存储未初始化", IsError: true}
@@ -329,6 +493,8 @@ func (m *Manager) executeScheduleTool(ctx context.Context, chatID string, defaul
 		action = "list"
 	}
 	switch action {
+	case "templates":
+		return ToolExecutionResult{Output: renderBuiltInScheduleTemplates()}
 	case "create":
 		task, err := buildScheduledTaskFromArgs(chatID, defaultModel, args, time.Now())
 		if err != nil {
@@ -337,9 +503,28 @@ func (m *Manager) executeScheduleTool(ctx context.Context, chatID string, defaul
 		if err := m.store.SaveScheduledTask(ctx, task); err != nil {
 			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 		}
+		m.wakeScheduledTaskLoop()
 		return ToolExecutionResult{Output: scheduleTaskJSON(map[string]any{
 			"ok":          true,
 			"action":      "create",
+			"task_id":     task.ID,
+			"name":        task.Name,
+			"next_run_at": task.NextRunAt,
+			"schedule":    scheduleTaskLabel(task),
+		})}
+	case "create_builtin":
+		task, err := buildBuiltinScheduledTaskFromArgs(chatID, defaultModel, args, time.Now())
+		if err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		if err := m.store.SaveScheduledTask(ctx, task); err != nil {
+			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
+		}
+		m.wakeScheduledTaskLoop()
+		return ToolExecutionResult{Output: scheduleTaskJSON(map[string]any{
+			"ok":          true,
+			"action":      "create_builtin",
+			"template":    scheduleTemplateAIRadar,
 			"task_id":     task.ID,
 			"name":        task.Name,
 			"next_run_at": task.NextRunAt,
@@ -362,6 +547,7 @@ func (m *Manager) executeScheduleTool(ctx context.Context, chatID string, defaul
 		if err := m.store.DeleteScheduledTask(ctx, id); err != nil {
 			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 		}
+		m.wakeScheduledTaskLoop()
 		return ToolExecutionResult{Output: "已删除定时任务：" + id}
 	case "pause", "resume":
 		id := stringArg(args, "task_id")
@@ -375,6 +561,7 @@ func (m *Manager) executeScheduleTool(ctx context.Context, chatID string, defaul
 		if err := m.store.SetScheduledTaskEnabled(ctx, id, enabled); err != nil {
 			return ToolExecutionResult{Output: "[error] " + err.Error(), IsError: true}
 		}
+		m.wakeScheduledTaskLoop()
 		if enabled {
 			return ToolExecutionResult{Output: "已恢复定时任务：" + id}
 		}
@@ -478,6 +665,70 @@ func buildScheduledTaskFromArgs(defaultChatID, defaultModel string, args map[str
 		CreatedAt:      now.Format(time.RFC3339),
 		UpdatedAt:      now.Format(time.RFC3339),
 	}, nil
+}
+
+func buildBuiltinScheduledTaskFromArgs(defaultChatID, defaultModel string, args map[string]any, now time.Time) (ScheduledTask, error) {
+	template := strings.TrimSpace(stringArg(args, "template"))
+	if template == "" {
+		return ScheduledTask{}, fmt.Errorf("template 不能为空")
+	}
+	if template != scheduleTemplateAIRadar {
+		return ScheduledTask{}, fmt.Errorf("未知内置模板：%s", template)
+	}
+	prompt := encodeBuiltinSchedulePrompt(builtinSchedulePayload{
+		Template: template,
+		State:    strings.TrimSpace(stringArg(args, "state")),
+	})
+	nextArgs := cloneStringAnyMap(args)
+	nextArgs["prompt"] = prompt
+	if strings.TrimSpace(stringArg(nextArgs, "name")) == "" {
+		nextArgs["name"] = "AI Radar 日报"
+	}
+	if strings.TrimSpace(stringArg(nextArgs, "schedule_kind")) == "" {
+		nextArgs["schedule_kind"] = "every"
+	}
+	if intArg(nextArgs, "every_seconds") <= 0 {
+		nextArgs["every_seconds"] = float64(86400)
+	}
+	if strings.TrimSpace(stringArg(nextArgs, "timezone")) == "" {
+		nextArgs["timezone"] = defaultScheduleTimezone
+	}
+	if strings.TrimSpace(stringArg(nextArgs, "at")) == "" && intArg(nextArgs, "delay_seconds") <= 0 {
+		loc, err := time.LoadLocation(strings.TrimSpace(stringArg(nextArgs, "timezone")))
+		if err != nil {
+			return ScheduledTask{}, fmt.Errorf("timezone 无效：%s", stringArg(nextArgs, "timezone"))
+		}
+		nextArgs["at"] = defaultDailyAnchor(now, loc, 10, 0)
+	}
+	return buildScheduledTaskFromArgs(defaultChatID, defaultModel, nextArgs, now)
+}
+
+func cloneStringAnyMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func defaultDailyAnchor(now time.Time, loc *time.Location, hour int, minute int) string {
+	local := now.In(loc)
+	anchor := time.Date(local.Year(), local.Month(), local.Day(), hour, minute, 0, 0, loc)
+	if !anchor.After(now) {
+		anchor = anchor.Add(24 * time.Hour)
+	}
+	return anchor.Format("2006-01-02 15:04:05")
+}
+
+func renderBuiltInScheduleTemplates() string {
+	return strings.Join([]string{
+		"内置定时任务模板：",
+		"- ai_radar_daily：在 Feishu Agent 默认 workspace 中抓取 AI HOT selected 信号，并把日报直接投递到当前飞书聊天。",
+		"  - 默认不启用，必须由用户明确创建。",
+		"  - 默认不需要项目路径；状态文件写入 app 可读写目录下的 ai-radar/state.json。",
+		"  - 默认时间：每天 10:00，Asia/Shanghai。",
+		"  - 执行边界：只使用内置抓取与格式化逻辑，不执行外部项目或任意 shell。",
+	}, "\n")
 }
 
 func computeInitialScheduleRun(now time.Time, loc *time.Location, kind string, atText string, delaySeconds int, everySeconds int) (time.Time, string, error) {
@@ -637,8 +888,11 @@ func (m *Manager) commandScheduleText(ctx context.Context, chatID string, model 
 		return renderScheduledTasks(tasks)
 	}
 	action := strings.ToLower(args[0])
+	if action == "templates" || action == "template" {
+		return renderBuiltInScheduleTemplates()
+	}
 	if len(args) < 2 {
-		return "用法：/schedule list | /schedule delete <id> | /schedule pause <id> | /schedule resume <id> | /schedule run <id>"
+		return "用法：/schedule list | /schedule templates | /schedule delete <id> | /schedule pause <id> | /schedule resume <id> | /schedule run <id>"
 	}
 	id := strings.TrimSpace(args[1])
 	switch action {
@@ -646,11 +900,13 @@ func (m *Manager) commandScheduleText(ctx context.Context, chatID string, model 
 		if err := m.store.DeleteScheduledTask(ctx, id); err != nil {
 			return "删除失败：" + err.Error()
 		}
+		m.wakeScheduledTaskLoop()
 		return "已删除定时任务：" + id
 	case "pause":
 		if err := m.store.SetScheduledTaskEnabled(ctx, id, false); err != nil {
 			return "暂停失败：" + err.Error()
 		}
+		m.wakeScheduledTaskLoop()
 		return "已暂停定时任务：" + id
 	case "resume":
 		task, err := m.store.GetScheduledTask(ctx, id)
@@ -667,6 +923,7 @@ func (m *Manager) commandScheduleText(ctx context.Context, chatID string, model 
 		if err := m.store.SetScheduledTaskEnabled(ctx, id, true); err != nil {
 			return "恢复失败：" + err.Error()
 		}
+		m.wakeScheduledTaskLoop()
 		return "已恢复定时任务：" + id
 	case "run":
 		task, err := m.store.GetScheduledTask(ctx, id)
@@ -688,6 +945,6 @@ func (m *Manager) commandScheduleText(ctx context.Context, chatID string, model 
 		}()
 		return "已触发定时任务：" + id
 	default:
-		return "用法：/schedule list | /schedule delete <id> | /schedule pause <id> | /schedule resume <id> | /schedule run <id>"
+		return "用法：/schedule list | /schedule templates | /schedule delete <id> | /schedule pause <id> | /schedule resume <id> | /schedule run <id>"
 	}
 }

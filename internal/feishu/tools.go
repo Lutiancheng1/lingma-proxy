@@ -131,6 +131,35 @@ func toolDefinitions() []map[string]any {
 		{
 			"type": "function",
 			"function": map[string]any{
+				"name":        "aihot_lookup",
+				"description": "查询 AI HOT 精选 AI 圈资讯。用户问“今天 AI 圈有什么”“最近 AI 新闻”“AI 热点/日报/动态”时优先使用本工具；它会直接抓取 AI HOT selected 信号，不需要 web_search、外部 skill、本机项目路径或 shell。",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"range": map[string]any{
+							"type":        "string",
+							"enum":        []string{"today", "last_24h"},
+							"description": "查询范围。today=按 timezone 的今天零点到现在；last_24h=最近 24 小时。默认 today。",
+						},
+						"limit": map[string]any{
+							"type":        "integer",
+							"description": "最多返回多少条，默认 20，最大 50。",
+						},
+						"category": map[string]any{
+							"type":        "string",
+							"description": "可选分类关键词，例如 模型、产品、工具、行业、论文、观点。为空返回全部。",
+						},
+						"timezone": map[string]any{
+							"type":        "string",
+							"description": "today 范围使用的时区，默认 Asia/Shanghai。",
+						},
+					},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
 				"name":        "web_fetch",
 				"description": "读取公开 HTTP/HTTPS URL 内容。适合抓取网页、公开 JSON 或 Markdown。默认只做 GET；不要用它访问飞书内部云文档，飞书文档优先用 lark_docs_fetch。",
 				"parameters": map[string]any{
@@ -160,16 +189,25 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "schedule_task",
-				"description": "创建、查看和管理 Feishu Agent 定时任务。仅当用户明确要求提醒、稍后执行、每天/每周/定期检查、持续监控时使用；普通飞书操作不要创建定时任务。纯提醒任务到点后直接投递 prompt 正文，不再请求大模型；需要搜索、总结、检查、调用工具或生成内容的任务才到点执行 agent 流程。任务内部最终回复会自动发送，不要再调用 lark_im_send 自行发送。",
+				"description": "创建、查看和管理 Feishu Agent 定时任务。仅当用户明确要求提醒、稍后执行、每天/每周/定期检查、持续监控时使用；普通飞书操作不要创建定时任务。纯提醒任务到点后直接投递 prompt 正文，不再请求大模型；需要搜索、总结、检查、调用工具或生成内容的任务才到点执行 agent 流程。内置任务模板默认不启用，用户明确要求启用 AI Radar 日报等模板时用 create_builtin。任务内部最终回复会自动发送，不要再调用 lark_im_send 自行发送。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"action": map[string]any{"type": "string", "enum": []string{"create", "list", "delete", "pause", "resume", "run_now"}, "description": "操作类型"},
+						"action": map[string]any{"type": "string", "enum": []string{"create", "create_builtin", "templates", "list", "delete", "pause", "resume", "run_now"}, "description": "操作类型。create_builtin 用于创建内置模板任务，如 ai_radar_daily。"},
 						"task_id": map[string]any{
 							"type":        "string",
 							"description": "已有任务 ID。delete/pause/resume/run_now 时必填",
 						},
 						"name": map[string]any{"type": "string", "description": "任务名称，create 时可选"},
+						"template": map[string]any{
+							"type":        "string",
+							"enum":        []string{"ai_radar_daily"},
+							"description": "内置模板名称。create_builtin 时必填；ai_radar_daily=在 Feishu Agent 默认 workspace 抓取 AI HOT selected 信号并投递日报。",
+						},
+						"state": map[string]any{
+							"type":        "string",
+							"description": "可选状态文件路径。ai_radar_daily 默认使用 Feishu Agent workspace 下的 ai-radar/state.json。",
+						},
 						"prompt": map[string]any{
 							"type":        "string",
 							"description": "create 时必填。纯提醒时只写到点后要直接发送给用户的提醒正文，例如“吃药”；agent 任务才写成到点后要执行的完整自包含任务描述。",
@@ -870,6 +908,8 @@ func executeToolContextWithConfig(parent context.Context, cfg Config, toolName s
 	switch toolName {
 	case "web_search", "web_fetch", "weather_lookup":
 		return executeBuiltinWebTool(parent, cfg, toolName, args)
+	case "aihot_lookup":
+		return executeAIHotLookupTool(parent, args)
 	case "safe_file_read", "safe_file_write", "safe_file_list", "safe_file_delete", "authorize_local_path", "list_authorized_paths":
 		return executeSafeFileTool(parent, cfg, toolName, args)
 	}

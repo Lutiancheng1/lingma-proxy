@@ -86,7 +86,7 @@ func classifyToolResult(toolName, content string, isError bool) toolResultHandli
 		return toolResultPreserve
 	case "lark_sheets_read":
 		return toolResultPreserve
-	case "web_search", "web_fetch":
+	case "web_search", "web_fetch", "aihot_lookup":
 		return toolResultPreserve
 	case "lark_im_search":
 		return toolResultPreserve
@@ -169,7 +169,7 @@ func extractToolResultSummary(toolName, content string) string {
 			records, _ = payload["items"].([]any)
 		}
 		lines = append(lines, fmt.Sprintf("记录数量：%d", len(records)))
-	case "web_search":
+	case "web_search", "aihot_lookup":
 		results, _ := payload["results"].([]any)
 		if results == nil {
 			results, _ = payload["items"].([]any)

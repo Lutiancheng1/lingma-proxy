@@ -1,6 +1,29 @@
 # Changelog
 
-## Unreleased (target: v1.6.8)
+## Unreleased (target: v1.6.9)
+
+## v1.6.9 - 2026-06-01
+
+- Feishu Agent branch only; no GitHub Release assets are published from this branch.
+- Fixed model tool-awareness issues by strengthening the system prompt and tool schema routing so available local tools are surfaced through the actual function list instead of relying on generic capability text.
+- Fixed local file permission behavior: the Agent now checks authorized paths before answering file-operation requests and no longer claims it has no local filesystem access when safe file tools are available.
+- Collapsed thinking output into CardKit panels, reducing duplicated visible replies while still preserving tool/thought traces for debugging.
+- Improved scheduled task precision by replacing fixed polling with nearest-task timers and wakeups after create/delete/pause/resume operations.
+- Changed simple reminders to direct delivery: reminders such as "2 minutes later remind me to take medicine" now send the reminder text directly instead of calling the model again.
+- Upgraded scheduled task messages to CardKit 2.0 with legacy card and Markdown fallback.
+- Added fully built-in AI Radar daily schedules backed by the Agent workspace and AI HOT selected signals; no external project path, virtualenv, or shell runner is required.
+- Added the instant `aihot_lookup` tool so questions like "what happened in AI today" use AI HOT selected signals directly.
+- Fixed Prompt Pack compatibility and R2 packaging so newly added prompt modules such as `schedule_templates` are included in internal releases and older remote packs can fall back to embedded modules.
+- 仅 Feishu Agent 分支使用；本分支不发布 GitHub Release assets。
+- 强化模型工具感知：通过系统提示词和工具 schema 路由明确暴露可用本机工具，减少模型误判“没有权限/没有工具”的情况。
+- 修复本机文件权限判断：Agent 会先检查授权路径再处理文件请求，不再在 safe file 工具可用时直接声称不能操作本机文件。
+- 将思考过程折叠进 CardKit 面板，减少可见重复回复，同时保留工具和思考轨迹便于排障。
+- 优化定时任务精度：从固定轮询改为最近任务 timer，并在创建、删除、暂停、恢复后立即唤醒调度器。
+- 纯提醒任务改为直接投递：如“2 分钟后提醒我吃药”到点后直接发送提醒正文，不再再次请求模型。
+- 定时任务消息升级为 CardKit 2.0，并具备 legacy card 与 Markdown 三级降级。
+- 内置 AI Radar 日报定时任务，基于 Agent workspace 和 AI HOT selected 信号执行，不依赖外部项目路径、虚拟环境或 shell runner。
+- 新增即时 `aihot_lookup` 工具，“今天 AI 圈有什么”等问题会直接使用 AI HOT selected 信号。
+- 修复 Prompt Pack 兼容和 R2 打包：新增的 `schedule_templates` 等模块会进入内部发布包，旧远端 Prompt Pack 缺模块时可回退到本地嵌入模块。
 
 ## v1.6.8 - 2026-05-29
 

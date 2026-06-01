@@ -1,7 +1,5 @@
 # Lingma Feishu Agent 食用指南
 
-> 本文档对应飞书云盘中的云端源文档（链接：https://www.feishu.cn/docx/BwacdC9evoNa1txuGUMcFVChnHd，Token: BwacdC9evoNa1txuGUMcFVChnHd）。修改时请确保与云端同步，勿直接在此处进行非同步性修改。
-
 本指南将指引您从零开始完成 **Lingma Feishu Agent** 的下载、安装、配置和飞书交互，帮助您将 AI Agent 无缝接入飞书办公生态。
 
 Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent字段, 叫法不一样 内容功能均一致。
@@ -26,11 +24,16 @@ Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent
 
 ## 2. 下载与安装
 
-由于智能体当前仍处于快速迭代升级阶段，为您提供当前最新的稳定版安装包进行下载安装：
+[Lingma Feishu Agent](https://lingma-feishu-agent.pages.dev/) 下载官网
 
-### 2.1 下载与安装
+### 2.1 macOS (Apple Silicon M1/M2/M3/M4)
 
-1. 前往官网下载安装最新版本：<https://lingma-feishu-agent.pages.dev/download>
+1. 前往官网下载安装最新版本：[https://lingma-feishu-agent.pages.dev/download](https://lingma-feishu-agent.pages.dev/download)，选择 macOS Apple Silicon 安装包。
+2. 双击打开已下载的 DMG 文件，将 `Lingma Proxy.app` 拖拽放入系统的 `Applications`（应用程序）目录中。*[图片占位符：macOS DMG 拖拽安装界面]*
+
+### 2.2 Windows x64
+
+1. 前往官网下载安装最新版本：[https://lingma-feishu-agent.pages.dev/download](https://lingma-feishu-agent.pages.dev/download)
 2. 按页面提示下载对应平台安装包并完成安装。
 3. macOS 下载 DMG 后拖入 `Applications`；Windows 下载 ZIP 后解压并运行 `Lingma Proxy.exe`。
 
@@ -44,7 +47,7 @@ Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent
 
 在使用飞书 Agent 之前，首要任务是确保代理服务可以成功连接您的上游 AI 模型运行时。
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=Y2IyNDAxNDQzMGVkMjAwN2JlYmZkNGU1ZWExOTY0MDRfNmE3NWI1YjdkNmQ0NzIyMDU0MDM1YjJkMGI5YWM3NmVfSUQ6NzY0NTE4MjkzNjY4NTQ5NzI4MF8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=YzQxYWZhZThiMjMzOTY2MjNmYTc1OGE2OTE0MWVjNTdfMGUxZWYyZDZhYjU0NWVhMDUwMDU1ODVmZWFiYWJlZTdfSUQ6NzY0NTE4MjkzNjY4NTQ5NzI4MF8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 1. 打开桌面 App，在主界面点击 **"探测模型"** 按钮。
 2. **正常情况**：如果下方的“模型列表”能够顺利拉取并展示可用的模型（如 `Kimi-K2.6`、`Qwen3-Thinking` 等），说明本地代理与您的本地 AI 运行时已连通成功。此时，您**不需要**额外去关注或手动修改设置面板中的“远端 API”或“上游代理”地址。
@@ -52,16 +55,16 @@ Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent
 
 <grid>
 <column width-ratio="0.512693">
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=MTZiMDY2ZGU1YjAyMjUyZDRkMmE2M2MwMGU4YTJhMzVfNTIyNzAwMjFmNTIxODY2MzRhOGUwYjBjZDY1Mjc5ZGFfSUQ6NzY0NTE4MzA5MTY0MDAyODEzMl8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=YWY2OGM5YzFhNTQyZWFiNjlkNTQwYzhhNTE2YjYxNTJfOGZmYjI5YmY5ODI3NWViN2Q5MjBjMTRmYjc3NGQ4OGZfSUQ6NzY0NTE4MzA5MTY0MDAyODEzMl8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 </column>
 <column width-ratio="0.487307">
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=OGEyNjc4MjEwNGFkMmNhZGQwMTA3NmIxMjA3NGJkNjVfMmJiODgyM2VkNTIwMDA1YWEzYzhjNWQ3NWU2YzFkNGNfSUQ6NzY0NTE4MzMwNDQ5NTg3NzA4MV8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=NjZlZDAxNWJkNDAwZjg5NWY3ODNhZTVhNGJjZjM1OGVfNDIwNzU2NDFmZjg0NDA0ZGUyYmIwODcxYWNiNzhlYTFfSUQ6NzY0NTE4MzMwNDQ5NTg3NzA4MV8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 </column>
 </grid>
 
 如发现探测出来不一致 可手动指定 然后保存 并重启 
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=ODkwNDFkMjk4OWFiNzZjY2I1YzU2ZjYxZTc0NWE4M2NfYTlhYjNmZTZhYTQ2OWZkMTE0YzBjZTkxNGE0ODdmYmZfSUQ6NzY0NTE4Mzg2OTk2OTU4MzMxOF8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=Zjg3MDhjOGRhMDc4NmIxM2JjMzlhZGY2ODc2NTE4NmFfMWIzYWVlZGYzNjIwNDI1MmRkNWRmMDlmMTQ2MjY4NjZfSUQ6NzY0NTE4Mzg2OTk2OTU4MzMxOF8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 ### 3.2 步骤二：安装 CLI 与 Skills
 
@@ -70,12 +73,12 @@ Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent
 1. 进入左侧导航栏的 **"设置" (Settings)**。
 2. 在 Feishu Agent 的环境检测步骤面板中，如果提示 CLI 未就绪，点击此步骤对应的 **"安装"** 按钮。
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=MGNjMzVlZjI2ZThlOGY1MWU4YTI5YmVkYmFhODk3MWVfNDlkMmU3N2I0Y2U3NjQ3NjQ2MGMyYTJkOTAyYTA4MjNfSUQ6NzY0NTE4NTY4ODI1NDM1MjU5OF8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=MDQ4MmNhOTk4M2JhYzkyNDVkNGM3NDhiMmE5ZDViYmFfZTM0ZmE1YWE5MmQ0NWI4MzRkZDAzODY4YTAxOTE3ZGNfSUQ6NzY0NTE4NTY4ODI1NDM1MjU5OF8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 1. App 会在后台自动调用 `npm` 和 `npx` 下载安装飞书 CLI（`@larksuite/cli`）及 Skills 依赖，并在状态栏中实时显示安装日志。若系统全局目录不可写，App 会自动安全降级安装至用户个人应用配置目录，无需管理员权限。
 2. 完成后稍等片刻 状态同步后会显示已完成 从而进行下一步
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=ZTcyYmFiYTJlYTg3N2NkYmE5MDFmNGRiNjhkMjYyMDVfYzk0MTlkODBlNmJiMDJhOTRhNGE2MzczNDMxNjY4YjdfSUQ6NzY0NTE4NjE3MjcwNDE5NzgxMl8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=MjU1YzcwMmZhNWYwMGQ1ODQ0NzgyNzhiZDkzODkzODNfOTIzZDUzMjdiZjUxMDVhZmY2NjI2NjlmZGE4ZDhmMjhfSUQ6NzY0NTE4NjE3MjcwNDE5NzgxMl8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 ### 3.3 步骤三：初始化飞书应用
 
@@ -83,39 +86,39 @@ Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent
 
 1. 在自检面板第二步点击 **"首次初始化（推荐）"** 按钮。
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=NTViMDBlMjFjYWZhNGMwZmIwODk5YzAzNzc2ZTgwZmNfZTlkZjMzNDRhNjAyZGViZDhlNzljYjZiYjMxOTdkMDVfSUQ6NzY0NTE4NjIzOTY3MDc4MzE1Nl8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=YjNiZDM1ODhmZWM4ZDdiNDA2ZWM5M2YzNmI2NGQ2NDVfZWNmMzQ1MzcwMzNlZGZhMDhjODAzMjJiODM2NzVlYTVfSUQ6NzY0NTE4NjIzOTY3MDc4MzE1Nl8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 1. App 会自动调用飞书 CLI 在APP下方打开初始化链接, 点就后在默认浏览器中打开飞书应用初始化配置页面。
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=MWMyZTY2N2RiZDQwMjIxYTdlZmFmZDVmOTZiOTBhYTVfMDhmZGI0YjRkNzMyMWJlZDg5ZmU5MWFiNWU0YjMwOWZfSUQ6NzY0NTE4NjUwOTczODAwMzY1NV8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=N2M0NzlmZTIwZDlkNDUzMjU2ZWEwM2QyYzcwZTM3NTZfY2NkYzU4NTY3MzZhODE0ZjYzZTYyNjM5NTIxMmUzMzNfSUQ6NzY0NTE4NjUwOTczODAwMzY1NV8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 1. 根据浏览器页面的引导，完成您的飞书应用创建或选择已有应用，使其与本地 Agent 完成映射。
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=YzEzNjk3ZWUxYzQ4OTUwYzEwM2MzMTkxYTlkMzk4ZDlfNzU3NmRiYTJjZTA4ZjkzNTk2Yjc3OGU2YzI4ZWEzOTNfSUQ6NzY0NTE4ODE5NTExNDM1NTY1MF8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=NTE4ZGRmOTE3MjgzMWU5MDhmNzAxY2I3MTM4ZDVmZjJfN2VhMWU0ZmNjOTNkZjkwM2M4Y2VkYjA3NzhiMjY1YjdfSUQ6NzY0NTE4ODE5NTExNDM1NTY1MF8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 1. 授权完毕后稍等片刻待状态同步后 即可执行下一步
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=ZDRlNDk3NmY2MTU4ZjI4YjRkZDRlZTAzYmZlNWEzZThfZDUwOTU1ZjcyOTgxMWI0NWFkMDllY2JlMDZmZDJmZmNfSUQ6NzY0NTE4ODc4NTE4NTkxODE3M18xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=NGQ4OTRmMTdmMDNhOWQxNDhkM2U4NDUzZTYyNzE3NzFfZTVkMWVlODI1MWIzMDY2ZTM4ZWNmNTdkNzcxNjgzNmZfSUQ6NzY0NTE4ODc4NTE4NTkxODE3M18xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 ### 3.5 启用 Agent 服务
 
 1. 当上述环境自检与授权全部配置完成后，在 Feishu Agent 配置区勾选 **"启用 Feishu Agent"** 总开关。
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=YmE5YjBmNGJlNzA0YjE0MTE1NjYwNWRjYzBiYzZjZmVfZTFhZGRlY2FjNWMzYWQ4YWEzNjEzYzBkZTRlMDU5ZmFfSUQ6NzY0NTE4OTA1NjgzMzYwNDU1OF8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=YjBiMmQzNzMyYzU2NDRlYzRmMTUxY2E4NDI4NWU0YjhfNjJjMTZjMzFhOTQxNDNmZDMxMzk3NmEzYTUzYWQ0NTlfSUQ6NzY0NTE4OTA1NjgzMzYwNDU1OF8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 1. 在“高级设置”中可配置您的 **Bot 名称**（最大 40 字符），此名称将显示在飞书聊天卡片的“正在思考”状态中。
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=MmY0NDdjZTA2NmFiMGFmYWMwMzkyNGFiZThjNTZiYWRfMDlmNTdlZWFkMTlhY2JhMzc4OTAyYzA3Y2Y1ZDZmYjBfSUQ6NzY0NTE4OTY5MTE4MDc5Njg4MV8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=M2RjMjQxYWRhYzQ4NzM5ZDQ1OTA0Njg1Njc1MjAwOTVfZGM3ZmI0NGNkMThmY2U2NWUyZWYxNDVkZWFlNjdlZGFfSUQ6NzY0NTE4OTY5MTE4MDc5Njg4MV8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 1. 点击底部的 **"保存配置"**。应用会自动重启服务以激活 Agent。自此，Agent 开始监听您的飞书群聊并随时待命。
 2. 回到飞书app中  在工作台中 找到对应创建开启的应用, 即可开始使用。
 
 <grid>
 <column width-ratio="0.358455">
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=NWY3ZDE5YmMwZDg5ZGUzODM3NzhjMTRiMjQ5YWUxY2FfZGY3MmM4ZTVmNDQyMzI4NzFjNDViMjU4OGE5OGY4YmFfSUQ6NzY0NTE5MDI2NDA4NTEyMTk5MF8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=OGY5YzU4NjU1MDc4N2YzZjliMDlmNDhkNWFlOTg0YTRfNGExMjhkNDI0OGQ3OTUwN2RlMmMxN2U2ZjQ0OWYxMTVfSUQ6NzY0NTE5MDI2NDA4NTEyMTk5MF8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 </column>
 <column width-ratio="0.641545">
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=YmNmNDNkMTZmYWZmZjk2MmRhYWEyNDViMjZlOTMzMjRfMTc2MDRlOWI4MjRiMTNiYzY5Nzk5ZWQ5ODZhMjk1NGVfSUQ6NzY0NTE5MDQzNzY5ODk5NzIwNl8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=YTM3YjUxZDE3NzMyNmQzNDJmN2I4Nzg2NjgwOGJiMWNfMTM5MDQxNWYwZDQ5MmIwMzQwNTQ0NDQ2ZGI4M2NmODVfSUQ6NzY0NTE5MDQzNzY5ODk5NzIwNl8xNzgwMDc1OTg4OjE3ODAwNzk1ODhfVjM)
 </column>
 </grid>
 
@@ -131,13 +134,13 @@ Tips: 下文图中 bridge 字段为老版本留存 正不断迭代为新版agent
 2. Agent 会在飞书聊天窗口中直接向您发送一条动态授权卡片，其中包含专属的登录链接或登录二维码。
 3. 您点击卡片链接在浏览器中完成授权后，Agent 会在后台立即检测到登录成功，并自动恢复执行刚才被阻断的提问，无需您再次重复发送命令。
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=MDE5ZDNmZTVhODNmMGRiMzU3OTdiM2NlOGZlODVmYTVfN2M5ODI4NDI2NmMyNGI4OGY1MjUzZmJjMDZiNzgzZjFfSUQ6NzY0NTE5MTcyMDE3MDI3NzgxNl8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=MmMwMDY2NDNjMGJlODgwZjdmZjExMDA4MTA0NmNmOWRfNDM4YzkwMDI1OGNmYTc4ZDRkZTEzNzdmMjE4NmZlMGVfSUQ6NzY0NTE5MTcyMDE3MDI3NzgxNl8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
-1. 如不想每次都需要申请权限可复用我这套权限配置json 在飞书控制台手动倒入授权进行保存(仅授权了某些场景,并非完整), 保存并且更新应用权限后生效。
+1. 如不想每次都需要申请权限可复用我这套权限配置json 在飞书控制台手动导入授权进行保存(仅授权了某些场景,并非完整), 保存并且更新应用权限后生效。
 
 [开发者后台 - 飞书开放平台](https://open.feishu.cn/app)
 
-![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=ZmMyNTIzNDVmYTY2ZjE3NWZjNDgwODMyNGFiYjYyZTlfNjQ0Y2Y4YzFhYTliMjg5MmJjZWUyYTRiODZjODU3ZTdfSUQ6NzY0NTE5MjY3NjE4Nzg2ODExMF8xNzgwMDQxMzQwOjE3ODAwNDQ5NDBfVjM)
+![](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=OTZkYTM3NzYzZDBlMDkwMWNmNzRkYWUyZjg0MTY5YWVfOTkyYTBhMjZhOTFhNmU0MjU5MTg2OTZlYTY4NzE4MWNfSUQ6NzY0NTE5MjY3NjE4Nzg2ODExMF8xNzgwMDc1OTg5OjE3ODAwNzk1ODlfVjM)
 
 
 

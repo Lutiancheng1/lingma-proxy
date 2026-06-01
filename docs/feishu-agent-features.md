@@ -162,6 +162,8 @@ Agent 内置的工具不是简单的 API 封装。每个工具都有结构化的
 
 ```
 
+> 内部版本发布流程见 [Feishu Branch Internal Release Process](./feishu-branch-release-process.md)。飞书分支的公司内部分发走 R2 / Pages；外部开源 GitHub Release 仍以主分支为准。
+
 压缩 prompt 里有明确的加权指令：用户修正和偏好变更 > 最近工具结果 > 待执行操作。精确引用（文档 token、URL、记录 ID）必须保留原文，不能泛化成「之前那个文档」。
 
 ### 工具记忆，被压缩的也能找回来

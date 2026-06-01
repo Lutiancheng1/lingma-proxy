@@ -34,6 +34,7 @@ var promptRuleOrder = []string{
 	"long_document_rules",
 	"permission_rules",
 	"skill_rules",
+	"schedule_templates",
 }
 
 //go:embed prompt_rules/*.md
@@ -182,10 +183,15 @@ func (m *promptPackManager) Check(ctx context.Context) (PromptPackStatus, error)
 	if err := json.Unmarshal(packBytes, &pack); err != nil {
 		return m.setPromptPackError(now, "Prompt Pack JSON 解析失败："+err.Error()), err
 	}
+	pack = normalizePromptPackWithEmbedded(pack)
 	if err := validatePromptPack(pack, opts.AppVersion); err != nil {
 		return m.setPromptPackError(now, err.Error()), err
 	}
-	if err := m.saveCache(packBytes); err != nil {
+	normalizedBytes, err := json.Marshal(pack)
+	if err != nil {
+		return m.setPromptPackError(now, "Prompt Pack 规范化失败："+err.Error()), err
+	}
+	if err := m.saveCache(normalizedBytes); err != nil {
 		return m.setPromptPackError(now, "Prompt Pack 缓存写入失败："+err.Error()), err
 	}
 	applied := time.Now().Format(time.RFC3339)
@@ -332,6 +338,32 @@ func isAllowedPromptModule(name string) bool {
 	return false
 }
 
+func normalizePromptPackWithEmbedded(pack promptPackFile) promptPackFile {
+	embedded := embeddedPromptPack()
+	if pack.Modules == nil {
+		pack.Modules = map[string]string{}
+	}
+	for _, name := range promptRuleOrder {
+		if strings.TrimSpace(pack.Modules[name]) == "" {
+			pack.Modules[name] = embedded.Modules[name]
+		}
+	}
+	if len(pack.ModuleOrder) == 0 {
+		pack.ModuleOrder = append([]string(nil), promptRuleOrder...)
+	} else {
+		seen := map[string]struct{}{}
+		for _, name := range pack.ModuleOrder {
+			seen[name] = struct{}{}
+		}
+		for _, name := range promptRuleOrder {
+			if _, ok := seen[name]; !ok {
+				pack.ModuleOrder = append(pack.ModuleOrder, name)
+			}
+		}
+	}
+	return pack
+}
+
 func embeddedPromptPack() *promptPackFile {
 	modules := map[string]string{}
 	for _, name := range promptRuleOrder {
@@ -394,6 +426,7 @@ func (m *promptPackManager) loadCacheLocked() (*promptPackFile, error) {
 	if err := json.Unmarshal(data, &pack); err != nil {
 		return nil, err
 	}
+	pack = normalizePromptPackWithEmbedded(pack)
 	if err := validatePromptPack(pack, m.options.AppVersion); err != nil {
 		return nil, err
 	}

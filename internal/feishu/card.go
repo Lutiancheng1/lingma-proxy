@@ -211,10 +211,10 @@ func renderStepElement(step cardStep, index int) map[string]any {
 	if body != "" {
 		body = summarizeText(body, finalCardStepBodyLimit)
 	}
-	if step.Kind == "tool" && body != "" {
+	if (step.Kind == "tool" || step.Kind == "thought") && body != "" {
 		return map[string]any{
 			"tag":              "collapsible_panel",
-			"element_id":       fmt.Sprintf("tool_panel_%02d", index%100),
+			"element_id":       fmt.Sprintf("%s_panel_%02d", step.Kind, index%100),
 			"expanded":         false,
 			"background_color": "grey",
 			"header": map[string]any{

@@ -628,6 +628,36 @@ if [ "$1" = "im" ] && [ "$2" = "+messages-reply" ]; then
   fi
   exit 0
 fi
+if [ "$1" = "im" ] && [ "$2" = "+messages-send" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  msg_type=""
+  content=""
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--msg-type" ]; then
+      shift
+      msg_type="$1"
+    elif [ "$1" = "--content" ]; then
+      shift
+      content="$1"
+    elif [ "$1" = "--markdown" ]; then
+      shift
+      msg_type="post"
+    fi
+    shift
+  done
+  if [ "$msg_type" = "interactive" ]; then
+    if [ "$FEISHU_FAIL_CARDKIT_SEND" = "1" ] && printf '%s' "$content" | grep -q '"type":"card"'; then
+      printf 'cardkit send denied\n' >&2
+      exit 1
+    fi
+    if [ "$FEISHU_FAIL_LEGACY_CARD_SEND" = "1" ] && ! printf '%s' "$content" | grep -q '"type":"card"'; then
+      printf 'legacy card send denied\n' >&2
+      exit 1
+    fi
+  fi
+  printf '{"message_id":"om_fake_send_%s"}\n' "$(date +%s)"
+  exit 0
+fi
 if [ "$1" = "im" ] && [ "$2" = "+messages-resources-download" ]; then
   printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
   output="img_test_image.dat"

@@ -45,6 +45,46 @@ func TestRenderFinalCardV2UsesCollapsedToolPanels(t *testing.T) {
 	}
 }
 
+func TestRenderFinalCardV2UsesCollapsedThoughtPanels(t *testing.T) {
+	cardJSON, err := renderFinalCardV2(cardState{
+		Status:      "done",
+		StatusLabel: "完成",
+		Model:       "kmodel",
+		Steps: []cardStep{{
+			Kind:  "thought",
+			Title: "思考",
+			Body:  "我会先检查授权路径，再读取文件。",
+		}},
+		Reply: "当前已授权 workspace，可继续指定要读取的文件。",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var card map[string]any
+	if err := json.Unmarshal([]byte(cardJSON), &card); err != nil {
+		t.Fatal(err)
+	}
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	found := false
+	for _, raw := range elements {
+		element := raw.(map[string]any)
+		if element["tag"] != "collapsible_panel" {
+			continue
+		}
+		found = true
+		if element["expanded"] != false {
+			t.Fatalf("thought panel should default collapsed: %#v", element["expanded"])
+		}
+		if !strings.Contains(element["element_id"].(string), "thought_panel") {
+			t.Fatalf("thought panel should use thought element id: %#v", element["element_id"])
+		}
+	}
+	if !found {
+		t.Fatalf("expected collapsed thought panel in %s", cardJSON)
+	}
+}
+
 func TestRenderStreamingCardV2CreatesStableElementSlots(t *testing.T) {
 	cardJSON, err := renderStreamingCardV2(cardState{
 		Status:      "thinking",

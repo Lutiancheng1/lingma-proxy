@@ -32,6 +32,11 @@ jobs:
       - name: Verify synced version files
         run: ./scripts/check-version-sync.sh
 
+      - name: Verify Feishu release docs and site
+        run: |
+          ./scripts/check-release-notes.sh
+          ./scripts/check-feishu-release-site.sh
+
       - name: Build desktop frontend
         run: |
           npm ci --prefix desktop/frontend
@@ -265,11 +270,12 @@ jobs:
               "minSupportedVersion": "1.6.8",
               "mandatory": False,
               "releaseNotes": "\n".join([
-                  "v1.6.8 Feishu Agent 稳定版",
-                  "• 正式重构并更名为 Feishu Agent，清理遗留 Bridge 术语与描述。",
-                  "• 优化 R2 资源发布，采用 S3 分片上传以规避 524 错误超时。",
-                  "• 优化 Cloudflare Pages 静态页面部署策略，支持非阻断发布并闭环打通。",
-                  "• 增强安全路径口诉授权及敏感文件 CRUD 二次确认审计。",
+                  "v1.6.9 Feishu Agent 稳定版",
+                  "• 强化模型工具感知与本机文件权限判断，减少误报没有权限/没有工具。",
+                  "• 优化思考过程折叠、定时任务精度和纯提醒直接投递。",
+                  "• 定时任务消息升级为 CardKit 2.0，并具备 legacy card 与 Markdown 兜底。",
+                  "• 内置 AI Radar 日报和 AI HOT 即时查询，无需外部项目路径或脚本。",
+                  "• 修复 Prompt Pack 新模块兼容与 R2 打包，支持 schedule_templates 等模块下发。",
                   "Build " + os.environ.get("GITHUB_SHA", "")[:7],
               ]),
               "assets": {
@@ -295,36 +301,40 @@ jobs:
               f.write(json.dumps(manifest, ensure_ascii=False, indent=2))
           PY
 
-          python3 - <<'PY'
-          import json, pathlib
+          VERSION="$version" python3 - <<'PY'
+          import json, os, pathlib, re
           base = pathlib.Path("internal/feishu/prompt_rules")
-          order = ["base", "feishu_cli_rules", "tool_error_recovery", "long_document_rules", "permission_rules", "skill_rules"]
+          source = pathlib.Path("internal/feishu/prompt_pack.go").read_text(encoding="utf-8")
+          match = re.search(r"var promptRuleOrder = \[\]string\{(?P<body>.*?)\}", source, re.S)
+          if not match:
+            raise SystemExit("promptRuleOrder not found")
+          order = re.findall(r'"([^"]+)"', match.group("body"))
           modules = {name: (base / f"{name}.md").read_text(encoding="utf-8").strip() for name in order}
           pack = {
             "schemaVersion": 1,
             "channel": "feishu-stable",
-            "version": "2026.05.28.1",
-            "minAppVersion": "1.6.8",
+            "version": "2026.06.01.1",
+            "minAppVersion": os.environ["VERSION"],
             "moduleOrder": order,
             "modules": modules,
-            "notes": "Built-in Feishu CLI prompt rules."
+            "notes": "Feishu Agent prompt rules with schedule templates, tool routing, and AI HOT guidance."
           }
           pathlib.Path("dist/prompt-pack/prompt-pack.json").write_text(json.dumps(pack, ensure_ascii=False, indent=2), encoding="utf-8")
           PY
           pack_sha="$(sha256sum dist/prompt-pack/prompt-pack.json | awk '{print $1}')"
           pack_sig="$(go run scripts/sign-update-sha.go "$pack_sha")"
-          PUBLIC_BASE="$public_base" PACK_SHA="$pack_sha" PACK_SIG="$pack_sig" python3 - <<'PY'
+          VERSION="$version" PUBLIC_BASE="$public_base" PACK_SHA="$pack_sha" PACK_SIG="$pack_sig" python3 - <<'PY'
           import json
           import os
           manifest = {
             "schemaVersion": 1,
             "channel": "feishu-stable",
-            "version": "2026.05.28.1",
-            "minAppVersion": "1.6.8",
+            "version": "2026.06.01.1",
+            "minAppVersion": os.environ["VERSION"],
             "url": os.environ["PUBLIC_BASE"] + "/prompt-pack/feishu/stable/prompt-pack.json",
             "sha256": os.environ["PACK_SHA"],
             "signature": os.environ["PACK_SIG"],
-            "notes": "Built-in Feishu CLI prompt rules."
+            "notes": "Feishu Agent prompt rules with schedule templates, tool routing, and AI HOT guidance."
           }
           open("dist/prompt-pack/manifest.json", "w", encoding="utf-8").write(json.dumps(manifest, ensure_ascii=False, indent=2))
           PY
