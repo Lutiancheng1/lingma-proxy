@@ -24,6 +24,11 @@ if [[ ! -x "$ROOT_DIR/scripts/sync-feishu-agent-docs.sh" ]]; then
   exit 1
 fi
 
+if [[ ! -x "$ROOT_DIR/scripts/deploy-feishu-pages-local.sh" ]]; then
+  echo "scripts/deploy-feishu-pages-local.sh is missing or not executable." >&2
+  exit 1
+fi
+
 for expected in \
   "docs/feishu-agent-features.md:FggndYCZaor2FyxF8hFcs1imnVc" \
   "docs/feishu-agent-pitch.md:Mz3ldFZKvooIkdx6z4hcwn9Mnjb" \
@@ -63,12 +68,21 @@ required = [
     "updates/feishu/stable/manifest.json",
     "prompt-pack/feishu/stable/manifest.json",
     "wrangler@latest pages deploy site",
+    "CLOUDFLARE_API_TOKEN",
 ]
 missing_workflow = [item for item in required if item not in workflow]
 if missing_workflow:
     raise SystemExit("Feishu R2 workflow is missing expected release wiring: " + ", ".join(missing_workflow))
 if "Cloudflare Pages deploy failed. R2 artifacts and manifests were already published" in workflow:
     raise SystemExit("Cloudflare Pages deploy is warning-only; make it fail the workflow so stale Pages releases are visible.")
+local_deploy = (root / "scripts/deploy-feishu-pages-local.sh").read_text(encoding="utf-8")
+for item in [
+    "wrangler@latest pages deploy site",
+    "--project-name lingma-feishu-agent",
+    "--branch main",
+]:
+    if item not in local_deploy:
+        raise SystemExit("Local Pages deploy fallback is missing: " + item)
 PY
 
 echo "Feishu release site/process check passed for v$VERSION."

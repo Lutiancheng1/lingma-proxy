@@ -82,6 +82,13 @@ Use this process whenever Feishu Agent behavior changes, including:
    - Confirm `https://lingma-feishu-agent.pages.dev/changelog` and `https://lingma-feishu-agent.pages.dev/changelog.html` are both current. If R2 `site/changelog.html` is current but Pages is stale, the Cloudflare Pages deploy failed and the release is not complete.
    - Confirm the R2 Prompt Pack manifest points to the new Prompt Pack version.
 
+11. If GitHub Cloudflare credentials are broken, deploy Pages from local Wrangler auth.
+   - Use this only when the R2 artifacts / manifest are already current but `lingma-feishu-agent.pages.dev` is stale because the GitHub Actions Cloudflare token failed.
+   - Confirm local Wrangler is authenticated with Pages write permission: `npx wrangler@latest whoami`.
+   - Run `./scripts/deploy-feishu-pages-local.sh`.
+   - This script deploys `site/` to project `lingma-feishu-agent` on branch `main`. Do not deploy the production site with `--branch stable`; that creates a preview deployment such as `stable.lingma-feishu-agent.pages.dev` and does not update `https://lingma-feishu-agent.pages.dev`.
+   - Re-run the production verification in step 10 after the local deploy.
+
 ## Common Failure Modes
 
 - App shows `Prompt Pack 缺少模块: <name>`:
@@ -93,7 +100,7 @@ Use this process whenever Feishu Agent behavior changes, including:
   - Check whether the R2 publish job was skipped because secrets were missing.
   - Check `updates/feishu/stable/manifest.json` on R2.
   - Check R2 direct `site/changelog.html`; if it is current while `lingma-feishu-agent.pages.dev/changelog` is stale, Cloudflare Pages did not deploy.
-  - Pages deploy must not be treated as a warning-only step. Fix `CLOUDFLARE_API_TOKEN` Pages permissions and rerun the workflow.
+  - Pages deploy must not be treated as a warning-only step. Fix `CLOUDFLARE_API_TOKEN` Pages permissions and rerun the workflow, or use `./scripts/deploy-feishu-pages-local.sh` as a documented fallback when the local Cloudflare account has the correct Pages permission.
 
 - Version files are inconsistent:
   - Run `./scripts/sync-version.sh`.
