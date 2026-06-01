@@ -100,7 +100,7 @@ ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 Dev
    - 本地路径：`docs/feishu-agent-features.md`
    - 云端链接：[https://www.feishu.cn/docx/FggndYCZaor2FyxF8hFcs1imnVc](https://www.feishu.cn/docx/FggndYCZaor2FyxF8hFcs1imnVc) (Token: `FggndYCZaor2FyxF8hFcs1imnVc`)
 
-如需将云端修改同步到本地，可使用 `lark-cli` 拉取相应文档；在编辑或新增特性时，请确保两边内容同步更新，防止文档因缺乏维护而失效。
+修改这三份本地文档前，必须先运行 `./scripts/sync-feishu-agent-docs.sh` 从飞书云端拉取最新 Markdown，保留导出的图片、附件和引用地址原样落到本地。修改完成后，必须再把对应内容同步回飞书云端文档，然后才能提交，防止本地和云端互相覆盖。
 
 ## 已知限制
 

@@ -19,6 +19,27 @@ if ! grep -Fq "v$VERSION" "$ROOT_DIR/site/changelog.html"; then
   exit 1
 fi
 
+if [[ ! -x "$ROOT_DIR/scripts/sync-feishu-agent-docs.sh" ]]; then
+  echo "scripts/sync-feishu-agent-docs.sh is missing or not executable." >&2
+  exit 1
+fi
+
+for expected in \
+  "docs/feishu-agent-features.md:FggndYCZaor2FyxF8hFcs1imnVc" \
+  "docs/feishu-agent-pitch.md:Mz3ldFZKvooIkdx6z4hcwn9Mnjb" \
+  "docs/feishu-agent-user-guide.md:BwacdC9evoNa1txuGUMcFVChnHd"; do
+  doc_path="${expected%%:*}"
+  token="${expected##*:}"
+  if ! grep -Fq "https://www.feishu.cn/docx/$token" "$ROOT_DIR/$doc_path"; then
+    echo "$doc_path is missing its Feishu cloud source link." >&2
+    exit 1
+  fi
+  if ! grep -Fq "$token" "$ROOT_DIR/scripts/sync-feishu-agent-docs.sh"; then
+    echo "scripts/sync-feishu-agent-docs.sh is missing token $token." >&2
+    exit 1
+  fi
+done
+
 python3 - "$ROOT_DIR" <<'PY'
 import pathlib
 import re
