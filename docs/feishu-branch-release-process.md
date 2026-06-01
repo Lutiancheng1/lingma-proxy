@@ -21,11 +21,14 @@ Use this process whenever Feishu Agent behavior changes, including:
      - `docs/feishu-agent-features.md`
      - `docs/feishu-agent-pitch.md`
      - `docs/feishu-agent-user-guide.md`
-   - Treat the Feishu docx documents as the upstream source. The sync must pull the latest cloud content first and preserve exported image / attachment URLs as-is.
+   - Treat the Feishu docx documents as the upstream source. The sync must use `lark-cli docs +fetch --api-version v2 --doc-format markdown --doc <token> --as user` and preserve exported image / attachment URLs as-is.
+   - Do not use v1 `docs +fetch` `data.markdown` or `drive +export markdown` as the sync source for image-bearing docs; those paths can omit media blocks or return empty grids.
    - If the sync script reports fewer image links from Feishu than the existing local file, stop. That means the current CLI export path did not expose media blocks even if the Feishu page still renders images.
-   - Do not run full-document cloud overwrite from local Markdown when the document contains Feishu internal image URLs. `docs +update --mode overwrite --markdown @file` can fail to re-import those images and silently remove image blocks.
-   - For image-bearing docs, update the cloud doc first in Feishu or use narrow text-only updates that do not touch media blocks, then pull the cloud version back down before committing.
-   - Before committing, verify the local file and corresponding cloud doc still match in substance and that image blocks were not reduced.
+   - Keep `internal-api-drive-stream.feishu.cn` URLs exactly as returned unless the user explicitly asks to localize media.
+   - Full cloud writes must use `lark-cli docs +update --api-version v2 --doc <token> --command overwrite --doc-format markdown --content @<relative-local-file> --as user`.
+   - Do not run `docs +update --api-version v1 --mode overwrite --markdown @file` or `--markdown @file` for image-bearing docs; it can return `IMAGE_DOWNLOAD_FAILED` and remove image blocks.
+   - After cloud write, fetch the same doc again with v2 Markdown and verify `warnings: []`, image count has not dropped, and the intended wording/version fixes are present. Feishu may regenerate image authcode URLs, so compare image count and content, not exact image URL strings.
+   - Before committing, verify the local file and corresponding cloud doc match in substance and that image blocks were not reduced.
 
 2. Update the version.
    - Edit `VERSION`.

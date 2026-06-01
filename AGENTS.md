@@ -100,7 +100,15 @@ ENABLE_DEVTOOLS=0 ./scripts/rebuild-local-app.sh  # 本地桌面版：关闭 Dev
    - 本地路径：`docs/feishu-agent-features.md`
    - 云端链接：[https://www.feishu.cn/docx/FggndYCZaor2FyxF8hFcs1imnVc](https://www.feishu.cn/docx/FggndYCZaor2FyxF8hFcs1imnVc) (Token: `FggndYCZaor2FyxF8hFcs1imnVc`)
 
-修改这三份本地文档前，必须先运行 `./scripts/sync-feishu-agent-docs.sh` 从飞书云端拉取最新 Markdown，保留导出的图片、附件和引用地址原样落到本地。含飞书内部图片 URL 的文档禁止用 `docs +update --mode overwrite --markdown @file` 整篇覆盖回云端；应先在飞书云端或用不触碰媒体块的局部文本更新完成修改，再拉回本地校验后提交，防止图片块丢失或本地和云端互相覆盖。
+修改这三份文档必须按下面流程执行，禁止跳步：
+
+1. 修改本地文件前，先运行 `./scripts/sync-feishu-agent-docs.sh`。脚本必须使用 `lark-cli docs +fetch --api-version v2 --doc-format markdown --doc <token> --as user` 拉取云端 Markdown，不能改回 v1 `data.markdown` 或 `drive +export markdown` 路径，因为这些路径可能拿不到飞书图片 URL。
+2. 同步后先检查图片数量。已有本地文件含图片时，如果云端拉取结果中的 `![](...)` 数量更少，必须停止，不能覆盖本地文件；这通常说明当前 CLI 导出没有暴露媒体块，而不代表飞书页面没有图片。
+3. 本地修改时必须保留飞书导出的图片、附件、引用地址原样，尤其是 `internal-api-drive-stream.feishu.cn` 的图片 URL。除非用户明确要求换图，否则不要下载图片到本地再改相对路径。
+4. 回写云端只能使用 v2 Markdown overwrite 形态：`lark-cli docs +update --api-version v2 --doc <token> --command overwrite --doc-format markdown --content @<relative-local-file> --as user`。`@file` 必须是相对路径。
+5. 禁止使用 `lark-cli docs +update --api-version v1 --mode overwrite --markdown @file` 或 `--markdown @file` 这类旧参数整篇覆盖含图文档；它会触发 `IMAGE_DOWNLOAD_FAILED`，可能把云端图片块清掉。
+6. 回写后必须重新执行 v2 Markdown fetch，只读验证：`warnings` 为空、图片数量未减少、旧版本直链/旧术语等目标问题已消失。本地与云端不要求图片临时 URL 字节级一致，因为飞书会重新生成 authcode URL，但图片数量和内容口径必须一致。
+7. 完成后更新 `ITERATION.md`，记录云端 token、拉取/回写/验证命令、图片数量和结果，再提交 Git。
 
 ## 已知限制
 

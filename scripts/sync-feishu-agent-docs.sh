@@ -8,6 +8,9 @@ if ! command -v lark-cli >/dev/null 2>&1; then
   exit 1
 fi
 
+# Keep this on docs v2 Markdown. The v1 data.markdown path and drive export
+# path can drop Feishu media blocks for image-bearing docs.
+
 sync_doc() {
   local token="$1"
   local path="$2"
