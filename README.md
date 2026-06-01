@@ -70,6 +70,23 @@ Release builds are produced by GitHub Actions for:
 | `lingma-proxy-desktop_<tag>_linux_arm64.rpm` | Linux arm64 | Fedora / RHEL desktop app |
 | `lingma-proxy_<tag>_sha256.txt` | all | Checksums |
 
+### Feishu Bridge Preview Builds
+
+Feishu Bridge features live on the `feat/feishu-bridge-go` branch and are not included in the normal `main` release assets.
+
+If you want to try or inspect the Feishu integration:
+
+1. switch to the branch:
+   ```bash
+   git fetch origin
+   git switch feat/feishu-bridge-go
+   ```
+2. open GitHub Actions and find the `Feishu Bridge Artifacts` workflow;
+3. download the latest `feishu-desktop-macos` or `feishu-desktop-windows` artifact from a successful run;
+4. if you need a custom build, build it from the same branch with the standard desktop packaging scripts.
+
+These artifacts are branch preview builds, not stable release assets. The normal Release page only publishes the mainline CLI and desktop packages listed above.
+
 ### Which Package Should I Download?
 
 | Your system | Recommended asset | Notes |

@@ -73,6 +73,23 @@ GitHub Actions 会在 Release 中产出：
 | `lingma-proxy-desktop_<tag>_linux_arm64.rpm` | Linux arm64 | Fedora / RHEL 桌面 App |
 | `lingma-proxy_<tag>_sha256.txt` | 全平台 | 校验文件 |
 
+### 飞书分支预览包
+
+飞书桥接相关能力目前放在 `feat/feishu-bridge-go` 分支，不包含在主分支的正式 Release 资产里。
+
+如果想体验或查看飞书集成，可以按下面的方式处理：
+
+1. 切换到飞书分支：
+   ```bash
+   git fetch origin
+   git switch feat/feishu-bridge-go
+   ```
+2. 打开 GitHub Actions，找到 `Feishu Bridge Artifacts` workflow；
+3. 从成功的运行记录里下载最新的 `feishu-desktop-macos` 或 `feishu-desktop-windows` artifact；
+4. 如果有额外定制需求，可以基于同一个分支使用标准桌面打包脚本自行构建。
+
+这些 artifact 是分支预览包，不是稳定正式 Release。主分支 Release 页面只发布上表列出的主线 CLI 和桌面端包。
+
 ### 应该下载哪个包？
 
 | 你的系统 | 推荐下载 | 说明 |

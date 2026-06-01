@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased (target: v1.6.9)
+## Unreleased (target: v1.6.10)
+
+- Documented the Feishu Bridge preview build path in both English and Chinese READMEs, including the branch name and GitHub Actions artifact workflow.
+- 在中英文 README 补充飞书分支预览包说明，明确分支名、Actions artifact 获取路径以及与主分支正式 Release 的区别。
 
 ## v1.6.9 - 2026-05-31
 
