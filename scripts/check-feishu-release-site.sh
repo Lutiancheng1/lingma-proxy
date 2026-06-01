@@ -62,10 +62,13 @@ required = [
     "site/${rel}",
     "updates/feishu/stable/manifest.json",
     "prompt-pack/feishu/stable/manifest.json",
+    "wrangler@latest pages deploy site",
 ]
 missing_workflow = [item for item in required if item not in workflow]
 if missing_workflow:
     raise SystemExit("Feishu R2 workflow is missing expected release wiring: " + ", ".join(missing_workflow))
+if "Cloudflare Pages deploy failed. R2 artifacts and manifests were already published" in workflow:
+    raise SystemExit("Cloudflare Pages deploy is warning-only; make it fail the workflow so stale Pages releases are visible.")
 PY
 
 echo "Feishu release site/process check passed for v$VERSION."

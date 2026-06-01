@@ -79,6 +79,7 @@ Use this process whenever Feishu Agent behavior changes, including:
    - Open `https://lingma-feishu-agent.pages.dev/download`.
    - Confirm it shows the new version and release notes from R2 `updates/feishu/stable/manifest.json`.
    - Confirm `https://lingma-feishu-agent.pages.dev/changelog.html` contains the new version.
+   - Confirm `https://lingma-feishu-agent.pages.dev/changelog` and `https://lingma-feishu-agent.pages.dev/changelog.html` are both current. If R2 `site/changelog.html` is current but Pages is stale, the Cloudflare Pages deploy failed and the release is not complete.
    - Confirm the R2 Prompt Pack manifest points to the new Prompt Pack version.
 
 ## Common Failure Modes
@@ -91,7 +92,8 @@ Use this process whenever Feishu Agent behavior changes, including:
 - Internal download page still shows the old version:
   - Check whether the R2 publish job was skipped because secrets were missing.
   - Check `updates/feishu/stable/manifest.json` on R2.
-  - Check Pages deploy logs if `site/` changed but the download manifest did update.
+  - Check R2 direct `site/changelog.html`; if it is current while `lingma-feishu-agent.pages.dev/changelog` is stale, Cloudflare Pages did not deploy.
+  - Pages deploy must not be treated as a warning-only step. Fix `CLOUDFLARE_API_TOKEN` Pages permissions and rerun the workflow.
 
 - Version files are inconsistent:
   - Run `./scripts/sync-version.sh`.
