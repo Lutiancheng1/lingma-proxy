@@ -22,6 +22,7 @@ Use this process whenever Feishu Agent behavior changes, including:
      - `docs/feishu-agent-pitch.md`
      - `docs/feishu-agent-user-guide.md`
    - Treat the Feishu docx documents as the upstream source. The sync must pull the latest cloud content first and preserve exported image / attachment URLs as-is.
+   - If the sync script reports fewer image links from Feishu than the existing local file, stop. That means the current CLI export path did not expose media blocks even if the Feishu page still renders images.
    - Do not run full-document cloud overwrite from local Markdown when the document contains Feishu internal image URLs. `docs +update --mode overwrite --markdown @file` can fail to re-import those images and silently remove image blocks.
    - For image-bearing docs, update the cloud doc first in Feishu or use narrow text-only updates that do not touch media blocks, then pull the cloud version back down before committing.
    - Before committing, verify the local file and corresponding cloud doc still match in substance and that image blocks were not reduced.

@@ -18,35 +18,38 @@ sync_doc() {
   json_tmp="$(mktemp)"
   trap 'rm -f "$tmp" "$json_tmp"' RETURN
 
-  # v1 currently exposes markdown directly. v2 returns structured document content,
-  # so keep v1 here until lark-cli provides a markdown-compatible v2 fetch path.
-  lark-cli docs +fetch --api-version v1 --doc "$token" --format json > "$json_tmp"
-  python3 - "$token" "$title" "$json_tmp" "$tmp" <<'PY'
+  lark-cli docs +fetch --api-version v2 --doc-format markdown --doc "$token" --as user > "$json_tmp"
+  python3 - "$token" "$title" "$json_tmp" "$ROOT_DIR/$path" "$tmp" <<'PY'
 import json
 import pathlib
 import re
 import sys
 
-token, title, input_path, output_path = sys.argv[1:5]
+token, title, input_path, current_path, output_path = sys.argv[1:6]
 payload = json.loads(pathlib.Path(input_path).read_text(encoding="utf-8"))
-data = payload.get("data") or {}
-markdown = data.get("markdown")
-remote_title = data.get("title") or title
+document = ((payload.get("data") or {}).get("document") or {})
+markdown = document.get("content")
 if not markdown:
     raise SystemExit(f"missing markdown for {token}")
 
-image_count = len(re.findall(r"!\[[^\]]*\]\(", markdown))
+image_pattern = r"!\[[^\]]*\]\("
+image_count = len(re.findall(image_pattern, markdown))
+current = pathlib.Path(current_path)
+current_image_count = 0
+if current.exists():
+    current_image_count = len(re.findall(image_pattern, current.read_text(encoding="utf-8")))
+if current_image_count and image_count < current_image_count:
+    raise SystemExit(
+        f"refusing to overwrite {current.name}: fetched {image_count} image links, "
+        f"local file has {current_image_count}. Check Feishu export/media handling first."
+    )
 if image_count:
     print(
         f"warning: fetched {image_count} image links for {token}; do not overwrite the cloud doc from local markdown unless image handling is verified",
         file=sys.stderr,
     )
 
-cloud_note = (
-    f"> 本文档对应飞书云盘中的云端源文档（链接：https://www.feishu.cn/docx/{token}"
-    f"，Token: {token}）。修改时请确保与云端同步，勿直接在此处进行非同步性修改。"
-)
-content = f"# {remote_title}\n\n{cloud_note}\n\n{markdown.rstrip()}\n"
+content = f"{markdown.rstrip()}\n"
 pathlib.Path(output_path).write_text(content, encoding="utf-8")
 PY
 
