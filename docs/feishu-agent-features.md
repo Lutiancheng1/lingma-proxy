@@ -273,16 +273,17 @@ Agent 不能自己执行 `auth login`。遇到权限不足时，Agent 自动发�
 
 ## 八、提示词工程，模块化
 
-系统提示词不是一大坨文本，而是由 6 个规则文件按需组合：
+系统提示词不是一大坨文本，而是由 7 个规则文件组合和下发：
 
 - `base.md`：基础规则、工具记忆使用说明、飞书历史搜索、任务路由速查
 - `feishu_cli_rules.md`：lark-cli 命令格式、常见陷阱（`+` 前缀、`--as bot`、schema 版本）
+- `tool_error_recovery.md`：工具错误恢复协议
 - `long_document_rules.md`：长文档读取策略（分块、has_more/page_token）
 - `permission_rules.md`：权限管理规则
 - `skill_rules.md`：技能使用规则
-- `tool_error_recovery.md`：工具错误恢复协议
+- `schedule_templates.md`：定时任务、直接提醒、AI Radar 日报模板
 
-动态注入：Bot 身份描述、MCP 工具列表、技能索引。技能正文不默认注入（太长），通过 `lark_skill_view` 按需加载。
+维护源是 `internal/feishu/prompt_rules/*.md`。发布时会按 `promptRuleOrder` 聚合成带签名的 `prompt-pack.json` 下发，保证原子更新、版本校验和签名校验；R2 同时保留每个模块的 `.md` 文件用于查看和维护。动态注入：Bot 身份描述、MCP 工具列表、技能索引。技能正文不默认注入（太长），通过 `lark_skill_view` 按需加载。
 
 ---
 

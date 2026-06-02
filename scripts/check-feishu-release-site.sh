@@ -62,11 +62,13 @@ if missing:
 workflow = (root / ".github/workflows/feishu-bridge-artifacts.yml").read_text(encoding="utf-8")
 required = [
     "promptRuleOrder not found",
+    "dist/prompt-pack/modules",
     'version": "2026.',
     '"minAppVersion": os.environ["VERSION"]',
     "site/${rel}",
     "updates/feishu/stable/manifest.json",
     "prompt-pack/feishu/stable/manifest.json",
+    "prompt-pack/feishu/stable/modules/",
     "wrangler@latest pages deploy site",
     "CLOUDFLARE_API_TOKEN",
 ]

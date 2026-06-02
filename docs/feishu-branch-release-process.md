@@ -49,6 +49,8 @@ Use this process whenever Feishu Agent behavior changes, including:
    - Check `.github/workflows/feishu-bridge-artifacts.yml`.
    - OTA manifest `releaseNotes` must describe the current version.
    - Prompt Pack generation must include every module from `internal/feishu/prompt_pack.go` `promptRuleOrder`.
+   - `internal/feishu/prompt_rules/*.md` are the maintainable source files. The app consumes the signed aggregate `prompt-pack.json` so one update can be verified and applied atomically.
+   - The workflow should also publish each source module to `prompt-pack/feishu/stable/modules/<name>.md` for inspection and maintenance, but changing those loose `.md` files alone does not update the app. Regenerate and publish the signed JSON pack.
    - Prompt Pack `version` should be advanced for prompt changes, using a date-style value such as `2026.06.01.1`.
    - Prompt Pack `minAppVersion` should match the app version when new prompt rules depend on new app tools.
 

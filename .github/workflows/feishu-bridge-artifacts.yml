@@ -310,6 +310,10 @@ jobs:
             raise SystemExit("promptRuleOrder not found")
           order = re.findall(r'"([^"]+)"', match.group("body"))
           modules = {name: (base / f"{name}.md").read_text(encoding="utf-8").strip() for name in order}
+          modules_dir = pathlib.Path("dist/prompt-pack/modules")
+          modules_dir.mkdir(parents=True, exist_ok=True)
+          for name, content in modules.items():
+            (modules_dir / f"{name}.md").write_text(content + "\n", encoding="utf-8")
           pack = {
             "schemaVersion": 1,
             "channel": "feishu-stable",
@@ -391,6 +395,10 @@ jobs:
           upload_file dist/manifests/update-manifest.json "updates/feishu/stable/manifest.json" "application/json"
           upload_file dist/prompt-pack/prompt-pack.json "prompt-pack/feishu/stable/prompt-pack.json" "application/json"
           upload_file dist/prompt-pack/manifest.json "prompt-pack/feishu/stable/manifest.json" "application/json"
+          while IFS= read -r file; do
+            rel="${file#dist/prompt-pack/modules/}"
+            upload_file "$file" "prompt-pack/feishu/stable/modules/${rel}" "text/markdown; charset=utf-8"
+          done < <(find dist/prompt-pack/modules -type f -name '*.md' | sort)
           while IFS= read -r file; do
             rel="${file#site/}"
             case "$file" in
