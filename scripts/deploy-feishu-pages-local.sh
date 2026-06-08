@@ -12,7 +12,7 @@ fi
 
 npx wrangler@latest pages deploy site \
   --project-name lingma-feishu-agent \
-  --branch main
+  --branch stable
 
 echo "Verify:"
 echo "  https://lingma-feishu-agent.pages.dev/changelog"

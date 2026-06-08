@@ -270,12 +270,11 @@ jobs:
               "minSupportedVersion": "1.6.8",
               "mandatory": False,
               "releaseNotes": "\n".join([
-                  "v1.6.9 Feishu Agent 稳定版",
-                  "• 强化模型工具感知与本机文件权限判断，减少误报没有权限/没有工具。",
-                  "• 优化思考过程折叠、定时任务精度和纯提醒直接投递。",
-                  "• 定时任务消息升级为 CardKit 2.0，并具备 legacy card 与 Markdown 兜底。",
-                  "• 内置 AI Radar 日报和 AI HOT 即时查询，无需外部项目路径或脚本。",
-                  "• 修复 Prompt Pack 新模块兼容与 R2 打包，支持 schedule_templates 等模块下发。",
+                  "v1.6.10 Feishu Agent 稳定版",
+                  "• 修复长流程只输出下一步计划、没有真实工具调用时被误判完成的问题。",
+                  "• 操作型请求会继续纠偏并要求真实工具调用，避免群聊消息总结等任务中途假完成。",
+                  "• 缺参数追问和最终总结会正常停止，不会为了续跑误入循环。",
+                  "• 新增计划空转、追问、最终答复、普通聊天和最大工具轮次边界测试。",
                   "Build " + os.environ.get("GITHUB_SHA", "")[:7],
               ]),
               "assets": {

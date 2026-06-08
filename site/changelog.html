@@ -15,6 +15,21 @@
       <section class="panel">
         <h1>更新日志</h1>
         <article class="release-entry">
+          <h2>v1.6.10 · Feishu Agent 稳定版</h2>
+          <p>本次版本重点修复飞书 Agent 长流程中“只说下一步计划、没有真正调用工具”导致的中途假完成问题。</p>
+          <h3>长流程稳定性</h3>
+          <ul>
+            <li>当模型只输出“我将获取群聊消息记录”这类计划文本、但没有返回结构化工具调用时，Agent 会继续纠偏并要求真实调用工具。</li>
+            <li>补充边界判断：缺少必要参数时仍会正常追问用户，已经形成总结时仍会正常结束，不会为了续跑而误入循环。</li>
+            <li>新增 AI Build Demo Day 群聊消息类长流程回归测试，并覆盖追问、最终答复、普通聊天和最大工具轮次保护。</li>
+          </ul>
+          <h3>本地验证</h3>
+          <ul>
+            <li>已通过 Feishu Agent 全包测试、核心代理工具测试和本地桌面包重建。</li>
+            <li>本地安装包继续保留 Wails DevTools，便于右键打开 Inspect Element 排障。</li>
+          </ul>
+        </article>
+        <article class="release-entry">
           <h2>v1.6.9 · Feishu Agent 稳定版</h2>
           <p>本次版本集中修复飞书 Agent 的工具感知、本机文件权限、定时任务和 Prompt Pack 下发链路，并新增 AI HOT / AI Radar 内置能力。</p>
           <h3>工具与权限</h3>

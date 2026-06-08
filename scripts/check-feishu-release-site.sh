@@ -81,7 +81,7 @@ local_deploy = (root / "scripts/deploy-feishu-pages-local.sh").read_text(encodin
 for item in [
     "wrangler@latest pages deploy site",
     "--project-name lingma-feishu-agent",
-    "--branch main",
+    "--branch stable",
 ]:
     if item not in local_deploy:
         raise SystemExit("Local Pages deploy fallback is missing: " + item)

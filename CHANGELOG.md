@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased (target: v1.6.9)
+## Unreleased (target: v1.6.10)
+
+## v1.6.10 - 2026-06-08
+
+- Feishu Agent branch only; no GitHub Release assets are published from this branch.
+- Fixed long Feishu Agent workflows that could stop too early when the model only wrote a plan such as "I will fetch the group messages" without emitting a structured tool call.
+- Added a conservative retry classifier for plan-only tool turns: operation-style requests continue only when the assistant text looks like pending tool execution, while clarifying questions and final summaries still stop normally.
+- Added regression coverage for the AI Build Demo Day style group-message workflow, plus boundary tests for missing-parameter questions, final answers, normal chat, and max-tool-round protection.
+- Rebuilt the local Feishu Agent desktop app with DevTools enabled so the installed app uses the new long-workflow guard.
+- 仅 Feishu Agent 分支使用；本分支不发布 GitHub Release assets。
+- 修复飞书 Agent 长流程过早结束问题：当模型只写出“我将获取群聊消息记录”这类计划文本、但没有真实返回结构化工具调用时，不再把卡片标为已完成。
+- 新增保守的计划空转续跑判定：只有操作型请求且 assistant 输出明显像待执行工具计划时才继续；缺参数追问和最终总结会正常停止。
+- 补充 AI Build Demo Day 群聊消息场景回归测试，并覆盖缺参数追问、最终答复、普通聊天和最大工具轮次边界。
+- 已重建本地 Feishu Agent 桌面包并保留 DevTools，安装后的 App 使用新的长流程保护逻辑。
 
 ## v1.6.9 - 2026-06-01
 

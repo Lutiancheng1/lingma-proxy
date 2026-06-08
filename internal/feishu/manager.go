@@ -1402,6 +1402,17 @@ conversation:
 		messages = append(messages, assistant)
 		rawHistory = append(rawHistory, cloneMessage(assistant))
 		if len(msg.ToolCalls) == 0 {
+			if shouldRetryPlanOnlyToolTurn(input.Text, msg.Content, forceToolUse, i, rounds) {
+				correction := "上一条 assistant 回复只是准备执行工具的计划，并没有真正调用工具。请立即选择合适的已提供工具完成用户请求；不要再次只描述下一步计划。"
+				messages = append(messages, map[string]any{"role": "system", "content": correction})
+				if len(rawHistory) > 0 {
+					rawHistory = rawHistory[:len(rawHistory)-1]
+				}
+				card.SetReply("")
+				card.SetStatus("thinking", "继续调用工具")
+				m.logf("info", "Feishu Agent 检测到模型仅输出工具计划，继续要求真实工具调用", logMeta)
+				continue
+			}
 			replyText = strings.TrimSpace(msg.Content)
 			card.SetStatus("done", "已完成")
 			m.logf("info", "Feishu Agent 生成直接回复（无工具调用）", logMeta)
@@ -1680,6 +1691,94 @@ func toolRetryGuidance(toolName string, args map[string]any, repeated int) strin
 		helpCmd = "lark-cli " + domain + " --help"
 	}
 	return fmt.Sprintf("[retry guidance] 同一个 lark-cli 调用已失败 %d 次。不要原样重复。下一轮请先调用 lark_cli_exec 执行 `%s` 查看真实用法，再根据 help 输出重试。skill 快捷命令通常需要 + 前缀，例如 `im +chat-list`、`im +messages-search`、`calendar +agenda`、`docs +fetch`。", repeated, helpCmd)
+}
+
+func shouldRetryPlanOnlyToolTurn(userText, assistantText string, forceToolUse bool, round int, maxRounds int) bool {
+	if !forceToolUse || round >= maxRounds-1 {
+		return false
+	}
+	assistantText = strings.TrimSpace(assistantText)
+	if assistantText == "" {
+		return false
+	}
+	if looksLikeClarifyingQuestion(assistantText) {
+		return false
+	}
+	if looksLikeFinalToolAnswer(assistantText) {
+		return false
+	}
+	return looksLikePendingToolPlan(assistantText)
+}
+
+func looksLikePendingToolPlan(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	actionCues := []string{
+		"我将", "我会", "我需要", "让我", "接下来", "现在我", "继续搜索", "继续获取", "继续查看",
+		"will use", "will call", "need to call", "let me",
+	}
+	hasAction := false
+	for _, cue := range actionCues {
+		if strings.Contains(text, cue) || strings.Contains(lower, cue) {
+			hasAction = true
+			break
+		}
+	}
+	if !hasAction {
+		return false
+	}
+	toolCues := []string{
+		"工具", "命令", "调用", "执行", "获取", "查询", "搜索", "查看", "读取",
+		"lark", "feishu", "飞书", "chat", "message", "tool", "command", "search", "fetch", "list",
+	}
+	for _, cue := range toolCues {
+		if strings.Contains(text, cue) || strings.Contains(lower, cue) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeClarifyingQuestion(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	hasQuestionMark := strings.Contains(text, "？") || strings.Contains(text, "?")
+	cues := []string{
+		"请提供", "请补充", "需要你", "还需要", "缺少", "请确认", "请问", "能否", "是否",
+		"哪个", "哪一个", "什么时间", "时间范围", "具体", "链接", "token", "路径", "范围",
+		"please provide", "need you", "which", "what", "confirm", "missing",
+	}
+	for _, cue := range cues {
+		if strings.Contains(text, cue) || strings.Contains(lower, cue) {
+			return true
+		}
+	}
+	return hasQuestionMark && !looksLikePendingToolPlan(text)
+}
+
+func looksLikeFinalToolAnswer(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	cues := []string{
+		"已完成", "已查到", "查到", "没有找到", "未找到", "总结如下", "关键内容", "主要内容",
+		"根据", "结果如下", "结论", "以下是", "已创建", "已发送", "已更新", "已读取",
+		"done", "found", "not found", "summary", "result",
+	}
+	for _, cue := range cues {
+		if strings.Contains(text, cue) || strings.Contains(lower, cue) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) synthesizeToolFinalReply(ctx context.Context, proxyURL string, model string, messages []map[string]any, lastToolOutput string, meta LogMeta, card *cardWriter) string {

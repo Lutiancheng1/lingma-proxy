@@ -267,6 +267,222 @@ func TestHandleEventGuidesThenStopsOnRepeatedIdenticalToolFailure(t *testing.T) 
 	}
 }
 
+func TestHandleEventRetriesWhenModelOnlyPlansToolWithoutToolCall(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	oldDiscover := discoverSkillsForPrompt
+	oldStream := callLLMStreamForConversation
+	t.Cleanup(func() {
+		discoverSkillsForPrompt = oldDiscover
+		callLLMStreamForConversation = oldStream
+	})
+	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
+		return []SkillStatus{{Name: "lark-im", Found: true}}, nil
+	}
+	calls := 0
+	callLLMStreamForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool, tools []map[string]any, deltas streamingDelta) (*llmResponse, error) {
+		calls++
+		var resp llmResponse
+		resp.Choices = append(resp.Choices, struct {
+			Message struct {
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls"`
+			} `json:"message"`
+		}{})
+		if calls == 1 {
+			resp.Choices[0].Message.Content = "现在我需要获取该群聊的消息记录。我将使用 +chat-messages-list 命令来获取该群聊的消息。"
+			return &resp, nil
+		}
+		var tc ToolCall
+		tc.ID = "call_messages"
+		tc.Type = "function"
+		tc.Function.Name = "lark_cli_exec"
+		tc.Function.Arguments = `{"argv":["im","+messages-search","--query","AI Build Demo Day"]}`
+		resp.Choices[0].Message.ToolCalls = []ToolCall{tc}
+		return &resp, nil
+	}
+
+	manager := NewManager(ManagerOptions{
+		ProxyURL: func() string { return "http://127.0.0.1:8095/v1/chat/completions" },
+	})
+	manager.SetConfig(Config{Model: "kmodel", MaxToolRounds: 5})
+	manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_plan_only_chat",
+		ChatType:    "p2p",
+		Content:     "找到 AI Build Demo Day 群聊，查看最近 500 条消息并总结",
+		CreateTime:  "2",
+		EventID:     "evt_plan_only_1",
+		MessageID:   "om_plan_only_message",
+		SenderID:    "ou_test_user",
+		MessageType: "text",
+	})
+
+	got := string(mustReadFileContainingEventually(t, replyLog, "im +messages-search"))
+	if calls < 2 {
+		t.Fatalf("expected retry after plan-only response, got calls=%d log=%s", calls, got)
+	}
+	if strings.Contains(got, "现在我需要获取该群聊的消息记录") {
+		t.Fatalf("plan-only text should not be finalized as user-visible completion: %s", got)
+	}
+}
+
+func TestPlanOnlyToolTurnClassification(t *testing.T) {
+	cases := []struct {
+		name      string
+		userText  string
+		reply     string
+		forceTool bool
+		want      bool
+	}{
+		{
+			name:      "pending command plan retries",
+			userText:  "找到 AI Build Demo Day 群聊，查看最近 500 条消息并总结",
+			reply:     "现在我需要获取该群聊的消息记录。我将使用 +chat-messages-list 命令来获取该群聊的消息。",
+			forceTool: true,
+			want:      true,
+		},
+		{
+			name:      "clarifying question stops",
+			userText:  "创建一个会议",
+			reply:     "请提供会议主题、开始时间和结束时间，我才能继续创建日程。",
+			forceTool: true,
+			want:      false,
+		},
+		{
+			name:      "final summary stops",
+			userText:  "搜索群聊消息并总结",
+			reply:     "已查到 37 条相关消息，关键内容如下：大家主要在讨论 Demo Day 的分享文档、PDF 和会议纪要。",
+			forceTool: true,
+			want:      false,
+		},
+		{
+			name:      "plain chat never retries",
+			userText:  "你好",
+			reply:     "我将简单介绍我的能力。",
+			forceTool: false,
+			want:      false,
+		},
+		{
+			name:      "last round stops",
+			userText:  "搜索群聊消息并总结",
+			reply:     "现在我需要继续搜索消息。",
+			forceTool: true,
+			want:      false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			round := 0
+			maxRounds := 5
+			if tc.name == "last round stops" {
+				round = 4
+			}
+			got := shouldRetryPlanOnlyToolTurn(tc.userText, tc.reply, tc.forceTool, round, maxRounds)
+			if got != tc.want {
+				t.Fatalf("shouldRetryPlanOnlyToolTurn()=%t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHandleEventDoesNotRetryClarifyingQuestionWithoutToolCall(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	oldDiscover := discoverSkillsForPrompt
+	oldStream := callLLMStreamForConversation
+	t.Cleanup(func() {
+		discoverSkillsForPrompt = oldDiscover
+		callLLMStreamForConversation = oldStream
+	})
+	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
+		return []SkillStatus{{Name: "lark-calendar", Found: true}}, nil
+	}
+	calls := 0
+	callLLMStreamForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool, tools []map[string]any, deltas streamingDelta) (*llmResponse, error) {
+		calls++
+		if !forceToolUse {
+			t.Fatal("calendar creation request should force tool mode")
+		}
+		var resp llmResponse
+		resp.Choices = append(resp.Choices, struct {
+			Message struct {
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls"`
+			} `json:"message"`
+		}{})
+		resp.Choices[0].Message.Content = "请提供会议主题、开始时间和结束时间，我才能继续创建日程。"
+		return &resp, nil
+	}
+
+	manager := NewManager(ManagerOptions{
+		ProxyURL: func() string { return "http://127.0.0.1:8095/v1/chat/completions" },
+	})
+	manager.SetConfig(Config{Model: "kmodel", MaxToolRounds: 5})
+	manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_clarify_chat",
+		ChatType:    "p2p",
+		Content:     "创建一个会议",
+		CreateTime:  "2",
+		EventID:     "evt_clarify_1",
+		MessageID:   "om_clarify_message",
+		SenderID:    "ou_test_user",
+		MessageType: "text",
+	})
+
+	got := string(mustReadFileContainingEventually(t, replyLog, "请提供会议主题"))
+	if calls != 1 {
+		t.Fatalf("clarifying question should stop after one LLM call, got calls=%d log=%s", calls, got)
+	}
+}
+
+func TestHandleEventDoesNotRetryFinalAnswerWithoutToolCall(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	oldDiscover := discoverSkillsForPrompt
+	oldStream := callLLMStreamForConversation
+	t.Cleanup(func() {
+		discoverSkillsForPrompt = oldDiscover
+		callLLMStreamForConversation = oldStream
+	})
+	discoverSkillsForPrompt = func(context.Context) ([]SkillStatus, error) {
+		return []SkillStatus{{Name: "lark-im", Found: true}}, nil
+	}
+	calls := 0
+	callLLMStreamForConversation = func(ctx context.Context, proxyURL string, model string, messages []map[string]any, forceToolUse bool, tools []map[string]any, deltas streamingDelta) (*llmResponse, error) {
+		calls++
+		if !forceToolUse {
+			t.Fatal("message search request should force tool mode")
+		}
+		var resp llmResponse
+		resp.Choices = append(resp.Choices, struct {
+			Message struct {
+				Content   string     `json:"content"`
+				ToolCalls []ToolCall `json:"tool_calls"`
+			} `json:"message"`
+		}{})
+		resp.Choices[0].Message.Content = "已查到 37 条相关消息，关键内容如下：大家主要在讨论 Demo Day 的分享文档、PDF 和会议纪要。"
+		return &resp, nil
+	}
+
+	manager := NewManager(ManagerOptions{
+		ProxyURL: func() string { return "http://127.0.0.1:8095/v1/chat/completions" },
+	})
+	manager.SetConfig(Config{Model: "kmodel", MaxToolRounds: 5})
+	manager.handleEvent(context.Background(), incomingEvent{
+		ChatID:      "oc_final_chat",
+		ChatType:    "p2p",
+		Content:     "搜索群聊消息并总结",
+		CreateTime:  "2",
+		EventID:     "evt_final_1",
+		MessageID:   "om_final_message",
+		SenderID:    "ou_test_user",
+		MessageType: "text",
+	})
+
+	got := string(mustReadFileContainingEventually(t, replyLog, "已查到 37 条相关消息"))
+	if calls != 1 {
+		t.Fatalf("final answer should stop after one LLM call, got calls=%d log=%s", calls, got)
+	}
+}
+
 func TestRemovedConversationPreferenceCommandsAreNotHandled(t *testing.T) {
 	manager := NewManager(ManagerOptions{})
 	for _, command := range []string{"/think off", "/lang en", "/at off", "/whoami"} {
