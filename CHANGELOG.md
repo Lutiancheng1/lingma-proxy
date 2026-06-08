@@ -27,6 +27,15 @@
 - 保持 tools 请求默认增量流式输出；如需先内部完成工具轮次再输出最终 `tool_use`，仍通过 `LINGMA_AGGREGATE_TOOL_STREAM=1` 显式开启。
 - 已用真实 Claude Code v2.1.158 指向临时 Remote API 代理验证：自然提示检查 `/Users/tiancheng/ai-workspace` 时首轮直接产出 Bash `tool_use`，并基于正确目录结果完成回答。
 
+- Hardened Remote API tool emulation so tool-bearing requests automatically use the injected tool prompt as the upstream chat message, improving Claude Code / QoderWork-style tool routing instead of relying on the raw structured messages alone.
+- Kept Anthropic streaming incremental by default while parsing action blocks into standard `tool_use` events; `LINGMA_AGGREGATE_TOOL_STREAM=1` remains available for clients that prefer the old fully aggregated tool turn.
+- Improved desktop log and feedback diagnostics by emitting full log entries to the UI, truncating only the visible Logs list row, and preserving full request/response bodies in persisted state for later inspection.
+- Added the QoderWork CN integration plan, documenting why direct Gateway API access is impractical and why spawning `qodercli` is the viable integration path.
+- 加强 Remote API 工具 emulation：携带 tools 的请求会自动使用已注入工具规则的完整 prompt 作为上游 chat message，减少 Claude Code / QoderWork 类场景只收到原始结构化消息时的漏工具问题。
+- Anthropic 流式工具调用默认继续保持增量输出，同时把可解析的 action block 转成标准 `tool_use` 事件；需要旧版“先聚合再输出”行为时仍可设置 `LINGMA_AGGREGATE_TOOL_STREAM=1`。
+- 桌面日志和反馈诊断保留更完整现场：事件推送完整日志，Logs 列表仅截断可见行，持久化状态保留完整请求/响应正文，方便后续排查。
+- 新增 QoderWork CN 集成方案文档，说明直连 Gateway API 的签名/加密限制，以及通过 spawn `qodercli` 集成的可行路径。
+
 ## v1.6.7 - 2026-05-27
 
 - Added complete log detail inspection in the desktop Logs page, including ID-based lookup so same-second log records no longer open the wrong entry.
