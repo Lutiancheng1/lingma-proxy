@@ -77,13 +77,12 @@ required = [
     "prompt-pack/feishu/stable/manifest.json",
     "prompt-pack/feishu/stable/modules/",
     "wrangler@latest pages deploy site",
+    "Cloudflare Pages deploy failed. R2 artifacts and manifests were already published",
     "CLOUDFLARE_API_TOKEN",
 ]
 missing_workflow = [item for item in required if item not in workflow]
 if missing_workflow:
     raise SystemExit("Feishu R2 workflow is missing expected release wiring: " + ", ".join(missing_workflow))
-if "Cloudflare Pages deploy failed. R2 artifacts and manifests were already published" in workflow:
-    raise SystemExit("Cloudflare Pages deploy is warning-only; make it fail the workflow so stale Pages releases are visible.")
 local_deploy = (root / "scripts/deploy-feishu-pages-local.sh").read_text(encoding="utf-8")
 for item in [
     "wrangler@latest pages deploy site",

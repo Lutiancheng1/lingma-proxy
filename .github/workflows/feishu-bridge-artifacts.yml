@@ -429,4 +429,6 @@ jobs:
             echo "::warning::Cloudflare Pages deploy skipped: Pages secrets are not configured."
             exit 0
           fi
-          npx wrangler@latest pages deploy site --project-name "$CLOUDFLARE_PAGES_PROJECT" --branch stable
+          if ! npx wrangler@latest pages deploy site --project-name "$CLOUDFLARE_PAGES_PROJECT" --branch stable; then
+            echo "::warning::Cloudflare Pages deploy failed. R2 artifacts and manifests were already published; run ./scripts/deploy-feishu-pages-local.sh with local Wrangler OAuth to update lingma-feishu-agent.pages.dev."
+          fi
