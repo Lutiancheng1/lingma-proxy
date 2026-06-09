@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased (target: v1.6.10)
+## Unreleased (target: v1.6.11)
+
+## v1.6.11 - 2026-06-09
+
+- Feishu Agent branch only; no GitHub Release assets are published from this branch.
+- Fixed Feishu docs creation compatibility with newer `lark-cli` / `lark-doc` v2 skills: `lark_docs_create` now emits `docs +create --api-version v2 --doc-format ... --content ...` instead of deprecated `--title` / `--markdown` flags.
+- Updated Feishu Agent prompt rules and tool correction hints so document creation uses docs v2 content semantics and stops repeating legacy v1 flags after validation errors.
+- Bumped the remote Prompt Pack version to `2026.06.09.1` so R2 Prompt Pack updates can deliver the new docs v2 creation guidance.
+- 仅 Feishu Agent 分支使用；本分支不发布 GitHub Release assets。
+- 修复新版 `lark-cli` / `lark-doc` v2 下创建云文档失败的问题：`lark_docs_create` 现在会生成 `docs +create --api-version v2 --doc-format ... --content ...`，不再使用已废弃的 `--title` / `--markdown` 参数。
+- 更新飞书 Agent Prompt Pack 规则和工具纠偏提示，创建文档统一使用 docs v2 content 语义，遇到 legacy v1 flag 报错后不再重复旧命令。
+- 远端 Prompt Pack 版本迭代到 `2026.06.09.1`，确保 R2 Prompt Pack 更新可以下发新的 docs v2 创建文档规则。
 
 ## v1.6.10 - 2026-06-08
 

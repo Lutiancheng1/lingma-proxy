@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
+PROMPT_PACK_VERSION="2026.06.09.1"
 
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
   echo "Invalid version in VERSION: $VERSION" >&2
@@ -16,6 +17,11 @@ fi
 
 if ! grep -Fq "v$VERSION" "$ROOT_DIR/site/changelog.html"; then
   echo "site/changelog.html is missing an internal R2 site entry for v$VERSION." >&2
+  exit 1
+fi
+
+if ! grep -Fq "$PROMPT_PACK_VERSION" "$ROOT_DIR/site/changelog.html"; then
+  echo "site/changelog.html is missing Prompt Pack version $PROMPT_PACK_VERSION." >&2
   exit 1
 fi
 
@@ -45,12 +51,13 @@ for expected in \
   fi
 done
 
-python3 - "$ROOT_DIR" <<'PY'
+python3 - "$ROOT_DIR" "$PROMPT_PACK_VERSION" <<'PY'
 import pathlib
 import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
+prompt_pack_version = sys.argv[2]
 source = (root / "internal/feishu/prompt_pack.go").read_text(encoding="utf-8")
 match = re.search(r"var promptRuleOrder = \[\]string\{(?P<body>.*?)\}", source, re.S)
 if not match:
@@ -63,7 +70,7 @@ workflow = (root / ".github/workflows/feishu-bridge-artifacts.yml").read_text(en
 required = [
     "promptRuleOrder not found",
     "dist/prompt-pack/modules",
-    'version": "2026.',
+    f'"version": "{prompt_pack_version}"',
     '"minAppVersion": os.environ["VERSION"]',
     "site/${rel}",
     "updates/feishu/stable/manifest.json",

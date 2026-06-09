@@ -162,6 +162,71 @@ func TestDocsCreateRequiresMarkdown(t *testing.T) {
 	}
 }
 
+func TestDocsCreateUsesV2ContentFlagsForMarkdown(t *testing.T) {
+	got, err := buildToolCommand("lark_docs_create", map[string]any{
+		"title":        "本周工作总结",
+		"markdown":     "## 一、工作概述\n\n## 二、下周计划",
+		"folder_token": "fld_1",
+	})
+	if err != nil {
+		t.Fatalf("build docs create: %v", err)
+	}
+	joined := strings.Join(got, " ")
+	if strings.Contains(joined, "--title") || strings.Contains(joined, "--markdown") {
+		t.Fatalf("docs create used deprecated v1 flags: %#v", got)
+	}
+	wantPrefix := []string{"lark-cli", "docs", "+create", "--api-version", "v2", "--as", "user", "--doc-format", "markdown", "--content"}
+	if len(got) < len(wantPrefix)+1 || !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("docs create command prefix = %#v, want %#v", got, wantPrefix)
+	}
+	if !strings.Contains(got[len(wantPrefix)], "# 本周工作总结") || !strings.Contains(got[len(wantPrefix)], "## 一、工作概述") {
+		t.Fatalf("docs create content lost title/body: %#v", got)
+	}
+	if !strings.Contains(joined, "--parent-token fld_1") {
+		t.Fatalf("docs create did not map folder_token to parent-token: %#v", got)
+	}
+}
+
+func TestDocsCreateUsesV2ContentFlagsForXML(t *testing.T) {
+	got, err := buildToolCommand("lark_docs_create", map[string]any{
+		"title":      "A&B <计划>",
+		"content":    "<h1>目标</h1>",
+		"doc_format": "xml",
+	})
+	if err != nil {
+		t.Fatalf("build docs create xml: %v", err)
+	}
+	joined := strings.Join(got, " ")
+	if strings.Contains(joined, "--title") || strings.Contains(joined, "--markdown") {
+		t.Fatalf("docs create used deprecated v1 flags: %#v", got)
+	}
+	if !strings.Contains(joined, "--doc-format xml") {
+		t.Fatalf("docs create did not use xml format: %#v", got)
+	}
+	if !strings.Contains(joined, "<title>A&amp;B &lt;计划&gt;</title><h1>目标</h1>") {
+		t.Fatalf("docs create xml content did not include escaped title: %#v", got)
+	}
+}
+
+func TestDocsCreateUsesParentPosition(t *testing.T) {
+	got, err := buildToolCommand("lark_docs_create", map[string]any{
+		"title":           "个人知识库测试",
+		"content":         "<p>body</p>",
+		"doc_format":      "xml",
+		"parent_position": "my_library",
+	})
+	if err != nil {
+		t.Fatalf("build docs create parent position: %v", err)
+	}
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "--parent-position my_library") {
+		t.Fatalf("docs create did not include parent-position: %#v", got)
+	}
+	if strings.Contains(joined, "--parent-token") {
+		t.Fatalf("docs create should not include parent-token with only parent_position: %#v", got)
+	}
+}
+
 func TestDocsFetchChunksLongDocumentContent(t *testing.T) {
 	raw := `{
   "ok": true,

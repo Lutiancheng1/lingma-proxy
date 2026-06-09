@@ -270,11 +270,11 @@ jobs:
               "minSupportedVersion": "1.6.8",
               "mandatory": False,
               "releaseNotes": "\n".join([
-                  "v1.6.10 Feishu Agent 稳定版",
-                  "• 修复长流程只输出下一步计划、没有真实工具调用时被误判完成的问题。",
-                  "• 操作型请求会继续纠偏并要求真实工具调用，避免群聊消息总结等任务中途假完成。",
-                  "• 缺参数追问和最终总结会正常停止，不会为了续跑误入循环。",
-                  "• 新增计划空转、追问、最终答复、普通聊天和最大工具轮次边界测试。",
+                  "v1.6.11 Feishu Agent 稳定版",
+                  "• 修复新版 lark-cli / lark-doc v2 下创建云文档连续失败的问题。",
+                  "• lark_docs_create 改为使用 docs v2 的 --content / --doc-format 参数，不再生成旧 --title / --markdown。",
+                  "• 同步更新内置系统提示词、Prompt Pack 规则和工具错误纠偏提示。",
+                  "• Prompt Pack 版本迭代到 2026.06.09.1，确保远端规则可随 R2 下发。",
                   "Build " + os.environ.get("GITHUB_SHA", "")[:7],
               ]),
               "assets": {
@@ -316,7 +316,7 @@ jobs:
           pack = {
             "schemaVersion": 1,
             "channel": "feishu-stable",
-            "version": "2026.06.01.1",
+            "version": "2026.06.09.1",
             "minAppVersion": os.environ["VERSION"],
             "moduleOrder": order,
             "modules": modules,
@@ -332,7 +332,7 @@ jobs:
           manifest = {
             "schemaVersion": 1,
             "channel": "feishu-stable",
-            "version": "2026.06.01.1",
+            "version": "2026.06.09.1",
             "minAppVersion": os.environ["VERSION"],
             "url": os.environ["PUBLIC_BASE"] + "/prompt-pack/feishu/stable/prompt-pack.json",
             "sha256": os.environ["PACK_SHA"],

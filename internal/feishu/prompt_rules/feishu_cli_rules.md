@@ -2,13 +2,14 @@ lark-cli 命令格式规则：
 1. 本 Agent 只使用官方 `lark-cli`。第三方 `feishu-cli` 的经验只能转译成官方 `lark-cli` 用法，禁止直接输出或调用第三方 `feishu-cli` 命令。
 2. Skill 快捷命令使用 `+` 前缀，例如 `im +chat-list`、`im +messages-send`、`calendar +agenda`、`drive +search`；不要写成 `im chats list`、`im messages send`。
 3. 原生子命令不带 `+`，例如 `drive file list`、`drive permission.public get`。
-4. 不确定命令、子命令、shortcut 或参数格式时，先调用 `lark_skill_view` 阅读对应官方 Skill；仍不确定时再用 `lark-cli --help`、`lark-cli <domain> --help`、`lark-cli <domain> <group> --help` 或 `lark-cli schema <service.resource.method>` 自检，不要猜。
+4. 不确定命令、子命令、shortcut 或参数格式时，先调用 `lark_skill_view` 阅读对应官方 Skill；需要通过通用 CLI 自检时，以新版 `lark-cli --help` 中提示的 `lark-cli skills read <skill> <path>` / `lark_skill_view` 返回内容为准，不要从旧经验或单独 `--help` 推断参数；仍不确定时再用 `lark-cli --help`、`lark-cli <domain> --help`、`lark-cli <domain> <group> --help` 或 `lark-cli schema <service.resource.method>` 自检，不要猜。
 5. 查当前登录用户/本人信息/我叫什么/我的身份时，优先调用 `lark_cli_exec {"argv":["auth","list"]}`；需要更详细个人资料时再读 `lark_skill_view {"name":"lark-contact"}` 并调用 contact 相关命令。禁止用日历、任务、云盘等无关业务工具来旁路“验证身份”。
 6. 授权状态用 `lark_cli_exec {"argv":["auth","status"]}`；列出已登录用户用 `lark_cli_exec {"argv":["auth","list"]}`；不要给 auth 命令加 `--as`。
 
 任务路由速查：
 - 云盘文件/文件数量/我的文件：优先 `lark_drive_search` 或 `drive +search`。如果用户问“我的/我创建的”，可结合 `auth list` 的 `userOpenId`，再使用 mine/creator_ids 过滤。看到 `has_more=true` 必须继续分页或说明只返回部分；看到 `total` 字段可以说明 total 的含义和查询条件。
-- 读取云文档/总结文档/创建文档：先 `lark_skill_view {"name":"lark-doc"}`；读取优先 `lark_docs_fetch` 或 `docs +fetch`；创建优先 `lark_docs_create`，必须带 `content`/`markdown`，不要只给 title。
+- 读取云文档/总结文档/创建文档：先 `lark_skill_view {"name":"lark-doc"}`；读取优先 `lark_docs_fetch` 或 `docs +fetch`；创建优先 `lark_docs_create`，必须带 `content` 或 `markdown`，不要只给 title。
+- 创建文档使用 docs v2 语义：真实 CLI 是 `docs +create --api-version v2 --content ...`，Markdown 内容必须配 `--doc-format markdown`。不要使用旧 v1 参数 `--title` / `--markdown`；标题要写进正文（Markdown 用首个 `# 标题`，XML 用 `<title>标题</title>`）。创建到个人知识库等位置可用 `parent_position=my_library`。结构化工具 `lark_docs_create` 会兼容 `title + markdown` 并自动转换成新版 `--content` 调用。
 - 电子表格/表格链接/总结表格：先 `lark_skill_view {"name":"lark-sheets"}`；链接先用 `lark_sheets_info` 获取 spreadsheet_token/sheet_id/工作表信息，再用 `lark_sheets_read` 读取明确范围；不要猜 Sheet1、0、1。
 - 多维表格/Base：先 `lark_skill_view {"name":"lark-base"}`；先解析 app_token/table_id/view_id，再查询 records；不要用 sheets 工具处理 base 链接。
 - 消息/群聊/搜索聊天记录：先 `lark_skill_view {"name":"lark-im"}`；发送、回复、搜索必须使用 im +messages-* 快捷命令或对应结构化工具。

@@ -281,15 +281,22 @@ func toolDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "lark_docs_create",
-				"description": "创建飞书云文档（docx 格式）。必须提供 markdown 正文；不要在尚未整理好内容时先创建空文档。",
+				"description": "创建飞书云文档（docx 格式）。必须提供 content 或 markdown 正文；不要在尚未整理好内容时先创建空文档。工具会使用 docs v2 的 --content / --doc-format 参数创建文档。",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"title":        map[string]any{"type": "string", "description": "文档标题"},
-						"markdown":     map[string]any{"type": "string", "description": "Lark-flavored Markdown 正文；创建文档时必填"},
-						"folder_token": map[string]any{"type": "string", "description": "存放文件夹的 token（可选，默认根目录）"},
+						"title":        map[string]any{"type": "string", "description": "文档标题；Markdown 内容没有一级标题时，工具会自动作为 # 标题插入"},
+						"content":      map[string]any{"type": "string", "description": "文档正文内容。默认按 Lark-flavored Markdown 写入；doc_format=xml 时按 DocxXML 写入"},
+						"markdown":     map[string]any{"type": "string", "description": "兼容旧调用的 Lark-flavored Markdown 正文；等同于 content + doc_format=markdown"},
+						"doc_format":   map[string]any{"type": "string", "enum": []string{"markdown", "xml"}, "description": "content 的格式，默认 markdown"},
+						"parent_token": map[string]any{"type": "string", "description": "存放文件夹或知识库节点 token（可选，默认根目录）"},
+						"parent_position": map[string]any{
+							"type":        "string",
+							"description": "父节点位置，例如 my_library；与 parent_token/folder_token 互斥",
+						},
+						"folder_token": map[string]any{"type": "string", "description": "兼容旧调用的父文件夹 token；等同于 parent_token"},
 					},
-					"required": []string{"title", "markdown"},
+					"required": []string{"title"},
 				},
 			},
 		},
@@ -772,14 +779,33 @@ func buildToolCommand(toolName string, args map[string]any) ([]string, error) {
 		}
 		return cmd, nil
 	case "lark_docs_create":
-		cmd := []string{"lark-cli", "docs", "+create", "--api-version", "v2", "--as", "user", "--title", stringArg(args, "title")}
+		title := strings.TrimSpace(stringArg(args, "title"))
+		content := stringArg(args, "content")
 		markdown := stringArg(args, "markdown")
-		if strings.TrimSpace(markdown) == "" {
-			return nil, fmt.Errorf("markdown 正文不能为空；请先整理内容，再调用 lark_docs_create")
+		format := strings.ToLower(strings.TrimSpace(stringArg(args, "doc_format")))
+		if strings.TrimSpace(content) == "" && strings.TrimSpace(markdown) != "" {
+			content = markdown
+			format = "markdown"
 		}
-		cmd = append(cmd, "--markdown", markdown)
-		if value := stringArg(args, "folder_token"); value != "" {
-			cmd = append(cmd, "--folder-token", value)
+		if strings.TrimSpace(content) == "" {
+			return nil, fmt.Errorf("content/markdown 正文不能为空；请先整理内容，再调用 lark_docs_create")
+		}
+		if format == "" {
+			format = "markdown"
+		}
+		switch format {
+		case "markdown":
+			content = ensureMarkdownDocumentTitle(title, content)
+		case "xml":
+			content = ensureXMLDocumentTitle(title, content)
+		default:
+			return nil, fmt.Errorf("unsupported doc_format for lark_docs_create: %s", format)
+		}
+		cmd := []string{"lark-cli", "docs", "+create", "--api-version", "v2", "--as", "user", "--doc-format", format, "--content", content}
+		if value := firstNonEmptyStringArg(args, "parent_token", "folder_token"); value != "" {
+			cmd = append(cmd, "--parent-token", value)
+		} else if value := stringArg(args, "parent_position"); value != "" {
+			cmd = append(cmd, "--parent-position", value)
 		}
 		return cmd, nil
 	case "lark_docs_fetch":
@@ -1273,8 +1299,8 @@ func appendLarkCLICorrection(cmdArgs []string, result string) string {
 	if len(argv) >= 2 && argv[0] == "sheets" && strings.Contains(lower, "usage:") {
 		hints = append(hints, "纠偏：电子表格任务先调用 lark_skill_view {\"name\":\"lark-sheets\"}；表格链接先用 lark_sheets_info 得到 sheet_id，再用 lark_sheets_read 读取明确范围，不要猜 Sheet1/0/1。")
 	}
-	if len(argv) >= 1 && (argv[0] == "docs" || argv[0] == "docx") && strings.Contains(lower, "--content is required") {
-		hints = append(hints, "纠偏：创建文档必须带 content/markdown；不要只传 title。")
+	if len(argv) >= 1 && (argv[0] == "docs" || argv[0] == "docx") && (strings.Contains(lower, "--content is required") || strings.Contains(lower, "legacy v1 flag") || strings.Contains(lower, "v2-only")) {
+		hints = append(hints, "纠偏：docs v2 创建文档必须用 --content 承载正文；Markdown 要加 --doc-format markdown。不要继续使用旧参数 --title/--markdown；标题写进正文（Markdown 用 # 标题，XML 用 <title>标题</title>）。优先调用结构化工具 lark_docs_create，让代理自动转换为新版参数。")
 	}
 	if len(hints) == 0 && (strings.Contains(lower, "usage:") || strings.Contains(lower, "available commands") || strings.Contains(lower, "unknown flag")) {
 		hints = append(hints, "纠偏：不要原样重复失败命令；先调用对应 lark_skill_view 或 --help 确认真命令/参数后再重试。")
@@ -1544,6 +1570,51 @@ func stringArg(args map[string]any, key string) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(typed))
 	}
+}
+
+func firstNonEmptyStringArg(args map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringArg(args, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func ensureMarkdownDocumentTitle(title string, content string) string {
+	content = strings.TrimSpace(content)
+	title = strings.TrimSpace(title)
+	if title == "" || hasMarkdownTitle(content) {
+		return content
+	}
+	return "# " + title + "\n\n" + content
+}
+
+func hasMarkdownTitle(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		return strings.HasPrefix(trimmed, "# ")
+	}
+	return false
+}
+
+func ensureXMLDocumentTitle(title string, content string) string {
+	content = strings.TrimSpace(content)
+	title = strings.TrimSpace(title)
+	if title == "" || strings.Contains(strings.ToLower(content), "<title>") {
+		return content
+	}
+	return "<title>" + escapeDocXMLText(title) + "</title>" + content
+}
+
+func escapeDocXMLText(value string) string {
+	value = strings.ReplaceAll(value, "&", "&amp;")
+	value = strings.ReplaceAll(value, "<", "&lt;")
+	value = strings.ReplaceAll(value, ">", "&gt;")
+	return value
 }
 
 func boolArg(args map[string]any, key string) bool {
