@@ -780,6 +780,55 @@ func TestPermissionRequirementDetectsNeedUserAuthorization(t *testing.T) {
 	}
 }
 
+func TestURLPatternExtractsURLFromJSONLine(t *testing.T) {
+	line := `{"verification_url":"https://open.feishu.cn/auth?token=abc123","device_code":"dev-1"}`
+	got := urlPattern.FindString(line)
+	want := "https://open.feishu.cn/auth?token=abc123"
+	if got != want {
+		t.Fatalf("url = %q, want %q", got, want)
+	}
+}
+
+func TestParseAuthLoginStartOutputUsesDeviceFlowJSON(t *testing.T) {
+	output := []byte("notice\n{\"verification_url\":\"https://accounts.feishu.cn/oauth/v1/device/verify?flow_id=abc&user_code=UHSK-ESFQ\",\"device_code\":\"dev-1\",\"expires_in\":600}\n")
+	got, err := parseAuthLoginStartOutput(output)
+	if err != nil {
+		t.Fatalf("parseAuthLoginStartOutput: %v", err)
+	}
+	if got.VerificationURL != "https://accounts.feishu.cn/oauth/v1/device/verify?flow_id=abc&user_code=UHSK-ESFQ" {
+		t.Fatalf("verification url = %q", got.VerificationURL)
+	}
+	if got.DeviceCode != "dev-1" {
+		t.Fatalf("device code = %q", got.DeviceCode)
+	}
+}
+
+func TestStartRecommendedLoginUsesNoWaitDeviceFlow(t *testing.T) {
+	replyLog := installFakeLarkCLI(t)
+	manager := NewManager(ManagerOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, err := manager.startRecommendedLogin(ctx)
+	if err != nil {
+		t.Fatalf("startRecommendedLogin: %v", err)
+	}
+	want := "https://accounts.feishu.cn/oauth/v1/device/verify?flow_id=abc&user_code=UHSK-ESFQ"
+	if got != want {
+		t.Fatalf("login url = %q, want %q", got, want)
+	}
+	if status := manager.Status(); status.LoginURL != want && status.Auth.UserOpenID == "" {
+		t.Fatalf("status should expose login url or complete auth, got: %+v", status)
+	}
+	gotLog := strings.TrimSpace(string(mustReadFileContainingEventually(t, replyLog, "auth login --device-code dev-1")))
+	if !strings.Contains(gotLog, "auth login --recommend --no-wait --json") {
+		t.Fatalf("no-wait login was not invoked, got: %s", gotLog)
+	}
+	if !strings.Contains(gotLog, "auth login --device-code dev-1") {
+		t.Fatalf("device-code completion was not invoked, got: %s", gotLog)
+	}
+}
+
 func installFakeLarkCLI(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -790,9 +839,28 @@ func installFakeLarkCLI(t *testing.T) string {
 setlocal
 chcp 65001 >nul
 echo %*>>%FEISHU_REPLY_LOG%
+if "%1"=="--version" (
+  echo lark-cli version 1.0.49
+  exit /b 0
+)
+if "%1"=="auth" goto auth
 if "%1"=="im" goto im
 if "%1"=="drive" goto drive
 goto unexpected
+:auth
+if "%2"=="login" if "%3"=="--recommend" if "%4"=="--no-wait" if "%5"=="--json" (
+  echo {"verification_url":"https://accounts.feishu.cn/oauth/v1/device/verify?flow_id=abc^&user_code=UHSK-ESFQ","device_code":"dev-1","expires_in":600}
+  exit /b 0
+)
+if "%2"=="login" if "%3"=="--device-code" (
+  exit /b 0
+)
+if "%2"=="status" if "%3"=="--verify" (
+  echo {"verified":true,"identity":"user","userName":"测试用户","userOpenId":"ou_test"}
+  exit /b 0
+)
+echo unexpected auth command: %* 1>&2
+exit /b 1
 :im
 if "%2"=="+messages-resources-download" (
   echo %*>>%FEISHU_REPLY_LOG%
@@ -827,6 +895,10 @@ exit /b 1
 	}
 	script := filepath.Join(dir, "lark-cli")
 	content := `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'lark-cli version 1.0.49\n'
+  exit 0
+fi
 if [ "$1" = "im" ] && [ "$2" = "reactions" ] && [ "$3" = "create" ]; then
   printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
   printf '{"reaction_id":"re_typing"}\n'
@@ -913,6 +985,19 @@ fi
 # CardKit API: PATCH im message
 if [ "$1" = "api" ] && [ "$2" = "PATCH" ]; then
   printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "login" ] && [ "$3" = "--recommend" ] && [ "$4" = "--no-wait" ] && [ "$5" = "--json" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  printf '{"verification_url":"https://accounts.feishu.cn/oauth/v1/device/verify?flow_id=abc&user_code=UHSK-ESFQ","device_code":"dev-1","expires_in":600}\n'
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "login" ] && [ "$3" = "--device-code" ]; then
+  printf '%s\n' "$*" >> "$FEISHU_REPLY_LOG"
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ] && [ "$3" = "--verify" ]; then
+  printf '{"verified":true,"identity":"user","userName":"测试用户","userOpenId":"ou_test"}\n'
   exit 0
 fi
 if [ "$1" = "drive" ]; then

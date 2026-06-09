@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-var urlPattern = regexp.MustCompile(`https?://[^\s]+`)
+var urlPattern = regexp.MustCompile(`https?://[^\s"',，。；;]+`)
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 
 type cliConfigFile struct {

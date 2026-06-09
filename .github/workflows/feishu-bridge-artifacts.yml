@@ -270,11 +270,11 @@ jobs:
               "minSupportedVersion": "1.6.8",
               "mandatory": False,
               "releaseNotes": "\n".join([
-                  "v1.6.11 Feishu Agent 稳定版",
-                  "• 修复新版 lark-cli / lark-doc v2 下创建云文档连续失败的问题。",
-                  "• lark_docs_create 改为使用 docs v2 的 --content / --doc-format 参数，不再生成旧 --title / --markdown。",
-                  "• 同步更新内置系统提示词、Prompt Pack 规则和工具错误纠偏提示。",
-                  "• Prompt Pack 版本迭代到 2026.06.09.1，确保远端规则可随 R2 下发。",
+                  "v1.6.12 Feishu Agent 稳定版",
+                  "• 修复自动用户授权链路，缺少权限时直接返回完整浏览器授权链接。",
+                  "• 自动授权改用 lark-cli 设备流 --no-wait --json + --device-code，兼容 Windows lark-cli.cmd 与较慢 CLI 输出。",
+                  "• 修复 JSON 授权链接截取，避免把 device_code 等字段拼进 URL。",
+                  "• 控制台手工开权限仅作为临时排障办法，正式路径为 Agent 返回链接后由用户浏览器授权。",
                   "Build " + os.environ.get("GITHUB_SHA", "")[:7],
               ]),
               "assets": {

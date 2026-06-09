@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased (target: v1.6.11)
+## Unreleased (target: v1.6.12)
+
+## v1.6.12 - 2026-06-09
+
+- Feishu Agent branch only; no GitHub Release assets are published from this branch.
+- Fixed Feishu Agent automatic user authorization so missing user scopes now use the CLI device-flow path (`auth login --no-wait --json`) to capture a complete verification URL immediately and continue completion with `--device-code` in the background.
+- Hardened authorization URL extraction from JSON output so Windows `lark-cli.cmd` / slower CLI output no longer causes the Agent to fall back to "open the settings page" without a usable link.
+- Clarified the product path for user authorization: customers should complete the Agent-provided browser authorization link; manually opening scopes in the Feishu developer console is only a temporary operator workaround, not the expected runtime flow.
+- 仅 Feishu Agent 分支使用；本分支不发布 GitHub Release assets。
+- 修复飞书 Agent 自动用户授权链路：遇到缺少用户授权 / scope 时，改用 CLI 设备流 `auth login --no-wait --json` 立即捕获完整授权链接，并由后台 `--device-code` 继续完成授权落盘。
+- 加固 JSON 输出里的授权链接提取，兼容 Windows `lark-cli.cmd` 和较慢的 CLI 输出，避免自动发起后拿不到完整链接、只能提示去设置页兜底。
+- 明确正式产品路径：客户应通过 Agent 返回的浏览器授权链接完成授权；去飞书开发者控制台手工开权限只作为临时处理办法，不作为运行时正常流程。
 
 ## v1.6.11 - 2026-06-09
 

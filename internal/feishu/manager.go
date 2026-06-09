@@ -32,6 +32,7 @@ const (
 	maxFeishuImageBytes              = 8 * 1024 * 1024
 	feishuImageDownloadTimeout       = 90 * time.Second
 	feishuVisionResponseTimeout      = 120 * time.Second
+	authLoginStartTimeout            = 30 * time.Second
 	feishuCardOperationMinInterval   = 220 * time.Millisecond
 )
 
@@ -619,7 +620,8 @@ func (m *Manager) StartLogin(ctx context.Context) error {
 	if err := requireCLIReady(); err != nil {
 		return err
 	}
-	return m.startLoginWithArgs(ctx, []string{"lark-cli", "auth", "login", "--recommend"})
+	_, err := m.startRecommendedLogin(ctx)
+	return err
 }
 
 func requireCLIReady() error {
@@ -651,21 +653,7 @@ func (m *Manager) startScopeLogin(ctx context.Context, scopes ...string) (string
 	}
 	m.mu.Unlock()
 
-	urlCh := make(chan string, 1)
-	err := m.startLoginWithArgs(ctx, []string{"lark-cli", "auth", "login", "--scope", scopeArg}, urlCh)
-	if err != nil {
-		return "", err
-	}
-
-	select {
-	case url := <-urlCh:
-		return strings.TrimSpace(url), nil
-	case <-time.After(3 * time.Second):
-		m.mu.RLock()
-		url := m.status.LoginURL
-		m.mu.RUnlock()
-		return strings.TrimSpace(url), nil
-	}
+	return m.startDeviceFlowLogin(ctx, []string{"--scope", scopeArg})
 }
 
 func (m *Manager) startRecommendedLogin(ctx context.Context) (string, error) {
@@ -677,19 +665,41 @@ func (m *Manager) startRecommendedLogin(ctx context.Context) (string, error) {
 	}
 	m.mu.Unlock()
 
-	urlCh := make(chan string, 1)
-	if err := m.startLoginWithArgs(ctx, []string{"lark-cli", "auth", "login", "--recommend"}, urlCh); err != nil {
-		return "", err
+	return m.startDeviceFlowLogin(ctx, []string{"--recommend"})
+}
+
+type authLoginStart struct {
+	DeviceCode      string `json:"device_code"`
+	ExpiresIn       int    `json:"expires_in"`
+	Hint            string `json:"hint"`
+	VerificationURL string `json:"verification_url"`
+}
+
+func parseAuthLoginStartOutput(output []byte) (authLoginStart, error) {
+	text := strings.TrimSpace(decodeCommandOutput(output))
+	var lastErr error
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var payload authLoginStart
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			lastErr = err
+			continue
+		}
+		payload.DeviceCode = strings.TrimSpace(payload.DeviceCode)
+		payload.VerificationURL = strings.TrimSpace(payload.VerificationURL)
+		if payload.DeviceCode == "" || payload.VerificationURL == "" {
+			return authLoginStart{}, fmt.Errorf("授权初始化返回缺少 verification_url 或 device_code")
+		}
+		return payload, nil
 	}
-	select {
-	case url := <-urlCh:
-		return strings.TrimSpace(url), nil
-	case <-time.After(3 * time.Second):
-		m.mu.RLock()
-		url := m.status.LoginURL
-		m.mu.RUnlock()
-		return strings.TrimSpace(url), nil
+	if lastErr != nil {
+		return authLoginStart{}, lastErr
 	}
+	return authLoginStart{}, fmt.Errorf("授权初始化未返回 JSON 设备流信息")
 }
 
 func cliLocationHint() string {
@@ -701,6 +711,97 @@ func cliLocationHint() string {
 		return "本机已检测到 lark-cli，但未能解析到完整路径。"
 	}
 	return "本机 lark-cli 路径：" + cli.Path
+}
+
+func (m *Manager) startDeviceFlowLogin(ctx context.Context, loginArgs []string) (string, error) {
+	if err := requireCLIReady(); err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	if m.status.LoginRunning {
+		url := m.status.LoginURL
+		m.mu.Unlock()
+		return strings.TrimSpace(url), nil
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	m.loginCancel = cancel
+	m.status.LoginRunning = true
+	m.status.LoginURL = ""
+	m.status.LastError = ""
+	m.status.LastOutput = "正在发起飞书用户授权..."
+	status := m.status
+	m.mu.Unlock()
+	m.emit(status)
+
+	startCtx, startCancel := context.WithTimeout(ctx, authLoginStartTimeout)
+	defer startCancel()
+	args := append([]string{"auth", "login"}, loginArgs...)
+	args = append(args, "--no-wait", "--json")
+	startCmd := commandContextWithEnv(startCtx, "lark-cli", args...)
+	output, err := startCmd.CombinedOutput()
+	if err != nil {
+		cancel()
+		errText := strings.TrimSpace(decodeCommandOutput(output))
+		if errText == "" {
+			errText = err.Error()
+		}
+		m.mu.Lock()
+		m.status.LoginRunning = false
+		m.status.LoginURL = ""
+		m.status.LastError = errText
+		m.loginCancel = nil
+		status := m.status
+		m.mu.Unlock()
+		m.emit(status)
+		return "", fmt.Errorf("%s", errText)
+	}
+	payload, err := parseAuthLoginStartOutput(output)
+	if err != nil {
+		cancel()
+		m.mu.Lock()
+		m.status.LoginRunning = false
+		m.status.LoginURL = ""
+		m.status.LastError = err.Error()
+		m.loginCancel = nil
+		status := m.status
+		m.mu.Unlock()
+		m.emit(status)
+		return "", err
+	}
+	m.mu.Lock()
+	m.status.LoginURL = payload.VerificationURL
+	m.status.LastOutput = "已获取飞书授权链接，等待用户在浏览器完成授权..."
+	status = m.status
+	m.mu.Unlock()
+	m.emit(status)
+
+	go m.completeDeviceFlowLogin(runCtx, payload.DeviceCode)
+	return payload.VerificationURL, nil
+}
+
+func (m *Manager) completeDeviceFlowLogin(ctx context.Context, deviceCode string) {
+	cmd := commandContextWithEnv(ctx, "lark-cli", "auth", "login", "--device-code", deviceCode)
+	err := runStreamingCommand(ctx, cmd, func(line string) {
+		line = formatOutputLine(line)
+		if line == "" {
+			return
+		}
+		m.mu.Lock()
+		m.status.LastOutput = line
+		status := m.status
+		m.mu.Unlock()
+		m.emit(status)
+	}, nil)
+	m.mu.Lock()
+	m.status.LoginRunning = false
+	m.loginCancel = nil
+	if err != nil {
+		m.status.LastError = err.Error()
+	}
+	status := m.status
+	m.mu.Unlock()
+	m.emit(status)
+	m.refreshStatus(context.Background())
 }
 
 func (m *Manager) startLoginWithArgs(ctx context.Context, args []string, urlCh ...chan string) error {

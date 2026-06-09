@@ -15,6 +15,21 @@
       <section class="panel">
         <h1>更新日志</h1>
         <article class="release-entry">
+          <h2>v1.6.12 · Feishu Agent 稳定版</h2>
+          <p>本次版本修复飞书 Agent 自动用户授权链路，缺少用户权限时会直接返回可用授权链接，并在后台完成授权落盘。</p>
+          <h3>自动授权</h3>
+          <ul>
+            <li>自动授权改为 lark-cli 设备流 auth login --no-wait --json，先稳定拿到 verification_url，再用 --device-code 等待用户完成授权。</li>
+            <li>修复 JSON 输出里的授权链接截取问题，避免把 device_code 等后续字段拼进 URL。</li>
+            <li>兼容 Windows lark-cli.cmd 和较慢的 CLI 输出，减少“已自动发起但没有捕获到完整授权链接”的兜底提示。</li>
+          </ul>
+          <h3>权限处理说明</h3>
+          <ul>
+            <li>正式产品路径是让客户点击 Agent 返回的浏览器授权链接完成授权；去飞书开发者控制台手工开权限仅作为临时排障办法。</li>
+            <li>缺少用户授权或 scope 时，Agent 会自动发起授权并把链接展示在消息和 Feishu Agent 设置页。</li>
+          </ul>
+        </article>
+        <article class="release-entry">
           <h2>v1.6.11 · Feishu Agent 稳定版</h2>
           <p>本次版本修复新版 lark-cli / lark-doc v2 下创建飞书云文档连续失败的问题，并同步迭代 Prompt Pack。</p>
           <h3>飞书云文档创建兼容性</h3>
