@@ -202,6 +202,46 @@ export namespace main {
 	        this.respBody = source["respBody"];
 	    }
 	}
+	export class ServerDeploymentExportOptions {
+	    savePath?: string;
+	    pickPolicy?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ServerDeploymentExportOptions(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.savePath = source["savePath"];
+	        this.pickPolicy = source["pickPolicy"];
+	    }
+	}
+	export class ServerDeploymentExportResult {
+	    zipPath: string;
+	    zipFilename: string;
+	    saveDir: string;
+	    credentialSource: string;
+	    tokenExpireAt?: string;
+	    tokenExpired: boolean;
+	    userId?: string;
+	    machineId?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ServerDeploymentExportResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.zipPath = source["zipPath"];
+	        this.zipFilename = source["zipFilename"];
+	        this.saveDir = source["saveDir"];
+	        this.credentialSource = source["credentialSource"];
+	        this.tokenExpireAt = source["tokenExpireAt"];
+	        this.tokenExpired = source["tokenExpired"];
+	        this.userId = source["userId"];
+	        this.machineId = source["machineId"];
+	    }
+	}
 	export class TokenStats {
 	    totalRequests: number;
 	    successRequests: number;

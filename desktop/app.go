@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"lingma-ipc-proxy/internal/deploy"
 	"lingma-ipc-proxy/internal/httpapi"
 	"lingma-ipc-proxy/internal/lingmaipc"
 	"lingma-ipc-proxy/internal/remote"
@@ -33,6 +34,7 @@ const (
 	feedbackStringFieldLimit   = 4096
 	feedbackDefaultRangePreset = "30m"
 	feedbackDesktopFolderName  = "Lingma Proxy Feedback"
+	serverBundleFolderName     = "Lingma Proxy Server Bundles"
 	proxyWarmupTimeout         = 30 * time.Second
 	appStateFlushInterval      = 3 * time.Second
 	appStatePersistRequestMax  = 300
@@ -183,6 +185,22 @@ type FeedbackExportResult struct {
 	ExportedAt   string `json:"exportedAt"`
 	AppLogCount  int    `json:"appLogCount"`
 	RequestCount int    `json:"requestCount"`
+}
+
+type ServerDeploymentExportOptions struct {
+	SavePath   string `json:"savePath,omitempty"`
+	PickPolicy string `json:"pickPolicy,omitempty"`
+}
+
+type ServerDeploymentExportResult struct {
+	ZipPath          string `json:"zipPath"`
+	ZipFilename      string `json:"zipFilename"`
+	SaveDir          string `json:"saveDir"`
+	CredentialSource string `json:"credentialSource"`
+	TokenExpireAt    string `json:"tokenExpireAt,omitempty"`
+	TokenExpired     bool   `json:"tokenExpired"`
+	UserID           string `json:"userId,omitempty"`
+	MachineID        string `json:"machineId,omitempty"`
 }
 
 type feedbackZipEntry struct {
@@ -803,6 +821,88 @@ func (a *App) ExportFeedbackBundle(options FeedbackExportOptions) (FeedbackExpor
 	}
 	a.emitLog("info", fmt.Sprintf("反馈日志包已导出：%s", savePath))
 	return result, nil
+}
+
+func (a *App) ExportServerDeploymentBundle(options ServerDeploymentExportOptions) (ServerDeploymentExportResult, error) {
+	result := ServerDeploymentExportResult{}
+	savePath := strings.TrimSpace(options.SavePath)
+	if savePath == "" {
+		var err error
+		savePath, err = a.chooseServerDeploymentExportPath()
+		if err != nil {
+			return result, err
+		}
+	}
+	if savePath == "" {
+		return result, nil
+	}
+
+	a.mu.RLock()
+	cfg := a.cfg
+	a.mu.RUnlock()
+
+	pickPolicy := strings.TrimSpace(options.PickPolicy)
+	if pickPolicy == "" {
+		pickPolicy = string(remote.CredentialPickAuto)
+	}
+	policy := remote.CredentialPickPolicy(strings.ToLower(pickPolicy))
+	switch policy {
+	case remote.CredentialPickAuto, remote.CredentialPickNewest, remote.CredentialPickLongest:
+	default:
+		return result, fmt.Errorf("invalid credential pick policy %q", options.PickPolicy)
+	}
+	host := cfg.Host
+	if strings.TrimSpace(host) == "" || host == "127.0.0.1" || host == "localhost" {
+		host = "0.0.0.0"
+	}
+	bundle, err := deploy.WriteServerBundle(deploy.ServerBundleOptions{
+		AuthFile:      cfg.RemoteAuthFile,
+		OutputPath:    savePath,
+		PickPolicy:    policy,
+		BaseURL:       cfg.RemoteBaseURL,
+		ProxyURL:      cfg.RemoteProxyURL,
+		RemoteVersion: cfg.RemoteVersion,
+		Host:          host,
+		Port:          cfg.Port,
+		Model:         cfg.Model,
+	})
+	if err != nil {
+		return result, err
+	}
+	result = ServerDeploymentExportResult{
+		ZipPath:          bundle.Path,
+		ZipFilename:      bundle.Filename,
+		SaveDir:          bundle.SaveDir,
+		CredentialSource: bundle.CredentialSrc,
+		TokenExpireAt:    bundle.TokenExpireAt,
+		TokenExpired:     bundle.TokenExpired,
+		UserID:           bundle.UserID,
+		MachineID:        bundle.MachineID,
+	}
+	a.emitLog("info", fmt.Sprintf("服务器部署包已导出：%s", bundle.Path))
+	return result, nil
+}
+
+func (a *App) chooseServerDeploymentExportPath() (string, error) {
+	defaultPath, err := defaultServerDeploymentExportPath()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(defaultPath), 0755); err != nil {
+		return "", err
+	}
+	return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:                "保存服务器部署包",
+		DefaultDirectory:     filepath.Dir(defaultPath),
+		DefaultFilename:      filepath.Base(defaultPath),
+		CanCreateDirectories: true,
+		Filters: []runtime.FileFilter{
+			{
+				DisplayName: "Zip 压缩包 (*.zip)",
+				Pattern:     "*.zip",
+			},
+		},
+	})
 }
 
 func (a *App) OpenPathInFileManager(path string) error {
@@ -1440,6 +1540,15 @@ func defaultFeedbackExportPath() (string, error) {
 	}
 	now := time.Now().Format("2006-01-02-15-04-05")
 	return filepath.Join(home, "Desktop", feedbackDesktopFolderName, fmt.Sprintf("LingmaProxy-feedback-%s.zip", now)), nil
+}
+
+func defaultServerDeploymentExportPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().Format("2006-01-02-15-04-05")
+	return filepath.Join(home, "Desktop", serverBundleFolderName, fmt.Sprintf("LingmaProxy-server-bundle-%s.zip", now)), nil
 }
 
 func resolveFeedbackRange(options FeedbackExportOptions) (time.Time, time.Time, error) {

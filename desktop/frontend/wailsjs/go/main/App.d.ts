@@ -11,6 +11,8 @@ export function ClearRequests():Promise<void>;
 
 export function ExportFeedbackBundle(arg1:main.FeedbackExportOptions):Promise<main.FeedbackExportResult>;
 
+export function ExportServerDeploymentBundle(arg1:main.ServerDeploymentExportOptions):Promise<main.ServerDeploymentExportResult>;
+
 export function ForceQuitApp():Promise<void>;
 
 export function GetAppVersion():Promise<string>;

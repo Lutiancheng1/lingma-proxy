@@ -26,6 +26,27 @@ type Credential struct {
 	TokenExpireTime int64
 }
 
+type CredentialPickPolicy string
+
+const (
+	CredentialPickAuto    CredentialPickPolicy = "auto"
+	CredentialPickNewest  CredentialPickPolicy = "newest"
+	CredentialPickLongest CredentialPickPolicy = "longest"
+)
+
+type CredentialInspection struct {
+	Status             string  `json:"status"`
+	CacheDir           string  `json:"cache_dir,omitempty"`
+	Source             string  `json:"source,omitempty"`
+	UserFileModifiedAt string  `json:"user_file_modified_at,omitempty"`
+	TokenExpireAt      string  `json:"token_expire_at,omitempty"`
+	DaysLeft           float64 `json:"days_left,omitempty"`
+	TokenExpired       bool    `json:"token_expired"`
+	UserID             string  `json:"user_id,omitempty"`
+	MachineID          string  `json:"machine_id,omitempty"`
+	Error              string  `json:"error,omitempty"`
+}
+
 type storedCredentialFile struct {
 	Source          string `json:"source"`
 	TokenExpireTime string `json:"token_expire_time"`
@@ -42,6 +63,103 @@ func LoadCredential(authFile string) (Credential, error) {
 		return loadCredentialFile(expandHome(path))
 	}
 	return importLingmaCacheCredential()
+}
+
+func LoadCredentialByPolicy(authFile string, policy CredentialPickPolicy) (Credential, error) {
+	if path := strings.TrimSpace(authFile); path != "" || policy == "" || policy == CredentialPickAuto {
+		return LoadCredential(path)
+	}
+
+	var best credentialCandidate
+	var attempts []credentialLoadAttempt
+	for _, cacheDir := range candidateLingmaCacheDirs() {
+		candidate, err := loadCredentialCandidate(cacheDir)
+		if err != nil {
+			attempts = append(attempts, credentialLoadAttempt{Path: cacheDir, Err: err})
+			continue
+		}
+		if best.Cred.Source == "" || betterCredentialCandidate(candidate, best, policy) {
+			best = candidate
+		}
+	}
+	if best.Cred.Source != "" {
+		return best.Cred, nil
+	}
+	if len(attempts) == 0 {
+		return Credential{}, errors.New("no Lingma cache directory candidate was found")
+	}
+	return Credential{}, fmt.Errorf("load Lingma/QoderCN login cache: %s", summarizeCredentialLoadAttempts(attempts))
+}
+
+func SaveCredentialFile(cred Credential, path string) error {
+	if err := validateCredential(cred); err != nil {
+		return err
+	}
+	outputPath := expandHome(strings.TrimSpace(path))
+	if outputPath == "" {
+		return errors.New("remote credential output path is required")
+	}
+	var stored storedCredentialFile
+	stored.Source = cred.Source
+	if cred.TokenExpireTime > 0 {
+		stored.TokenExpireTime = strconv.FormatInt(cred.TokenExpireTime, 10)
+	}
+	stored.Auth.CosyKey = cred.CosyKey
+	stored.Auth.EncryptUserInfo = cred.EncryptUserInfo
+	stored.Auth.UserID = cred.UserID
+	stored.Auth.MachineID = cred.MachineID
+
+	data, err := json.MarshalIndent(stored, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0700); err != nil {
+		return err
+	}
+	tmp := outputPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, outputPath); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func InspectCredentialCandidates() []CredentialInspection {
+	inspections := make([]CredentialInspection, 0)
+	for _, cacheDir := range candidateLingmaCacheDirs() {
+		userPath := filepath.Join(cacheDir, "cache", "user")
+		userInfo, statErr := os.Stat(userPath)
+		if statErr != nil {
+			continue
+		}
+		inspection := CredentialInspection{
+			Status:             "invalid",
+			CacheDir:           cacheDir,
+			Source:             userPath,
+			UserFileModifiedAt: userInfo.ModTime().Format(time.RFC3339),
+		}
+		candidate, err := loadCredentialCandidate(cacheDir)
+		if err != nil {
+			inspection.Error = compactCredentialError(err)
+			inspections = append(inspections, inspection)
+			continue
+		}
+		inspection.Status = "ok"
+		inspection.Source = candidate.Cred.Source
+		inspection.UserID = maskIdentifier(candidate.Cred.UserID)
+		inspection.MachineID = maskIdentifier(candidate.Cred.MachineID)
+		inspection.TokenExpired = IsExpired(candidate.Cred, 0)
+		if candidate.Cred.TokenExpireTime > 0 {
+			expireAt := time.UnixMilli(candidate.Cred.TokenExpireTime)
+			inspection.TokenExpireAt = expireAt.Format(time.RFC3339)
+			inspection.DaysLeft = time.Until(expireAt).Hours() / 24
+		}
+		inspections = append(inspections, inspection)
+	}
+	return inspections
 }
 
 func loadCredentialFile(path string) (Credential, error) {
@@ -77,6 +195,35 @@ func importLingmaCacheCredential() (Credential, error) {
 		return Credential{}, errors.New("no Lingma cache directory candidate was found")
 	}
 	return Credential{}, fmt.Errorf("load Lingma/QoderCN login cache: %s", summarizeCredentialLoadAttempts(attempts))
+}
+
+type credentialCandidate struct {
+	Cred         Credential
+	UserModified time.Time
+}
+
+func loadCredentialCandidate(cacheDir string) (credentialCandidate, error) {
+	userPath := filepath.Join(cacheDir, "cache", "user")
+	info, err := os.Stat(userPath)
+	if err != nil {
+		return credentialCandidate{}, err
+	}
+	cred, err := importLingmaCacheCredentialFromDir(cacheDir)
+	if err != nil {
+		return credentialCandidate{}, err
+	}
+	return credentialCandidate{Cred: cred, UserModified: info.ModTime()}, nil
+}
+
+func betterCredentialCandidate(candidate, best credentialCandidate, policy CredentialPickPolicy) bool {
+	switch policy {
+	case CredentialPickNewest:
+		return candidate.UserModified.After(best.UserModified)
+	case CredentialPickLongest:
+		return candidate.Cred.TokenExpireTime > best.Cred.TokenExpireTime
+	default:
+		return false
+	}
 }
 
 func importLingmaCacheCredentialFromDir(lingmaDir string) (Credential, error) {
@@ -404,6 +551,28 @@ func validateCredential(cred Credential) error {
 		return errors.New("remote credential missing machine_id")
 	}
 	return nil
+}
+
+func compactCredentialError(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.ReplaceAll(err.Error(), "\n", " ")
+	if len(text) > 240 {
+		return text[:240] + "..."
+	}
+	return text
+}
+
+func maskIdentifier(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 8 {
+		return strings.Repeat("*", len(value))
+	}
+	return value[:3] + strings.Repeat("*", len(value)-6) + value[len(value)-3:]
 }
 
 func parseExpire(value string) int64 {

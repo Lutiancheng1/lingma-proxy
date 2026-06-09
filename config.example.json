@@ -6,7 +6,11 @@
   "mode": "chat",
   "model": "kmodel",
   "session_mode": "auto",
-  "timeout": 300,
+  "timeout": 0,
+  "remote_base_url": "",
+  "remote_auth_file": "",
+  "remote_proxy_url": "",
+  "remote_version": "",
   "remote_fallback_enabled": true,
   "remote_fallback_models": [
     "kmodel",

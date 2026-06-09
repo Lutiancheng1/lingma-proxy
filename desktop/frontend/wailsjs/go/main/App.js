@@ -18,6 +18,10 @@ export function ExportFeedbackBundle(arg1) {
   return window['go']['main']['App']['ExportFeedbackBundle'](arg1);
 }
 
+export function ExportServerDeploymentBundle(arg1) {
+  return window['go']['main']['App']['ExportServerDeploymentBundle'](arg1);
+}
+
 export function ForceQuitApp() {
   return window['go']['main']['App']['ForceQuitApp']();
 }

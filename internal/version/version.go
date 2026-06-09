@@ -1,4 +1,4 @@
 package version
 
 // Version is generated from the repository-level VERSION file.
-const Version = "1.6.10"
+const Version = "1.6.11"

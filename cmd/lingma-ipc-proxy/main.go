@@ -16,11 +16,18 @@ import (
 	"syscall"
 	"time"
 
+	"lingma-ipc-proxy/internal/deploy"
 	"lingma-ipc-proxy/internal/httpapi"
 	"lingma-ipc-proxy/internal/lingmaipc"
 	"lingma-ipc-proxy/internal/remote"
 	"lingma-ipc-proxy/internal/service"
 )
+
+var utilityOptions struct {
+	exportRemoteAuth   string
+	exportServerBundle string
+	remoteAuthPick     string
+}
 
 type fileConfig struct {
 	Host                  string   `json:"host"`
@@ -46,6 +53,9 @@ type fileConfig struct {
 
 func main() {
 	cfg, configPath := loadConfig()
+	if handleUtilityCommands(cfg) {
+		return
+	}
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 
 	svc := service.New(cfg)
@@ -136,6 +146,9 @@ func loadConfig() (service.Config, string) {
 	timeoutSeconds := flag.Int("timeout", int(cfg.Timeout/time.Second), "Per-request timeout in seconds; 0 disables the proxy deadline")
 	remoteFallbackEnabled := flag.Bool("remote-fallback", cfg.RemoteFallbackEnabled, "Enable remote timeout/5xx fallback to the next available model")
 	remoteFallbackModels := flag.String("remote-fallback-models", strings.Join(cfg.RemoteFallbackModels, ","), "Comma-separated remote fallback model IDs")
+	exportRemoteAuth := flag.String("export-remote-auth", "", "Export portable Remote API credentials.json to the given path and exit")
+	exportServerBundle := flag.String("export-server-bundle", "", "Export a server deployment zip containing credentials.json, config, and docker-compose.yml, then exit")
+	remoteAuthPick := flag.String("remote-auth-pick", "auto", "Remote login cache pick policy for export: auto, newest, or longest")
 	sessionMode := flag.String("session-mode", string(cfg.SessionMode), "Session mode: auto, fresh, reuse")
 	config := flag.String("config", valueOr(configPath, filepath.Join(currentDir(), "lingma-proxy.json")), "Path to JSON config file")
 	flag.Parse()
@@ -163,6 +176,9 @@ func loadConfig() (service.Config, string) {
 	cfg.Timeout = time.Duration(*timeoutSeconds) * time.Second
 	cfg.RemoteFallbackEnabled = *remoteFallbackEnabled
 	cfg.RemoteFallbackModels = splitCSV(*remoteFallbackModels)
+	utilityOptions.exportRemoteAuth = strings.TrimSpace(*exportRemoteAuth)
+	utilityOptions.exportServerBundle = strings.TrimSpace(*exportServerBundle)
+	utilityOptions.remoteAuthPick = strings.TrimSpace(*remoteAuthPick)
 	if err := remote.ValidateProxyURL(cfg.RemoteProxyURL); err != nil {
 		log.Fatal(err)
 	}
@@ -174,6 +190,62 @@ func loadConfig() (service.Config, string) {
 	}
 
 	return cfg, configPath
+}
+
+func handleUtilityCommands(cfg service.Config) bool {
+	if utilityOptions.exportRemoteAuth == "" && utilityOptions.exportServerBundle == "" {
+		return false
+	}
+	policy := remote.CredentialPickPolicy(strings.ToLower(valueOr(utilityOptions.remoteAuthPick, string(remote.CredentialPickAuto))))
+	switch policy {
+	case remote.CredentialPickAuto, remote.CredentialPickNewest, remote.CredentialPickLongest:
+	default:
+		log.Fatalf("invalid remote auth pick policy %q; expected auto, newest, or longest", utilityOptions.remoteAuthPick)
+	}
+	if utilityOptions.exportRemoteAuth != "" {
+		result, err := deploy.WriteCredentialFile(cfg.RemoteAuthFile, utilityOptions.exportRemoteAuth, policy)
+		if err != nil {
+			log.Fatalf("export remote auth: %v", err)
+		}
+		printExportResult("credentials", result)
+	}
+	if utilityOptions.exportServerBundle != "" {
+		host := cfg.Host
+		if strings.TrimSpace(host) == "" || host == "127.0.0.1" || host == "localhost" {
+			host = "0.0.0.0"
+		}
+		result, err := deploy.WriteServerBundle(deploy.ServerBundleOptions{
+			AuthFile:      cfg.RemoteAuthFile,
+			OutputPath:    utilityOptions.exportServerBundle,
+			PickPolicy:    policy,
+			BaseURL:       cfg.RemoteBaseURL,
+			ProxyURL:      cfg.RemoteProxyURL,
+			RemoteVersion: cfg.RemoteVersion,
+			Host:          host,
+			Port:          cfg.Port,
+			Model:         cfg.Model,
+		})
+		if err != nil {
+			log.Fatalf("export server bundle: %v", err)
+		}
+		printExportResult("server bundle", result)
+	}
+	return true
+}
+
+func printExportResult(kind string, result deploy.ServerBundleResult) {
+	fmt.Printf("exported %s: %s\n", kind, result.Path)
+	fmt.Printf("credential source: %s\n", result.CredentialSrc)
+	if result.TokenExpireAt != "" {
+		fmt.Printf("token expire at: %s\n", result.TokenExpireAt)
+	}
+	if result.TokenExpired {
+		fmt.Println("warning: exported credential is already expired")
+	}
+	if result.UserID != "" || result.MachineID != "" {
+		fmt.Printf("account: %s / %s\n", result.UserID, result.MachineID)
+	}
+	fmt.Println("keep the exported file private; it contains login secrets")
 }
 
 func resolveConfigPath() (string, bool) {

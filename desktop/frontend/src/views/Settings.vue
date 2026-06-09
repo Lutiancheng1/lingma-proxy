@@ -1,12 +1,15 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { GetConfig, GetDetectionInfo, UpdateConfig } from '../../wailsjs/go/main/App.js'
+import { ExportServerDeploymentBundle, GetConfig, GetDetectionInfo, OpenPathInFileManager, UpdateConfig } from '../../wailsjs/go/main/App.js'
 
 const emit = defineEmits(['log', 'status-refresh'])
 
 const config = ref({})
 const detection = ref(null)
 const saving = ref(false)
+const exportingBundle = ref(false)
+const bundlePickPolicy = ref('auto')
+const bundleResult = ref(null)
 const openSelect = ref('')
 const fallbackModelsText = ref('')
 const isIPCBackend = computed(() => (config.value.Backend || 'ipc') === 'ipc')
@@ -45,10 +48,16 @@ const selectOptions = {
     { value: 'reuse', label: '复用' },
     { value: 'fresh', label: '每次新建' },
   ],
+  RemoteAuthPick: [
+    { value: 'auto', label: '默认优先级' },
+    { value: 'newest', label: '最新缓存' },
+    { value: 'longest', label: '最长有效期' },
+  ],
 }
 
 const selectLabel = computed(() => (field) => {
-  const option = selectOptions[field]?.find((item) => item.value === config.value[field])
+  const value = field === 'RemoteAuthPick' ? bundlePickPolicy.value : config.value[field]
+  const option = selectOptions[field]?.find((item) => item.value === value)
   return option?.label || '请选择'
 })
 
@@ -57,9 +66,15 @@ function toggleSelect(field) {
 }
 
 function chooseOption(field, value) {
-  config.value[field] = value
+  if (field === 'RemoteAuthPick') {
+    bundlePickPolicy.value = value
+  } else {
+    config.value[field] = value
+  }
   openSelect.value = ''
-  refreshDetection()
+  if (field !== 'RemoteAuthPick') {
+    refreshDetection()
+  }
 }
 
 function formatDateTime(value) {
@@ -112,6 +127,31 @@ async function save() {
     emit('log', 'error', '配置保存失败：' + (e.message || String(e)))
   } finally {
     saving.value = false
+  }
+}
+
+async function exportServerBundle() {
+  exportingBundle.value = true
+  bundleResult.value = null
+  try {
+    const result = await ExportServerDeploymentBundle({ pickPolicy: bundlePickPolicy.value })
+    if (result?.zipPath) {
+      bundleResult.value = result
+      emit('log', 'info', '服务器部署包已导出：' + result.zipPath)
+    }
+  } catch (e) {
+    emit('log', 'error', '服务器部署包导出失败：' + (e.message || String(e)))
+  } finally {
+    exportingBundle.value = false
+  }
+}
+
+async function openBundleFolder() {
+  if (!bundleResult.value?.zipPath) return
+  try {
+    await OpenPathInFileManager(bundleResult.value.zipPath)
+  } catch (e) {
+    emit('log', 'warn', '打开部署包目录失败：' + (e.message || String(e)))
   }
 }
 </script>
@@ -241,6 +281,49 @@ async function save() {
         <div class="hint-box">
           <strong>自动探测失败时</strong>
           <span>IPC 模式先确认 Lingma / QoderCN 已启动并登录。远端 API 模式会优先读取认证文件；留空时只读本机 Lingma / QoderCN 登录缓存，不会写入或上传登录态。</span>
+        </div>
+        <div class="deploy-box">
+          <div>
+            <strong>服务器部署包</strong>
+            <span>导出 credentials.json、配置和 docker-compose.yml；压缩包包含登录密钥，请只发到自己的服务器。</span>
+          </div>
+          <div class="deploy-actions">
+            <div class="custom-select compact-select" :class="{ open: openSelect === 'RemoteAuthPick' }">
+              <button type="button" @click="toggleSelect('RemoteAuthPick')">
+                <span>{{ selectLabel('RemoteAuthPick') }}</span>
+                <i class="bi bi-chevron-down" aria-hidden="true"></i>
+              </button>
+              <div v-if="openSelect === 'RemoteAuthPick'" class="select-menu">
+                <button
+                  v-for="option in selectOptions.RemoteAuthPick"
+                  :key="option.value"
+                  :class="{ selected: option.value === bundlePickPolicy }"
+                  type="button"
+                  @click="chooseOption('RemoteAuthPick', option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </div>
+            <button class="secondary-button" type="button" :disabled="exportingBundle" @click="exportServerBundle">
+              {{ exportingBundle ? '导出中...' : '导出部署包' }}
+            </button>
+          </div>
+          <div v-if="bundleResult?.zipPath" class="bundle-result">
+            <div>
+              <span>文件</span>
+              <code>{{ bundleResult.zipPath }}</code>
+            </div>
+            <div>
+              <span>凭据</span>
+              <code>{{ bundleResult.userId || '未知用户' }} · {{ bundleResult.machineId || '未知机器' }}</code>
+            </div>
+            <div v-if="bundleResult.tokenExpireAt">
+              <span>有效期</span>
+              <code :class="{ 'warn-text': bundleResult.tokenExpired }">{{ formatDateTime(bundleResult.tokenExpireAt) }}{{ bundleResult.tokenExpired ? '（已过期）' : '' }}</code>
+            </div>
+            <button class="text-button" type="button" @click="openBundleFolder">打开目录</button>
+          </div>
         </div>
         <div v-if="detection" class="detect-card">
           <div class="detect-title">

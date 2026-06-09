@@ -49,7 +49,7 @@
 ## 当前版本
 
 <!-- VERSION:CURRENT:BEGIN -->
-当前桌面端版本：`v1.6.10`。
+当前桌面端版本：`v1.6.11`。
 
 唯一来源是 [VERSION](./VERSION)。执行 `./scripts/sync-version.sh` 会把它同步到 [desktop/wails.json](./desktop/wails.json)、桌面 UI 和面向发布的文档块。
 <!-- VERSION:CURRENT:END -->
@@ -426,6 +426,29 @@ lingma-proxy \
   --remote-auth-file ~/.config/lingma-proxy/credentials.json
 ```
 
+如果要搬到自己的服务器或容器上跑，可以先在本机导出可迁移凭据或完整部署包。Docker 只是可选快捷方式；部署包里的 `credentials.json` 和 `lingma-proxy.json` 也可以配合 Linux CLI 二进制直接运行：
+
+```bash
+# 只导出 credentials.json
+lingma-proxy --export-remote-auth ./credentials.json
+
+# 导出 credentials.json + lingma-proxy.json + docker-compose.yml
+lingma-proxy --export-server-bundle ./lingma-proxy-server-bundle.zip
+
+# 可选：按最长剩余有效期挑选本机登录缓存；也支持 newest / auto
+lingma-proxy --export-server-bundle ./lingma-proxy-server-bundle.zip --remote-auth-pick longest
+```
+
+上传到服务器后，如果不用 Docker，可以下载 Linux CLI 包并执行 `lingma-proxy --config ./lingma-proxy.json`。
+
+桌面端也可以在“设置 → 服务器部署包”里一键导出。导出的 `credentials.json` 含登录密钥，只适合放在自己的私有服务器或私有密钥管理流程里，不要提交到 Git 或公开分享。
+
+服务器能力边界：导出部署包只迁移远端 API 登录凭据和代理配置，不会把 QoderCN / Lingma 客户端、IDE 插件或本机 IPC 运行时一起带到服务器。如果服务器没有安装并运行 QoderCN / Lingma：
+
+- OpenAI / Anthropic 兼容文本接口、远端模型列表和远端工具调用：可用，依赖 `credentials.json`。
+- IPC 插件模式：不可用，因为没有本机插件 socket、Named Pipe 或 WebSocket 运行时。
+- 图片请求 / 多模态兜底：不可用或受限；当前远端模式的图片上下文提取仍依赖 QoderCN / Lingma IPC 图片链路。
+
 如果企业网络必须走 HTTP(S) 代理，可以显式配置：
 
 ```bash
@@ -483,9 +506,15 @@ lingma-proxy --backend ipc --transport auto --port 8095
 docker run --rm -p 8095:8095 ghcr.io/lutiancheng1/lingma-proxy:<tag>
 ```
 
-镜像只包含 CLI 代理，不包含桌面端、Wails、Node、浏览器，也不会内置任何本机登录缓存。容器不会自动读取宿主机上的 Lingma / QoderCN 登录态。容器场景推荐使用远端 API 模式。
+镜像只包含 CLI 代理，不包含桌面端、Wails、Node、浏览器、QoderCN / Lingma 客户端、IDE 插件或任何本机登录缓存。容器不会自动读取宿主机上的 Lingma / QoderCN 登录态。容器场景推荐使用远端 API 模式，且默认只覆盖文本 / 工具类远端能力。
 
-推荐生产用法：用户先在宿主机通过 Lingma / QoderCN 完成登录，然后把宿主机登录缓存以只读方式 bind mount 给容器：
+可选 Docker 用法：先用 `--export-server-bundle` 或桌面端导出部署包，把压缩包上传到自己的服务器后解压，然后运行：
+
+```bash
+docker compose up -d
+```
+
+同机容器也可以在宿主机通过 Lingma / QoderCN 完成登录后，把宿主机登录缓存以只读方式 bind mount 给容器：
 
 ```bash
 docker run --rm -p 8095:8095 \

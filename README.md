@@ -46,7 +46,7 @@ Auto-detection prefers QoderCN runtime files first, then falls back to Lingma ru
 ## Current Version
 
 <!-- VERSION:CURRENT:BEGIN -->
-Current desktop app version: `v1.6.10`.
+Current desktop app version: `v1.6.11`.
 
 The canonical source is [VERSION](./VERSION). Run `./scripts/sync-version.sh` to propagate it into [desktop/wails.json](./desktop/wails.json), the desktop UI, and release-facing docs.
 <!-- VERSION:CURRENT:END -->
@@ -361,6 +361,30 @@ lingma-proxy \
   --remote-auth-file ~/.config/lingma-proxy/credentials.json
 ```
 
+For a private server or container, export a portable credential file or a complete deployment bundle from the logged-in machine first. Docker is only an optional shortcut; the bundled `credentials.json` and `lingma-proxy.json` also work with the Linux CLI binary directly:
+
+```bash
+# Export credentials.json only
+lingma-proxy --export-remote-auth ./credentials.json
+
+# Export credentials.json + lingma-proxy.json + docker-compose.yml
+lingma-proxy --export-server-bundle ./lingma-proxy-server-bundle.zip
+
+# Optional: pick the login cache with the longest remaining token lifetime.
+# Also supports newest / auto.
+lingma-proxy --export-server-bundle ./lingma-proxy-server-bundle.zip --remote-auth-pick longest
+```
+
+After uploading the bundle to a server, you can run without Docker by downloading the Linux CLI package and starting `lingma-proxy --config ./lingma-proxy.json`.
+
+The desktop Settings page also has a server deployment bundle export action. The exported `credentials.json` contains login secrets. Keep it private and do not commit it to Git or share it publicly.
+
+Server capability boundary: the deployment bundle only migrates Remote API credentials and proxy config. It does not move the QoderCN / Lingma client, IDE plugin, or local IPC runtime to the server. If the server does not have QoderCN / Lingma installed and running:
+
+- OpenAI / Anthropic compatible text APIs, remote model listing, and Remote API tool calls work with `credentials.json`.
+- IPC plugin mode does not work because there is no local plugin socket, named pipe, or WebSocket runtime.
+- Image requests / multimodal fallback are unavailable or limited because the current Remote API image-context extraction still depends on the QoderCN / Lingma IPC image pipeline.
+
 If your enterprise network requires an HTTP(S) proxy, configure it explicitly:
 
 ```bash
@@ -418,9 +442,15 @@ Official images are published to GitHub Container Registry:
 docker run --rm -p 8095:8095 ghcr.io/lutiancheng1/lingma-proxy:<tag>
 ```
 
-The container image contains only the CLI proxy. It does not bundle the desktop app, Wails runtime, Node, browser, or any local login cache. A container cannot automatically read the host machine's Lingma / QoderCN login state. Remote API mode is the recommended container mode.
+The container image contains only the CLI proxy. It does not bundle the desktop app, Wails runtime, Node, browser, QoderCN / Lingma client, IDE plugin, or any local login cache. A container cannot automatically read the host machine's Lingma / QoderCN login state. Remote API mode is the recommended container mode and, by default, covers text/tool-oriented remote capabilities.
 
-Recommended production practice: bind-mount the host login cache read-only after the user has logged in on the host through Lingma / QoderCN:
+Optional Docker flow: export a bundle with `--export-server-bundle` or the desktop Settings page, upload it to your private server, unzip it, then run:
+
+```bash
+docker compose up -d
+```
+
+For same-host containers, you can also bind-mount the host login cache read-only after the user has logged in on the host through Lingma / QoderCN:
 
 ```bash
 docker run --rm -p 8095:8095 \

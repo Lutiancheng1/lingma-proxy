@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased (target: v1.6.10)
+## Unreleased (target: v1.6.11)
+
+## v1.6.11 - 2026-06-09
+
+- Added portable Remote API credential export via `--export-remote-auth`, with selectable local cache policies for default priority, newest cache, or longest remaining token lifetime.
+- Added `--export-server-bundle` and a desktop Settings export action that generate a private server deployment zip containing `credentials.json`, `lingma-proxy.json`, `docker-compose.yml`, and a short deployment note.
+- Updated server/Docker documentation and `config.example.json` for explicit Remote API credential deployment.
+- Clarified the headless server capability boundary: exported credentials enable Remote API text/tool usage, but servers without QoderCN / Lingma do not provide IPC plugin mode or full image fallback.
+- 新增远端登录态导出能力：`--export-remote-auth` 支持按默认优先级、最新缓存或最长剩余有效期选择本机缓存。
+- 新增 `--export-server-bundle` 和桌面端设置页导出入口，可生成包含 `credentials.json`、`lingma-proxy.json`、`docker-compose.yml` 与部署说明的私有服务器部署包。
+- 更新服务器 / Docker 部署说明和 `config.example.json`，补齐显式远端凭据部署配置。
+- 明确无头服务器能力边界：导出凭据可用于 Remote API 文本 / 工具能力，但没有 QoderCN / Lingma 的服务器不具备 IPC 插件模式和完整图片兜底。
 
 ## v1.6.10 - 2026-06-08
 
