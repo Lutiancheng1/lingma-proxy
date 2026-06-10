@@ -280,13 +280,17 @@ func candidateLingmaCacheDirs() []string {
 			filepath.Join(home, "Library", "Application Support", "QoderCN", "SharedClientCache"),
 			filepath.Join(home, "Library", "Application Support", "Qoder", "SharedClientCache"),
 			filepath.Join(home, ".config", "QoderCN"),
+			filepath.Join(home, ".config", "QoderCN", "SharedClientCache"),
+			filepath.Join(home, ".config", "Qoder", "SharedClientCache"),
 			filepath.Join(home, ".local", "share", "QoderCN"),
 			filepath.Join(home, ".lingma"),
 			filepath.Join(home, ".lingma", "vscode", "sharedClientCache"),
 			filepath.Join(home, "Library", "Application Support", "Lingma", "SharedClientCache"),
 			filepath.Join(home, ".config", "Lingma"),
+			filepath.Join(home, ".config", "Lingma", "SharedClientCache"),
 			filepath.Join(home, ".local", "share", "Lingma"),
 		)
+		dirs = append(dirs, vscodeGlobalStorageCacheDirs(filepath.Join(home, ".config"))...)
 	}
 	for _, envName := range []string{"APPDATA", "LOCALAPPDATA", "ProgramData"} {
 		if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
@@ -304,9 +308,27 @@ func candidateLingmaCacheDirs() []string {
 	}
 	if value := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); value != "" {
 		dirs = append(dirs, filepath.Join(value, "QoderCN"))
+		dirs = append(dirs, filepath.Join(value, "QoderCN", "SharedClientCache"))
+		dirs = append(dirs, filepath.Join(value, "Qoder", "SharedClientCache"))
 		dirs = append(dirs, filepath.Join(value, "Lingma"))
+		dirs = append(dirs, filepath.Join(value, "Lingma", "SharedClientCache"))
+		dirs = append(dirs, vscodeGlobalStorageCacheDirs(value)...)
 	}
 	return uniquePathStrings(dirs)
+}
+
+func vscodeGlobalStorageCacheDirs(root string) []string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(root, "Code", "User", "globalStorage", "alibaba-cloud.tongyi-lingma"),
+		filepath.Join(root, "Code - OSS", "User", "globalStorage", "alibaba-cloud.tongyi-lingma"),
+		filepath.Join(root, "VSCodium", "User", "globalStorage", "alibaba-cloud.tongyi-lingma"),
+		filepath.Join(root, "Cursor", "User", "globalStorage", "alibaba-cloud.tongyi-lingma"),
+		filepath.Join(root, "Windsurf", "User", "globalStorage", "alibaba-cloud.tongyi-lingma"),
+	}
 }
 
 type credentialLoadAttempt struct {

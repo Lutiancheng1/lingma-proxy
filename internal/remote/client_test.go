@@ -437,6 +437,70 @@ func TestCandidateLingmaCacheDirsIncludesVSCodeSharedClientCache(t *testing.T) {
 	t.Fatalf("missing vscode shared client cache %q in %#v", want, dirs)
 }
 
+func TestCandidateLingmaCacheDirsIncludesVSCodeGlobalStorageCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	dirs := candidateLingmaCacheDirs()
+	want := filepath.Join(home, ".config", "Code", "User", "globalStorage", "alibaba-cloud.tongyi-lingma")
+	for _, dir := range dirs {
+		if dir == want {
+			return
+		}
+	}
+	t.Fatalf("missing VS Code globalStorage cache %q in %#v", want, dirs)
+}
+
+func TestCandidateLingmaCacheDirsIncludesLinuxQoderCNSharedClientCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	dirs := candidateLingmaCacheDirs()
+	want := filepath.Join(home, ".config", "QoderCN", "SharedClientCache")
+	for _, dir := range dirs {
+		if dir == want {
+			return
+		}
+	}
+	t.Fatalf("missing Linux QoderCN SharedClientCache %q in %#v", want, dirs)
+}
+
+func TestCandidateLingmaCacheDirsIncludesXDGQoderCNSharedClientCache(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(home, "xdg-config")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	dirs := candidateLingmaCacheDirs()
+	want := filepath.Join(xdg, "QoderCN", "SharedClientCache")
+	for _, dir := range dirs {
+		if dir == want {
+			return
+		}
+	}
+	t.Fatalf("missing XDG QoderCN SharedClientCache %q in %#v", want, dirs)
+}
+
+func TestCandidateLingmaCacheDirsIncludesXDGVSCodeGlobalStorageCache(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(home, "xdg-config")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("LINGMA_CACHE_DIR", "")
+	dirs := candidateLingmaCacheDirs()
+	want := filepath.Join(xdg, "Code", "User", "globalStorage", "alibaba-cloud.tongyi-lingma")
+	for _, dir := range dirs {
+		if dir == want {
+			return
+		}
+	}
+	t.Fatalf("missing XDG VS Code globalStorage cache %q in %#v", want, dirs)
+}
+
 func TestCandidateLingmaCacheDirsIncludesQoderCNSharedClientCache(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased (target: v1.6.11)
+## Unreleased (target: v1.6.12)
+
+## v1.6.12 - 2026-06-10
+
+- Fixed Linux Remote API login-cache auto-detection for QoderCN / Lingma config installs by scanning `.config/<App>/SharedClientCache` and corresponding XDG config roots, while also tolerating VS Code-family `User/globalStorage/alibaba-cloud.tongyi-lingma` layouts when present.
+- Documented the Linux `QoderCN/SharedClientCache` credential path so headless / server deployments can diagnose remote-auth discovery failures faster.
+- 修复 Linux 远端模式自动识别登录缓存：新增扫描 `.config/<App>/SharedClientCache` 及对应 XDG 配置根，同时兼容存在时的 VS Code 系 `User/globalStorage/alibaba-cloud.tongyi-lingma` 布局。
+- 补充 Linux `QoderCN/SharedClientCache` 登录缓存说明，便于无头 / 服务器部署时快速定位远端认证探测失败。
 
 ## v1.6.11 - 2026-06-09
 

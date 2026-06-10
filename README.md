@@ -46,7 +46,7 @@ Auto-detection prefers QoderCN runtime files first, then falls back to Lingma ru
 ## Current Version
 
 <!-- VERSION:CURRENT:BEGIN -->
-Current desktop app version: `v1.6.11`.
+Current desktop app version: `v1.6.12`.
 
 The canonical source is [VERSION](./VERSION). Run `./scripts/sync-version.sh` to propagate it into [desktop/wails.json](./desktop/wails.json), the desktop UI, and release-facing docs.
 <!-- VERSION:CURRENT:END -->
@@ -349,7 +349,7 @@ By default it reads the local Lingma login cache in read-only mode:
 %APPDATA%\Lingma\cache\user
 %LOCALAPPDATA%\Lingma\cache\user
 %USERPROFILE%\.qoder-cn\shared_client\cache\user
-XDG config/state Lingma cache paths when present
+XDG config/state Lingma cache paths when present, plus Linux `~/.config/QoderCN/SharedClientCache` / `~/.config/Lingma/SharedClientCache` and VS Code-family `User/globalStorage/alibaba-cloud.tongyi-lingma` directories
 ```
 
 You can also pass an explicit credential file:

@@ -49,7 +49,7 @@
 ## 当前版本
 
 <!-- VERSION:CURRENT:BEGIN -->
-当前桌面端版本：`v1.6.11`。
+当前桌面端版本：`v1.6.12`。
 
 唯一来源是 [VERSION](./VERSION)。执行 `./scripts/sync-version.sh` 会把它同步到 [desktop/wails.json](./desktop/wails.json)、桌面 UI 和面向发布的文档块。
 <!-- VERSION:CURRENT:END -->
@@ -414,7 +414,7 @@ lingma-proxy --backend remote --port 8095
 %APPDATA%\Lingma\cache\user
 %LOCALAPPDATA%\Lingma\cache\user
 %USERPROFILE%\.qoder-cn\shared_client\cache\user
-存在时也会尝试 XDG 配置 / 状态目录
+存在时也会尝试 XDG 配置 / 状态目录，以及 Linux 上 `~/.config/QoderCN/SharedClientCache`、`~/.config/Lingma/SharedClientCache` 和 VS Code 系编辑器的 `User/globalStorage/alibaba-cloud.tongyi-lingma`
 ```
 
 也可以指定显式凭据文件：
