@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -97,28 +98,40 @@ type ChatRequest struct {
 }
 
 type ChatResult struct {
-	Text             string
-	ThoughtText      string
-	Model            string
-	InputTokens      int
-	OutputTokens     int
-	SessionID        string
-	RequestID        string
-	FinishReason     string
-	StopReason       string
-	UsedTokens       int
-	LimitTokens      int
-	ThinkingDuration int64
-	PipePath         string
-	Endpoint         string
-	Transport        string
-	EffectiveSession SessionMode
-	ToolCalls        []toolemulation.ToolCall
+	Text              string
+	ThoughtText       string
+	Model             string
+	InputTokens       int
+	OutputTokens      int
+	SessionID         string
+	RequestID         string
+	FinishReason      string
+	StopSequence      string
+	UsedTokens        int
+	LimitTokens       int
+	CachedInputTokens int
+	ReasoningTokens   int
+	Credits           float64
+	ThinkingDuration  int64
+	PipePath          string
+	Endpoint          string
+	Transport         string
+	EffectiveSession  SessionMode
+	ToolCalls         []toolemulation.ToolCall
 }
 
 type StreamEvent struct {
-	Type  string
-	Delta string
+	Type     string
+	Delta    string
+	ToolCall *StreamToolCall
+}
+
+// StreamToolCall carries one incremental native tool-call fragment.
+type StreamToolCall struct {
+	Index        int
+	ID           string
+	Name         string
+	ArgsFragment string
 }
 
 type StreamResult struct {
@@ -169,6 +182,7 @@ type promptRunResult struct {
 const (
 	StreamEventText     = "text"
 	StreamEventThinking = "thinking"
+	StreamEventToolCall = "tool_call"
 )
 
 type remoteModelProbeEntry struct {
@@ -335,10 +349,32 @@ func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
 }
 
 func (s *Service) Generate(ctx context.Context, req ChatRequest) (*ChatResult, error) {
+	var result *ChatResult
+	var err error
 	if s.backend() == BackendRemote {
-		return s.generateRemote(ctx, req, nil)
+		result, err = s.generateRemote(ctx, req, nil)
+	} else {
+		result, err = s.generateWithReconnect(ctx, req, nil)
 	}
-	return s.generateWithReconnect(ctx, req, nil)
+	if err == nil && result != nil {
+		// The gateway ignores max_tokens/stop, so enforce them on the output here.
+		if lim := newOutputLimiter(req.MaxTokens, req.Stop); lim.enabled() {
+			truncated := lim.apply(result.Text)
+			if lim.triggered() {
+				result.Text = truncated
+				applyLimiterFinish(result, lim)
+			}
+		}
+	}
+	return result, err
+}
+
+// applyLimiterFinish records the proxy-enforced finish reason onto a result.
+// FinishReason stays canonical OpenAI-style ("length"/"stop"); the Anthropic
+// stop_reason is derived from it downstream.
+func applyLimiterFinish(result *ChatResult, lim *outputLimiter) {
+	result.FinishReason = lim.openAIFinish()
+	result.StopSequence = lim.stopSeq
 }
 
 func (s *Service) GenerateStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, <-chan StreamResult, error) {
@@ -350,15 +386,45 @@ func (s *Service) GenerateStream(ctx context.Context, req ChatRequest) (<-chan S
 		if s.backend() == BackendRemote {
 			generate = s.generateRemote
 		}
-		result, err := generate(ctx, req, func(event StreamEvent) {
-			if event.Delta == "" {
-				return
-			}
+		lim := newOutputLimiter(req.MaxTokens, req.Stop)
+		send := func(ev StreamEvent) {
 			select {
-			case events <- event:
+			case events <- ev:
 			case <-ctx.Done():
 			}
+		}
+		result, err := generate(ctx, req, func(event StreamEvent) {
+			if event.Type == StreamEventText {
+				if !lim.enabled() {
+					if event.Delta != "" {
+						send(event)
+					}
+					return
+				}
+				if lim.triggered() {
+					return // output limit already reached; drop further text
+				}
+				if emit := lim.Push(event.Delta); emit != "" {
+					send(StreamEvent{Type: StreamEventText, Delta: emit})
+				}
+				return
+			}
+			if event.Delta == "" && event.ToolCall == nil {
+				return
+			}
+			send(event)
 		})
+		// Emit any held-back tail if the stream ended without hitting a limit.
+		if lim.enabled() && !lim.triggered() {
+			if tail := lim.Flush(); tail != "" {
+				send(StreamEvent{Type: StreamEventText, Delta: tail})
+			}
+		}
+		// Reflect proxy-side truncation on the final result.
+		if err == nil && result != nil && lim.triggered() {
+			result.Text = lim.text()
+			applyLimiterFinish(result, lim)
+		}
 
 		close(events)
 		done <- StreamResult{Result: result, Err: err}
@@ -397,12 +463,9 @@ func (s *Service) generateRemoteInternal(
 	emulateTools bool,
 ) (*ChatResult, error) {
 	emulateTools = emulateTools || shouldEmulateRemoteTools(req)
-	if requestHasImages(req) {
-		if len(req.Tools) > 0 && req.ToolChoice.Mode != "none" {
-			return s.generateRemoteWithImageContext(ctx, req, onDelta)
-		}
-		return s.generateWithReconnect(ctx, req, onDelta)
-	}
+	// Images are sent natively as base64 content parts (image_url) — the remote
+	// gateway accepts inline base64 for vision models, so no IPC round-trip or
+	// image upload step is required.
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = s.DefaultModel()
 	}
@@ -433,20 +496,6 @@ func (s *Service) generateRemoteInternal(
 	return nil, lastErr
 }
 
-func (s *Service) generateRemoteWithImageContext(
-	ctx context.Context,
-	req ChatRequest,
-	onDelta func(StreamEvent),
-) (*ChatResult, error) {
-	imageReq := requestForImageContext(req)
-	imageResult, err := s.generateWithReconnect(ctx, imageReq, nil)
-	if err != nil {
-		return nil, fmt.Errorf("image context extraction through IPC failed: %w", err)
-	}
-	remoteReq := requestWithImageContext(req, imageResult.Text)
-	return s.generateRemoteInternal(ctx, remoteReq, onDelta, true)
-}
-
 func (s *Service) generateRemoteWithModel(
 	ctx context.Context,
 	client *remote.Client,
@@ -457,12 +506,34 @@ func (s *Service) generateRemoteWithModel(
 	emulateTools bool,
 ) (*ChatResult, bool, error) {
 	emitted := false
-	delta := func(text string) {
-		if text != "" {
+	delta := func(ev remote.StreamEvent) {
+		// Any forwarded delta (text, reasoning, or tool call) means we can no
+		// longer safely fall back to a different model mid-stream.
+		if ev.Kind == remote.StreamKindToolCall {
+			if ev.ToolCall == nil {
+				return
+			}
 			emitted = true
+			if onDelta != nil {
+				onDelta(StreamEvent{Type: StreamEventToolCall, ToolCall: &StreamToolCall{
+					Index:        ev.ToolCall.Index,
+					ID:           ev.ToolCall.ID,
+					Name:         ev.ToolCall.Name,
+					ArgsFragment: ev.ToolCall.ArgsFragment,
+				}})
+			}
+			return
+		}
+		if ev.Delta == "" {
+			return
+		}
+		emitted = true
+		eventType := StreamEventText
+		if ev.Kind == remote.StreamKindReasoning {
+			eventType = StreamEventThinking
 		}
 		if onDelta != nil {
-			onDelta(StreamEvent{Type: StreamEventText, Delta: text})
+			onDelta(StreamEvent{Type: eventType, Delta: ev.Delta})
 		}
 	}
 	remoteResult, err := client.Chat(ctx, remote.ChatRequest{
@@ -472,6 +543,10 @@ func (s *Service) generateRemoteWithModel(
 		Images:          remoteImagesFromRequest(req),
 		Stream:          onDelta != nil,
 		Temperature:     req.Temperature,
+		TopP:            req.TopP,
+		TopK:            req.TopK,
+		Stop:            req.Stop,
+		MaxTokens:       req.MaxTokens,
 		ReasoningEffort: req.ReasoningEffort,
 		Tools:           req.Tools,
 		ToolChoice:      req.ToolChoice,
@@ -487,6 +562,10 @@ func (s *Service) generateRemoteWithModel(
 			Images:          remoteImagesFromRequest(req),
 			Stream:          false,
 			Temperature:     req.Temperature,
+			TopP:            req.TopP,
+			TopK:            req.TopK,
+			Stop:            req.Stop,
+			MaxTokens:       req.MaxTokens,
 			ReasoningEffort: req.ReasoningEffort,
 			Tools:           req.Tools,
 			ToolChoice:      toolemulation.ToolChoice{Mode: "any"},
@@ -497,19 +576,30 @@ func (s *Service) generateRemoteWithModel(
 		}
 	}
 
+	if remoteResult.TotalTokens > 0 || remoteResult.Credits > 0 {
+		log.Printf("remote usage model=%s in=%d out=%d cached=%d reasoning=%d total=%d credits=%.4f",
+			model, remoteResult.InputTokens, remoteResult.OutputTokens,
+			remoteResult.CachedInputTokens, remoteResult.ReasoningTokens,
+			remoteResult.TotalTokens, remoteResult.Credits)
+	}
+	finishReason := valueOr(strings.TrimSpace(remoteResult.FinishReason), "stop")
 	result := &ChatResult{
-		Text:             remoteResult.Text,
-		Model:            valueOr(strings.TrimSpace(model), "lingma"),
-		InputTokens:      remoteResult.InputTokens,
-		OutputTokens:     remoteResult.OutputTokens,
-		SessionID:        "",
-		RequestID:        remoteResult.RequestID,
-		FinishReason:     "stop",
-		StopReason:       "stop",
-		Endpoint:         remote.ResolveBaseURL(s.cfg.RemoteBaseURL),
-		Transport:        "remote",
-		EffectiveSession: SessionModeFresh,
-		ToolCalls:        remoteResult.ToolCalls,
+		Text:              remoteResult.Text,
+		ThoughtText:       remoteResult.ReasoningText,
+		Model:             valueOr(strings.TrimSpace(model), "lingma"),
+		InputTokens:       remoteResult.InputTokens,
+		OutputTokens:      remoteResult.OutputTokens,
+		CachedInputTokens: remoteResult.CachedInputTokens,
+		ReasoningTokens:   remoteResult.ReasoningTokens,
+		UsedTokens:        remoteResult.TotalTokens,
+		Credits:           remoteResult.Credits,
+		SessionID:         "",
+		RequestID:         remoteResult.RequestID,
+		FinishReason:      finishReason,
+		Endpoint:          remote.ResolveBaseURL(s.cfg.RemoteBaseURL),
+		Transport:         "remote",
+		EffectiveSession:  SessionModeFresh,
+		ToolCalls:         remoteResult.ToolCalls,
 	}
 	if emulateTools {
 		s.applyToolEmulation(ctx, req, prompt, result, onDelta, func(hintPrompt string) (string, int, error) {
@@ -520,6 +610,10 @@ func (s *Service) generateRemoteWithModel(
 				Images:          remoteImagesFromRequest(req),
 				Stream:          false,
 				Temperature:     req.Temperature,
+				TopP:            req.TopP,
+				TopK:            req.TopK,
+				Stop:            req.Stop,
+				MaxTokens:       req.MaxTokens,
 				ReasoningEffort: req.ReasoningEffort,
 				Tools:           req.Tools,
 				ToolChoice:      req.ToolChoice,
@@ -612,48 +706,6 @@ func remoteImagesFromRequest(req ChatRequest) []remote.Image {
 	return images
 }
 
-func requestHasImages(req ChatRequest) bool {
-	for _, message := range req.Messages {
-		if len(remoteImagesFromChatMessage(message)) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func requestForImageContext(req ChatRequest) ChatRequest {
-	out := req
-	out.System = ""
-	out.Messages = nil
-	out.Tools = nil
-	out.ToolChoice = toolemulation.ToolChoice{Mode: "none"}
-	out.ParallelToolCalls = nil
-
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		message := req.Messages[i]
-		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
-			continue
-		}
-		if len(remoteImagesFromChatMessage(message)) == 0 {
-			continue
-		}
-		text := strings.TrimSpace(message.Text)
-		if text == "" {
-			text = imagePromptFallback(req, i)
-		} else {
-			text = "请只根据图片内容回答用户这条问题，忽略更早的对话历史：" + text
-		}
-		out.Messages = []ChatMessage{{
-			Role:   "user",
-			Text:   text,
-			Images: message.Images,
-		}}
-		return out
-	}
-
-	return out
-}
-
 func imagePromptFallback(req ChatRequest, imageMessageIndex int) string {
 	for i := imageMessageIndex - 1; i >= 0; i-- {
 		message := req.Messages[i]
@@ -668,28 +720,6 @@ func imagePromptFallback(req ChatRequest, imageMessageIndex int) string {
 		return "请只根据图片内容回答这条要求：" + system
 	}
 	return "请描述这张图片的主要内容。"
-}
-
-func requestWithImageContext(req ChatRequest, imageContext string) ChatRequest {
-	out := req
-	out.Messages = make([]ChatMessage, len(req.Messages))
-	copy(out.Messages, req.Messages)
-	for i := range out.Messages {
-		out.Messages[i].Images = nil
-	}
-	contextText := strings.TrimSpace(imageContext)
-	if contextText == "" {
-		return out
-	}
-	addition := "\n\n[图片上下文]\n" + contextText
-	for i := len(out.Messages) - 1; i >= 0; i-- {
-		if strings.EqualFold(strings.TrimSpace(out.Messages[i].Role), "user") {
-			out.Messages[i].Text = strings.TrimSpace(out.Messages[i].Text + addition)
-			return out
-		}
-	}
-	out.Messages = append(out.Messages, ChatMessage{Role: "user", Text: strings.TrimSpace("[图片上下文]\n" + contextText)})
-	return out
 }
 
 func shouldRetryRemoteNativeTool(req ChatRequest, text string) bool {
@@ -1093,7 +1123,6 @@ func (s *Service) buildChatResult(
 		SessionID:        sessionID,
 		RequestID:        requestID,
 		FinishReason:     nestedString(runResult.FinishData, "reason"),
-		StopReason:       nestedString(runResult.PromptResult, "stopReason"),
 		UsedTokens:       int(nestedInt64(runResult.ContextUsage, "usedTokens")),
 		LimitTokens:      int(nestedInt64(runResult.ContextUsage, "limitTokens")),
 		ThinkingDuration: runResult.ThinkingDuration,

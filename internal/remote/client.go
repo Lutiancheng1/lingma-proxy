@@ -68,6 +68,10 @@ type ChatRequest struct {
 	Images          []Image
 	Stream          bool
 	Temperature     *float64
+	TopP            *float64
+	TopK            int
+	Stop            []string
+	MaxTokens       int
 	ReasoningEffort string
 	Tools           []toolemulation.ToolDef
 	ToolChoice      toolemulation.ToolChoice
@@ -89,17 +93,41 @@ type Message struct {
 }
 
 type ChatResult struct {
-	Text          string
-	InputTokens   int
-	OutputTokens  int
-	RequestID     string
-	CredentialSrc string
-	ToolCalls     []toolemulation.ToolCall
+	Text              string
+	ReasoningText     string
+	InputTokens       int
+	OutputTokens      int
+	CachedInputTokens int
+	ReasoningTokens   int
+	TotalTokens       int
+	Credits           float64
+	OriginalCredits   float64
+	FinishReason      string
+	RequestID         string
+	CredentialSrc     string
+	ToolCalls         []toolemulation.ToolCall
 }
 
+// StreamEvent is a single streamed delta from the remote chat endpoint.
 type StreamEvent struct {
-	Delta string
+	Kind     string // StreamKindText, StreamKindReasoning, or StreamKindToolCall
+	Delta    string
+	ToolCall *ToolCallDelta
 }
+
+// ToolCallDelta carries one incremental native tool-call fragment as it streams.
+type ToolCallDelta struct {
+	Index        int
+	ID           string
+	Name         string
+	ArgsFragment string
+}
+
+const (
+	StreamKindText      = "text"
+	StreamKindReasoning = "reasoning"
+	StreamKindToolCall  = "tool_call"
+)
 
 func New(cfg Config) *Client {
 	autoBaseURL := strings.TrimSpace(cfg.BaseURL) == "" && strings.TrimSpace(os.Getenv("LINGMA_REMOTE_BASE_URL")) == ""
@@ -343,7 +371,7 @@ func (c *Client) modelListStatusError(statusCode int, body string) error {
 	return fmt.Errorf("%s", message)
 }
 
-func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(string)) (*ChatResult, error) {
+func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(StreamEvent)) (*ChatResult, error) {
 	cred, err := LoadCredential(c.cfg.AuthFile)
 	if err != nil {
 		return nil, err
@@ -356,6 +384,10 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(str
 	headers, err := c.headers(cred, chatPath, body)
 	if err != nil {
 		return nil, err
+	}
+	if key := strings.TrimSpace(request.Model); key != "" {
+		headers["X-Model-Key"] = key
+		headers["X-Model-Source"] = "system"
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+chatPath+chatQuery, strings.NewReader(body))
 	if err != nil {
@@ -374,34 +406,75 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(str
 		return nil, fmt.Errorf("remote chat status %d: %s", resp.StatusCode, truncate(string(respBody), 1000))
 	}
 	var builder strings.Builder
+	var reasoningBuilder strings.Builder
 	toolCallBuffer := newRemoteToolCallBuffer()
+	var usage *remoteUsage
+	finishReason := ""
 	if err := scanSSE(resp.Body, func(event sseEvent) error {
+		if event.Usage != nil {
+			usage = event.Usage
+		}
+		if event.FinishReason != "" {
+			finishReason = event.FinishReason
+		}
 		if event.Done {
 			return nil
 		}
 		if len(event.ToolCalls) > 0 {
 			toolCallBuffer.Add(event.ToolCalls)
+			if onDelta != nil {
+				for _, frag := range event.ToolCalls {
+					onDelta(StreamEvent{Kind: StreamKindToolCall, ToolCall: &ToolCallDelta{
+						Index:        frag.Index,
+						ID:           frag.ID,
+						Name:         frag.Name,
+						ArgsFragment: frag.ArgumentsFragment,
+					}})
+				}
+			}
 		}
-		if event.Content == "" {
-			return nil
+		if event.Reasoning != "" {
+			reasoningBuilder.WriteString(event.Reasoning)
+			if onDelta != nil {
+				onDelta(StreamEvent{Kind: StreamKindReasoning, Delta: event.Reasoning})
+			}
 		}
-		builder.WriteString(event.Content)
-		if onDelta != nil {
-			onDelta(event.Content)
+		if event.Content != "" {
+			builder.WriteString(event.Content)
+			if onDelta != nil {
+				onDelta(StreamEvent{Kind: StreamKindText, Delta: event.Content})
+			}
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	text := builder.String()
-	return &ChatResult{
+	result := &ChatResult{
 		Text:          text,
+		ReasoningText: reasoningBuilder.String(),
 		InputTokens:   estimateTokens(request.Prompt),
 		OutputTokens:  estimateTokens(text),
 		RequestID:     requestID,
 		CredentialSrc: cred.Source,
 		ToolCalls:     toolCallBuffer.Calls(),
-	}, nil
+		FinishReason:  finishReason,
+	}
+	// Prefer the gateway's real usage numbers over local estimates when present.
+	if usage != nil {
+		if usage.PromptTokens > 0 {
+			result.InputTokens = usage.PromptTokens
+		}
+		if usage.CompletionTokens > 0 {
+			result.OutputTokens = usage.CompletionTokens
+		}
+		result.TotalTokens = usage.TotalTokens
+		result.CachedInputTokens = usage.PromptTokensDetails.CachedTokens
+		result.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
+		result.Credits = usage.Credits
+		result.OriginalCredits = usage.OriginalCredits
+	}
+	return result, nil
 }
 
 func (c *Client) buildBody(requestID string, request ChatRequest) (string, error) {
@@ -413,45 +486,48 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 	if strings.EqualFold(model, "auto") {
 		model = ""
 	}
-	imageURLs := projectImages(request.Images)
+	hasImages := hasVisionImages(request.Images)
 	payload := map[string]any{
-		"request_id":       requestID,
-		"request_set_id":   "",
-		"chat_record_id":   requestID,
-		"stream":           true,
-		"image_urls":       nullableSlice(imageURLs),
-		"is_reply":         false,
+		"request_id":     requestID,
+		"request_set_id": newUUID(),
+		"chat_record_id": requestID,
+		"stream":         true,
+		"chat_task":      "FREE_INPUT",
+		// Images travel inline in the message content parts (OpenAI vision
+		// format), matching the QoderCN CLI, which does not use image_urls.
+		"image_urls":       nullableSlice([]string(nil)),
+		"is_reply":         true,
 		"is_retry":         false,
 		"session_id":       "",
+		"session_type":     "qoderclicn",
 		"code_language":    "",
-		"source":           0,
+		"source":           1,
 		"version":          "3",
 		"chat_prompt":      "",
-		"parameters":       map[string]float64{"temperature": temperature},
-		"aliyun_user_type": "personal_standard",
+		"parameters":       buildGenerationParameters(request, temperature),
+		"aliyun_user_type": "",
 		"agent_id":         "agent_common",
-		"task_id":          "question_refine",
+		"task_id":          "common",
 		"model_config": map[string]any{
-			"key":          model,
-			"display_name": "",
-			"model":        model,
-			"format":       "",
-			"is_vl":        len(imageURLs) > 0,
-			"is_reasoning": remoteReasoningEnabled(request),
-			"api_key":      "",
-			"url":          "",
-			"source":       "",
-			"enable":       false,
+			"key":              model,
+			"display_name":     "",
+			"model":            "",
+			"format":           "openai",
+			"is_vl":            hasImages,
+			"is_reasoning":     remoteReasoningEnabled(request),
+			"api_key":          "",
+			"url":              "",
+			"source":           "system",
+			"max_input_tokens": 180000,
 		},
 		"messages": projectMessages(request),
 		"business": map[string]any{
-			"product":  "jb_plugin",
+			"product":  "cli",
 			"version":  c.cfg.CosyVersion,
-			"type":     "memory",
+			"type":     "agent",
 			"id":       newUUID(),
 			"begin_at": time.Now().UnixMilli(),
 			"stage":    "start",
-			"name":     "memory_intent_recognition_" + requestID,
 		},
 	}
 	if tools := projectTools(request.Tools); len(tools) > 0 {
@@ -462,6 +538,26 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 	}
 	body, err := json.Marshal(payload)
 	return string(body), err
+}
+
+// buildGenerationParameters assembles the upstream "parameters" object. The
+// QoderCN CLI only sends temperature + max_tokens here; top_p/top_k/stop are
+// forwarded best-effort when the client supplies them.
+func buildGenerationParameters(request ChatRequest, temperature float64) map[string]any {
+	params := map[string]any{"temperature": temperature}
+	if request.MaxTokens > 0 {
+		params["max_tokens"] = request.MaxTokens
+	}
+	if request.TopP != nil {
+		params["top_p"] = *request.TopP
+	}
+	if request.TopK > 0 {
+		params["top_k"] = request.TopK
+	}
+	if len(request.Stop) > 0 {
+		params["stop"] = request.Stop
+	}
+	return params
 }
 
 func remoteReasoningEnabled(request ChatRequest) bool {
@@ -479,18 +575,13 @@ func nullableSlice[T any](items []T) any {
 	return items
 }
 
-func projectImages(images []Image) []string {
-	if len(images) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(images))
+func hasVisionImages(images []Image) bool {
 	for _, img := range images {
-		item := projectImage(img)
-		if item != "" {
-			out = append(out, item)
+		if strings.TrimSpace(img.Data) != "" || strings.TrimSpace(img.URL) != "" {
+			return true
 		}
 	}
-	return out
+	return false
 }
 
 func projectImage(img Image) string {
@@ -675,23 +766,26 @@ func (c *Client) headers(cred Credential, path string, body string) (map[string]
 	}, "\n")
 	signature := md5.Sum([]byte(preimage))
 	return map[string]string{
-		"Authorization":     fmt.Sprintf("Bearer COSY.%s.%x", payloadBase64, signature),
-		"Content-Type":      "application/json",
-		"Appcode":           "cosy",
-		"Cosy-Date":         date,
-		"Cosy-Key":          cred.CosyKey,
-		"Cosy-Machineid":    cred.MachineID,
-		"Cosy-User":         cred.UserID,
-		"Cosy-Clientip":     "198.18.0.1",
-		"Cosy-Clienttype":   "2",
-		"Cosy-Machineos":    MachineOSHeader(),
-		"Cosy-Machinetoken": "",
-		"Cosy-Machinetype":  "",
-		"Cosy-Version":      c.cfg.CosyVersion,
-		"Login-Version":     "v2",
-		"User-Agent":        "lingma-proxy/remote",
-		"Accept":            "text/event-stream",
-		"Cache-Control":     "no-cache",
+		"Authorization":         fmt.Sprintf("Bearer COSY.%s.%x", payloadBase64, signature),
+		"Content-Type":          "application/json",
+		"Appcode":               "cosy",
+		"Cosy-Date":             date,
+		"Cosy-Key":              cred.CosyKey,
+		"Cosy-Machineid":        cred.MachineID,
+		"Cosy-User":             cred.UserID,
+		"Cosy-Clientip":         "198.18.0.1",
+		"Cosy-Clienttype":       "5",
+		"Cosy-Machineos":        MachineOSHeader(),
+		"Cosy-Machinetoken":     "",
+		"Cosy-Machinetype":      "5",
+		"Cosy-Version":          c.cfg.CosyVersion,
+		"Cosy-Business-Product": "cli",
+		"Cosy-Business-Type":    "agent",
+		"Cosy-Scene":            "assistant",
+		"Login-Version":         "v2",
+		"User-Agent":            "lingma-proxy/remote",
+		"Accept":                "text/event-stream",
+		"Cache-Control":         "no-cache",
 	}, nil
 }
 
@@ -707,16 +801,39 @@ type outerSSE struct {
 type innerSSE struct {
 	Choices []struct {
 		Delta struct {
-			Content   string                `json:"content"`
-			ToolCalls []remoteToolCallDelta `json:"tool_calls"`
+			Content          string                `json:"content"`
+			ReasoningContent string                `json:"reasoning_content"`
+			ToolCalls        []remoteToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *remoteUsage `json:"usage"`
+}
+
+// remoteUsage mirrors the OpenAI-style usage object the Lingma/QoderCN gateway
+// emits in the final SSE chunk, including cache/reasoning breakdowns and billing.
+type remoteUsage struct {
+	PromptTokens        int     `json:"prompt_tokens"`
+	CompletionTokens    int     `json:"completion_tokens"`
+	TotalTokens         int     `json:"total_tokens"`
+	Credits             float64 `json:"credits"`
+	OriginalCredits     float64 `json:"original_credits"`
+	Billable            bool    `json:"billable"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
 }
 
 type sseEvent struct {
-	Content   string
-	ToolCalls []remoteToolCallFragment
-	Done      bool
+	Content      string
+	Reasoning    string
+	ToolCalls    []remoteToolCallFragment
+	FinishReason string
+	Usage        *remoteUsage
+	Done         bool
 }
 
 type remoteToolCallFragment struct {
@@ -782,9 +899,15 @@ func parseSSEPayload(payload string) (sseEvent, bool, error) {
 		return sseEvent{}, false, err
 	}
 	var builder strings.Builder
+	var reasoning strings.Builder
 	var toolCalls []remoteToolCallFragment
+	finishReason := ""
 	for _, choice := range inner.Choices {
 		builder.WriteString(choice.Delta.Content)
+		reasoning.WriteString(choice.Delta.ReasoningContent)
+		if choice.FinishReason != "" {
+			finishReason = choice.FinishReason
+		}
 		for _, tc := range choice.Delta.ToolCalls {
 			toolCalls = append(toolCalls, remoteToolCallFragment{
 				Index:             tc.Index,
@@ -795,7 +918,13 @@ func parseSSEPayload(payload string) (sseEvent, bool, error) {
 			})
 		}
 	}
-	return sseEvent{Content: builder.String(), ToolCalls: toolCalls}, true, nil
+	return sseEvent{
+		Content:      builder.String(),
+		Reasoning:    reasoning.String(),
+		ToolCalls:    toolCalls,
+		FinishReason: finishReason,
+		Usage:        inner.Usage,
+	}, true, nil
 }
 
 type remoteToolCallBuffer struct {

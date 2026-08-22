@@ -250,70 +250,6 @@ func TestRemoteImagesFromRequest(t *testing.T) {
 	}
 }
 
-func TestRequestHasImages(t *testing.T) {
-	if requestHasImages(ChatRequest{Messages: []ChatMessage{{Role: "user", Text: "plain"}}}) {
-		t.Fatal("plain request should not have images")
-	}
-	if !requestHasImages(ChatRequest{Messages: []ChatMessage{{Role: "user", Images: []Image{{URL: "file:///tmp/a.png"}}}}}) {
-		t.Fatal("image URL request should have images")
-	}
-}
-
-func TestRequestForImageContextUsesLatestImageTurnOnly(t *testing.T) {
-	req := ChatRequest{
-		System: "old system",
-		Messages: []ChatMessage{
-			{Role: "user", Text: "旧问题"},
-			{Role: "assistant", Text: "旧回答"},
-			{Role: "user", Text: "[Image #1] 这个图片是什么?", Images: []Image{{MediaType: "image/png", Data: "AAAA"}}},
-		},
-		Tools: []toolemulation.ToolDef{{
-			Name: "Bash",
-			InputSchema: map[string]any{
-				"required": []any{"command"},
-			},
-		}},
-		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
-	}
-
-	out := requestForImageContext(req)
-	if out.System != "" {
-		t.Fatalf("system = %q, want empty", out.System)
-	}
-	if len(out.Tools) != 0 || out.ToolChoice.Mode != "none" {
-		t.Fatalf("tools should be disabled: tools=%#v choice=%#v", out.Tools, out.ToolChoice)
-	}
-	if len(out.Messages) != 1 {
-		t.Fatalf("messages = %#v, want one compact image turn", out.Messages)
-	}
-	message := out.Messages[0]
-	if message.Role != "user" || len(message.Images) != 1 || message.Images[0].Data != "AAAA" {
-		t.Fatalf("unexpected image message = %#v", message)
-	}
-	if strings.Contains(message.Text, "旧问题") || !strings.Contains(message.Text, "忽略更早的对话历史") {
-		t.Fatalf("unexpected compact prompt = %q", message.Text)
-	}
-}
-
-func TestRequestForImageContextUsesShortSystemPromptForImageOnlyUser(t *testing.T) {
-	req := ChatRequest{
-		System:   "这张图片是什么？只用两句话回答。",
-		Messages: []ChatMessage{{Role: "user", Images: []Image{{MediaType: "image/jpeg", Data: "AAAA"}}}},
-	}
-
-	out := requestForImageContext(req)
-	if len(out.Messages) != 1 {
-		t.Fatalf("messages = %#v, want one compact image turn", out.Messages)
-	}
-	message := out.Messages[0]
-	if message.Role != "user" || len(message.Images) != 1 {
-		t.Fatalf("unexpected image message = %#v", message)
-	}
-	if !strings.Contains(message.Text, "这张图片是什么") {
-		t.Fatalf("compact prompt should include short system prompt, got %q", message.Text)
-	}
-}
-
 func TestBuildLingmaPromptUsesImageFallbackForImageOnlyUser(t *testing.T) {
 	req := ChatRequest{
 		System:   "这张图片是什么？只用两句话回答。",
@@ -337,54 +273,5 @@ func TestExtractLastUserImagesFindsPreviousImageTurn(t *testing.T) {
 	})
 	if len(images) != 1 || images[0].URL != "file:///tmp/a.png" {
 		t.Fatalf("images = %#v", images)
-	}
-}
-
-func TestRequestWithImageContextRemovesImagesAndAppendsContext(t *testing.T) {
-	req := ChatRequest{
-		Messages: []ChatMessage{
-			{Role: "user", Text: "看图", Images: []Image{{URL: "file:///tmp/a.png"}}},
-			{Role: "assistant", Text: "好的"},
-			{Role: "user", Text: "继续分析"},
-		},
-	}
-	out := requestWithImageContext(req, "海边礁石和海浪")
-	for _, message := range out.Messages {
-		if len(message.Images) > 0 {
-			t.Fatalf("images should be removed: %#v", out.Messages)
-		}
-	}
-	if !strings.Contains(out.Messages[2].Text, "[图片上下文]") || !strings.Contains(out.Messages[2].Text, "海边礁石和海浪") {
-		t.Fatalf("latest user message missing image context: %#v", out.Messages[2])
-	}
-}
-
-func TestBuildLingmaPromptInjectsToolingForImageContextRemoteFallback(t *testing.T) {
-	req := ChatRequest{
-		Messages: []ChatMessage{
-			{Role: "user", Text: "这张图是什么", Images: []Image{{URL: "file:///tmp/a.png"}}},
-		},
-		Tools: []toolemulation.ToolDef{{
-			Name: "exec_command",
-			InputSchema: map[string]any{
-				"properties": map[string]any{
-					"cmd": map[string]any{"type": "string"},
-				},
-				"required": []any{"cmd"},
-			},
-		}},
-		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
-	}
-
-	withContext := requestWithImageContext(req, "黑色礁石与海浪")
-	prompt, err := buildLingmaPrompt(withContext, SessionModeFresh, true)
-	if err != nil {
-		t.Fatalf("buildLingmaPrompt returned error: %v", err)
-	}
-	if !strings.Contains(prompt, "[图片上下文]") {
-		t.Fatalf("prompt should include image context, got %q", prompt)
-	}
-	if !strings.Contains(prompt, "DIRECT tool access") || !strings.Contains(prompt, "```json action") {
-		t.Fatalf("image-context remote fallback prompt should include tool emulation, got %q", prompt)
 	}
 }

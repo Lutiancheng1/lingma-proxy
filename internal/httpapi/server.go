@@ -658,18 +658,15 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		content = append(content, map[string]any{"type": "thinking", "thinking": result.ThoughtText})
 	}
 	content = append(content, map[string]any{"type": "text", "text": result.Text})
-	stopReason := "end_turn"
-	if len(result.ToolCalls) > 0 {
-		for _, tc := range result.ToolCalls {
-			content = append(content, map[string]any{
-				"type":  "tool_use",
-				"id":    tc.ID,
-				"name":  tc.Name,
-				"input": tc.Arguments,
-			})
-		}
-		stopReason = "tool_use"
+	for _, tc := range result.ToolCalls {
+		content = append(content, map[string]any{
+			"type":  "tool_use",
+			"id":    tc.ID,
+			"name":  tc.Name,
+			"input": tc.Arguments,
+		})
 	}
+	stopReason, stopSequence := anthropicStopReason(result)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":            fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 		"type":          "message",
@@ -677,11 +674,8 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		"content":       content,
 		"model":         result.Model,
 		"stop_reason":   stopReason,
-		"stop_sequence": nil,
-		"usage": map[string]any{
-			"input_tokens":  result.InputTokens,
-			"output_tokens": result.OutputTokens,
-		},
+		"stop_sequence": stopSequence,
+		"usage":         anthropicFinalUsage(result),
 	})
 }
 
@@ -804,10 +798,7 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 				"model":         model,
 				"stop_reason":   nil,
 				"stop_sequence": nil,
-				"usage": map[string]any{
-					"input_tokens":  result.InputTokens,
-					"output_tokens": 0,
-				},
+				"usage":         anthropicInputUsage(result),
 			},
 		}); err != nil {
 			return
@@ -886,19 +877,15 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 			index++
 		}
 
-		stopReason := "end_turn"
-		if len(result.ToolCalls) > 0 {
-			stopReason = "tool_use"
-		}
+		stopReason, stopSequence := anthropicStopReason(result)
 		_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{
 			"type": "message_delta",
 			"delta": map[string]any{
 				"stop_reason":   stopReason,
-				"stop_sequence": nil,
+				"stop_sequence": stopSequence,
 			},
-			"usage": map[string]any{
-				"output_tokens": result.OutputTokens,
-			},
+			// input_tokens already sent in message_start above; delta carries output only.
+			"usage": map[string]any{"output_tokens": result.OutputTokens},
 		})
 		_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 		return
@@ -1120,19 +1107,14 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 			"index": blockIndex,
 		})
 	}
-	stopReason := "end_turn"
-	if len(final.ToolCalls) > 0 {
-		stopReason = "tool_use"
-	}
+	stopReason, stopSequence := anthropicStopReason(final)
 	if err := writeSSEEvent(w, flusher, "message_delta", map[string]any{
 		"type": "message_delta",
 		"delta": map[string]any{
 			"stop_reason":   stopReason,
-			"stop_sequence": nil,
+			"stop_sequence": stopSequence,
 		},
-		"usage": map[string]any{
-			"output_tokens": final.OutputTokens,
-		},
+		"usage": anthropicFinalUsage(final),
 	}); err != nil {
 		return
 	}
@@ -1278,13 +1260,15 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 				}},
 			})
 		}
-		finishReason := "stop"
-		if len(result.ToolCalls) > 0 {
-			finishReason = "tool_calls"
-		}
+		finishReason := openAIFinishReason(result)
 		_ = writeOpenAIChunk(w, flusher, map[string]any{
 			"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
 			"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": finishReason}},
+		})
+		_ = writeOpenAIChunk(w, flusher, map[string]any{
+			"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
+			"choices": []map[string]any{},
+			"usage":   openAIUsageMap(result),
 		})
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		flusher.Flush()
@@ -1321,6 +1305,7 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 	doneCh := done
 	var final *service.ChatResult
 	var finalErr error
+	streamedTool := false
 
 	for eventsCh != nil || doneCh != nil {
 		select {
@@ -1331,26 +1316,75 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 				eventsCh = nil
 				continue
 			}
-			for _, delta := range filter.Push(event.Delta) {
-				if delta == "" {
+			switch event.Type {
+			case service.StreamEventToolCall:
+				// Native tool-call fragments streamed straight through as
+				// OpenAI delta.tool_calls (near-identity with the upstream).
+				if event.ToolCall == nil {
+					continue
+				}
+				streamedTool = true
+				fn := map[string]any{}
+				if event.ToolCall.Name != "" {
+					fn["name"] = event.ToolCall.Name
+				}
+				if event.ToolCall.ArgsFragment != "" {
+					fn["arguments"] = event.ToolCall.ArgsFragment
+				}
+				call := map[string]any{"index": event.ToolCall.Index}
+				if event.ToolCall.ID != "" {
+					call["id"] = event.ToolCall.ID
+					call["type"] = "function"
+				}
+				if len(fn) > 0 {
+					call["function"] = fn
+				}
+				if err := writeOpenAIChunk(w, flusher, map[string]any{
+					"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
+					"choices": []map[string]any{{
+						"index":         0,
+						"delta":         map[string]any{"tool_calls": []map[string]any{call}},
+						"finish_reason": nil,
+					}},
+				}); err != nil {
+					return
+				}
+			case service.StreamEventThinking:
+				if event.Delta == "" {
 					continue
 				}
 				if err := writeOpenAIChunk(w, flusher, map[string]any{
-					"id":      chatID,
-					"object":  "chat.completion.chunk",
-					"created": created,
-					"model":   model,
-					"choices": []map[string]any{
-						{
-							"index": 0,
-							"delta": map[string]any{
-								"content": delta,
-							},
-							"finish_reason": nil,
-						},
-					},
+					"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
+					"choices": []map[string]any{{
+						"index":         0,
+						"delta":         map[string]any{"reasoning_content": event.Delta},
+						"finish_reason": nil,
+					}},
 				}); err != nil {
 					return
+				}
+			default:
+				for _, delta := range filter.Push(event.Delta) {
+					if delta == "" {
+						continue
+					}
+					if err := writeOpenAIChunk(w, flusher, map[string]any{
+						"id":      chatID,
+						"object":  "chat.completion.chunk",
+						"created": created,
+						"model":   model,
+						"choices": []map[string]any{
+							{
+								"index": 0,
+								"delta": map[string]any{
+									"content": delta,
+								},
+								"finish_reason": nil,
+							},
+						},
+					}); err != nil {
+						return
+					}
 				}
 			}
 		case result, ok := <-doneCh:
@@ -1414,26 +1448,28 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 			}
 		}
 	}
-	for i, tc := range final.ToolCalls {
-		argsJSON, _ := json.Marshal(tc.Arguments)
-		_ = writeOpenAIChunk(w, flusher, map[string]any{
-			"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
-			"choices": []map[string]any{{
-				"index": 0,
-				"delta": map[string]any{
-					"tool_calls": []map[string]any{{
-						"index": i, "id": tc.ID, "type": "function",
-						"function": map[string]any{"name": tc.Name, "arguments": string(argsJSON)},
-					}},
-				},
-				"finish_reason": nil,
-			}},
-		})
+	// Only emit tool calls here if they were NOT already streamed incrementally
+	// (native path streams them live; the emulation path parses them from text
+	// and surfaces them only in final.ToolCalls).
+	if !streamedTool {
+		for i, tc := range final.ToolCalls {
+			argsJSON, _ := json.Marshal(tc.Arguments)
+			_ = writeOpenAIChunk(w, flusher, map[string]any{
+				"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
+				"choices": []map[string]any{{
+					"index": 0,
+					"delta": map[string]any{
+						"tool_calls": []map[string]any{{
+							"index": i, "id": tc.ID, "type": "function",
+							"function": map[string]any{"name": tc.Name, "arguments": string(argsJSON)},
+						}},
+					},
+					"finish_reason": nil,
+				}},
+			})
+		}
 	}
-	finishReason := "stop"
-	if len(final.ToolCalls) > 0 {
-		finishReason = "tool_calls"
-	}
+	finishReason := openAIFinishReason(final)
 	if err := writeOpenAIChunk(w, flusher, map[string]any{
 		"id":      chatID,
 		"object":  "chat.completion.chunk",
@@ -1449,6 +1485,17 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 	}); err != nil {
 		return
 	}
+	// Final usage chunk (real upstream tokens). OpenAI streams carry usage in a
+	// trailing choices:[] chunk; we always emit it so streaming clients get
+	// the same real token/cache counts as the non-streaming response.
+	_ = writeOpenAIChunk(w, flusher, map[string]any{
+		"id":      chatID,
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []map[string]any{},
+		"usage":   openAIUsageMap(final),
+	})
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
@@ -2266,6 +2313,76 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	_ = json.NewEncoder(w).Encode(data)
 }
 
+// anthropicInputUsage builds the input side of an Anthropic usage object.
+// Anthropic reports cached prompt tokens separately from input_tokens, so the
+// cached portion is split out into cache_read_input_tokens (letting clients such
+// as Claude Code display cache hits) and removed from input_tokens.
+func anthropicInputUsage(result *service.ChatResult) map[string]any {
+	input := result.InputTokens
+	usage := map[string]any{"output_tokens": 0}
+	if result.CachedInputTokens > 0 {
+		cached := result.CachedInputTokens
+		if cached > input {
+			cached = input
+		}
+		usage["cache_read_input_tokens"] = cached
+		input -= cached
+	}
+	usage["input_tokens"] = input
+	return usage
+}
+
+// anthropicFinalUsage is the complete usage object (input + cache + output),
+// emitted on the final message_delta / non-streaming response.
+func anthropicFinalUsage(result *service.ChatResult) map[string]any {
+	usage := anthropicInputUsage(result)
+	usage["output_tokens"] = result.OutputTokens
+	return usage
+}
+
+// openAIUsageMap builds an OpenAI-style usage object. Unlike Anthropic, OpenAI
+// keeps prompt_tokens as the full prompt count and reports cached tokens as a
+// subset detail; reasoning tokens are reported under completion_tokens_details.
+func openAIUsageMap(result *service.ChatResult) map[string]any {
+	total := result.UsedTokens
+	if total <= 0 {
+		total = result.InputTokens + result.OutputTokens
+	}
+	usage := map[string]any{
+		"prompt_tokens":     result.InputTokens,
+		"completion_tokens": result.OutputTokens,
+		"total_tokens":      total,
+	}
+	if result.CachedInputTokens > 0 {
+		usage["prompt_tokens_details"] = map[string]any{"cached_tokens": result.CachedInputTokens}
+	}
+	if result.ReasoningTokens > 0 {
+		usage["completion_tokens_details"] = map[string]any{"reasoning_tokens": result.ReasoningTokens}
+	}
+	return usage
+}
+
+// openAIResponsesUsageMap mirrors openAIUsageMap for the Responses API, which
+// names the fields input_tokens/output_tokens and nests details differently.
+func openAIResponsesUsageMap(result *service.ChatResult) map[string]any {
+	total := result.UsedTokens
+	if total <= 0 {
+		total = result.InputTokens + result.OutputTokens
+	}
+	usage := map[string]any{
+		"input_tokens":  result.InputTokens,
+		"output_tokens": result.OutputTokens,
+		"total_tokens":  total,
+	}
+	if result.CachedInputTokens > 0 {
+		usage["input_tokens_details"] = map[string]any{"cached_tokens": result.CachedInputTokens}
+	}
+	if result.ReasoningTokens > 0 {
+		usage["output_tokens_details"] = map[string]any{"reasoning_tokens": result.ReasoningTokens}
+	}
+	return usage
+}
+
 func writeAnthropicError(w http.ResponseWriter, status int, kind string, message string) {
 	writeJSON(w, status, map[string]any{
 		"type": "error",
@@ -2287,13 +2404,45 @@ func writeOpenAIError(w http.ResponseWriter, status int, kind string, message st
 	})
 }
 
+// openAIFinishReason resolves the OpenAI finish_reason: tool calls win, then
+// the known non-stop reasons (length/content_filter, from the gateway or the
+// output limiter), else stop. Only whitelisted values pass through so that
+// backend-specific finish strings (e.g. the IPC runtime) never leak.
+func openAIFinishReason(result *service.ChatResult) string {
+	if len(result.ToolCalls) > 0 {
+		return "tool_calls"
+	}
+	switch strings.TrimSpace(result.FinishReason) {
+	case "length", "content_filter":
+		return result.FinishReason
+	}
+	return "stop"
+}
+
+// anthropicStopReason derives the Anthropic stop_reason/stop_sequence from the
+// canonical OpenAI-style FinishReason (set by upstream or the output limiter).
+func anthropicStopReason(result *service.ChatResult) (string, any) {
+	if len(result.ToolCalls) > 0 {
+		return "tool_use", nil
+	}
+	switch strings.TrimSpace(result.FinishReason) {
+	case "length":
+		return "max_tokens", nil
+	case "stop":
+		if s := strings.TrimSpace(result.StopSequence); s != "" {
+			return "stop_sequence", s
+		}
+		return "end_turn", nil
+	}
+	return "end_turn", nil
+}
+
 func writeOpenAIChatCompletion(w http.ResponseWriter, result *service.ChatResult) {
 	created := time.Now().Unix()
 	message := map[string]any{
 		"role":    "assistant",
 		"content": result.Text,
 	}
-	finishReason := "stop"
 	if len(result.ToolCalls) > 0 {
 		toolCalls := make([]map[string]any, 0, len(result.ToolCalls))
 		for _, tc := range result.ToolCalls {
@@ -2308,8 +2457,8 @@ func writeOpenAIChatCompletion(w http.ResponseWriter, result *service.ChatResult
 			})
 		}
 		message["tool_calls"] = toolCalls
-		finishReason = "tool_calls"
 	}
+	finishReason := openAIFinishReason(result)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
 		"object":  "chat.completion",
@@ -2320,11 +2469,7 @@ func writeOpenAIChatCompletion(w http.ResponseWriter, result *service.ChatResult
 			"message":       message,
 			"finish_reason": finishReason,
 		}},
-		"usage": map[string]any{
-			"prompt_tokens":     result.InputTokens,
-			"completion_tokens": result.OutputTokens,
-			"total_tokens":      result.InputTokens + result.OutputTokens,
-		},
+		"usage": openAIUsageMap(result),
 	})
 }
 
@@ -2395,11 +2540,7 @@ func buildOpenAIResponseBody(responseID string, created int64, model string, res
 		"model":       model,
 		"output":      output,
 		"output_text": text,
-		"usage": map[string]any{
-			"input_tokens":  result.InputTokens,
-			"output_tokens": result.OutputTokens,
-			"total_tokens":  result.InputTokens + result.OutputTokens,
-		},
+		"usage":       openAIResponsesUsageMap(result),
 	}
 }
 

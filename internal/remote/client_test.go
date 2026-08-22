@@ -322,13 +322,10 @@ func TestBuildBodyProjectsRemoteImages(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		t.Fatal(err)
 	}
-	images, ok := payload["image_urls"].([]any)
-	if !ok || len(images) != 1 {
-		t.Fatalf("image_urls = %#v", payload["image_urls"])
-	}
-	image, ok := images[0].(string)
-	if !ok || !strings.HasPrefix(image, "data:image/png;base64,") {
-		t.Fatalf("unexpected image projection: %#v", images[0])
+	// Images ride in the message content parts, not the top-level image_urls
+	// field (matching the QoderCN CLI); image_urls stays null.
+	if payload["image_urls"] != nil {
+		t.Fatalf("image_urls = %#v, want null", payload["image_urls"])
 	}
 	modelConfig := payload["model_config"].(map[string]any)
 	if modelConfig["is_vl"] != true {
@@ -337,8 +334,16 @@ func TestBuildBodyProjectsRemoteImages(t *testing.T) {
 	messages := payload["messages"].([]any)
 	message := messages[0].(map[string]any)
 	content := message["content"].([]any)
-	if content[0].(map[string]any)["type"] != "text" || content[1].(map[string]any)["type"] != "image_url" {
-		t.Fatalf("unexpected message content: %#v", content)
+	if content[0].(map[string]any)["type"] != "text" {
+		t.Fatalf("unexpected first content part: %#v", content[0])
+	}
+	imagePart := content[1].(map[string]any)
+	if imagePart["type"] != "image_url" {
+		t.Fatalf("unexpected image content part: %#v", imagePart)
+	}
+	url, _ := imagePart["image_url"].(map[string]any)["url"].(string)
+	if !strings.HasPrefix(url, "data:image/png;base64,") {
+		t.Fatalf("unexpected image url: %q", url)
 	}
 }
 
@@ -625,5 +630,93 @@ func TestLoadMachineIDReadsQoderCLIAuthIDFallback(t *testing.T) {
 	}
 	if got != "qoder-machine-id-1234567890" {
 		t.Fatalf("machine id = %q", got)
+	}
+}
+
+func sseFrame(t *testing.T, inner map[string]any) string {
+	t.Helper()
+	body, err := json.Marshal(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer, err := json.Marshal(map[string]any{
+		"body":            string(body),
+		"statusCodeValue": 200,
+		"statusCode":      "OK",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(outer)
+}
+
+func TestParseSSEPayloadReasoningDelta(t *testing.T) {
+	ev, ok, err := parseSSEPayload(sseFrame(t, map[string]any{
+		"object":  "chat.completion.chunk",
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"reasoning_content": "The user"}}},
+	}))
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if ev.Reasoning != "The user" || ev.Content != "" {
+		t.Fatalf("reasoning=%q content=%q", ev.Reasoning, ev.Content)
+	}
+}
+
+func TestParseSSEPayloadToolCallWithFinish(t *testing.T) {
+	ev, ok, err := parseSSEPayload(sseFrame(t, map[string]any{
+		"choices": []any{map[string]any{
+			"index":         0,
+			"finish_reason": "tool_calls",
+			"delta": map[string]any{"tool_calls": []any{map[string]any{
+				"index":    0,
+				"id":       "call_abc",
+				"type":     "function",
+				"function": map[string]any{"name": "Bash", "arguments": `{"command":"echo hi"}`},
+			}}},
+		}},
+	}))
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if ev.FinishReason != "tool_calls" {
+		t.Fatalf("finish=%q", ev.FinishReason)
+	}
+	if len(ev.ToolCalls) != 1 || ev.ToolCalls[0].Name != "Bash" || ev.ToolCalls[0].ID != "call_abc" {
+		t.Fatalf("toolcalls=%+v", ev.ToolCalls)
+	}
+}
+
+func TestParseSSEPayloadUsage(t *testing.T) {
+	ev, ok, err := parseSSEPayload(sseFrame(t, map[string]any{
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": ""}, "finish_reason": "stop"}},
+		"usage": map[string]any{
+			"prompt_tokens":             20095,
+			"completion_tokens":         28,
+			"total_tokens":              20123,
+			"credits":                   0.5841,
+			"original_credits":          0.5841,
+			"billable":                  true,
+			"prompt_tokens_details":     map[string]any{"cached_tokens": 20009},
+			"completion_tokens_details": map[string]any{"reasoning_tokens": 11},
+		},
+	}))
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if ev.Usage == nil {
+		t.Fatal("usage nil")
+	}
+	if ev.Usage.PromptTokens != 20095 || ev.Usage.CompletionTokens != 28 || ev.Usage.TotalTokens != 20123 {
+		t.Fatalf("tokens=%+v", ev.Usage)
+	}
+	if ev.Usage.PromptTokensDetails.CachedTokens != 20009 {
+		t.Fatalf("cached=%d", ev.Usage.PromptTokensDetails.CachedTokens)
+	}
+	if ev.Usage.CompletionTokensDetails.ReasoningTokens != 11 {
+		t.Fatalf("reasoning=%d", ev.Usage.CompletionTokensDetails.ReasoningTokens)
+	}
+	if ev.FinishReason != "stop" {
+		t.Fatalf("finish=%q", ev.FinishReason)
 	}
 }
