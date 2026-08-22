@@ -130,7 +130,10 @@ func SaveCredentialFile(cred Credential, path string) error {
 func InspectCredentialCandidates() []CredentialInspection {
 	inspections := make([]CredentialInspection, 0)
 	for _, cacheDir := range candidateLingmaCacheDirs() {
-		userPath := filepath.Join(cacheDir, "cache", "user")
+		userPath, ok := firstExistingCredentialUserFile(cacheDir)
+		if !ok {
+			continue
+		}
 		userInfo, statErr := os.Stat(userPath)
 		if statErr != nil {
 			continue
@@ -203,7 +206,10 @@ type credentialCandidate struct {
 }
 
 func loadCredentialCandidate(cacheDir string) (credentialCandidate, error) {
-	userPath := filepath.Join(cacheDir, "cache", "user")
+	userPath, ok := firstExistingCredentialUserFile(cacheDir)
+	if !ok {
+		return credentialCandidate{}, os.ErrNotExist
+	}
 	info, err := os.Stat(userPath)
 	if err != nil {
 		return credentialCandidate{}, err
@@ -213,6 +219,24 @@ func loadCredentialCandidate(cacheDir string) (credentialCandidate, error) {
 		return credentialCandidate{}, err
 	}
 	return credentialCandidate{Cred: cred, UserModified: info.ModTime()}, nil
+}
+
+// candidateCredentialUserFiles lists the encrypted credential blob locations we
+// support: the legacy IDE cache (cache/user) and the QoderCN CLI login (.auth/user).
+func candidateCredentialUserFiles(lingmaDir string) []string {
+	return uniquePathStrings([]string{
+		filepath.Join(lingmaDir, "cache", "user"),
+		filepath.Join(lingmaDir, ".auth", "user"),
+	})
+}
+
+func firstExistingCredentialUserFile(lingmaDir string) (string, bool) {
+	for _, path := range candidateCredentialUserFiles(lingmaDir) {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 func betterCredentialCandidate(candidate, best credentialCandidate, policy CredentialPickPolicy) bool {
@@ -227,7 +251,10 @@ func betterCredentialCandidate(candidate, best credentialCandidate, policy Crede
 }
 
 func importLingmaCacheCredentialFromDir(lingmaDir string) (Credential, error) {
-	userPath := filepath.Join(lingmaDir, "cache", "user")
+	userPath, ok := firstExistingCredentialUserFile(lingmaDir)
+	if !ok {
+		userPath = filepath.Join(lingmaDir, "cache", "user")
+	}
 	encrypted, err := os.ReadFile(userPath)
 	if err != nil {
 		return Credential{}, fmt.Errorf("read %s: %w", userPath, err)
@@ -422,6 +449,8 @@ func loadMachineID(lingmaDir string) (string, error) {
 func candidateMachineIDFiles(lingmaDir string) []string {
 	return uniquePathStrings([]string{
 		filepath.Join(lingmaDir, "cache", "id"),
+		filepath.Join(lingmaDir, ".auth", "machine_id"),
+		filepath.Join(lingmaDir, ".auth", "id"),
 		filepath.Join(lingmaDir, "cli", ".auth", "id"),
 	})
 }
