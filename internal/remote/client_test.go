@@ -367,6 +367,33 @@ func TestBuildBodyEnablesRemoteReasoningWhenRequested(t *testing.T) {
 	}
 }
 
+func TestBuildGenerationParametersForwardsReasoningEffort(t *testing.T) {
+	cases := []struct {
+		name        string
+		req         ChatRequest
+		wantEnable  any    // true, false, or nil (key absent)
+		wantEffort  string // "" means key absent
+	}{
+		{"explicit level passthrough", ChatRequest{Model: "gm51model", ReasoningEffort: "max"}, true, "max"},
+		{"non-openai level passthrough", ChatRequest{Model: "gm51model", ReasoningEffort: "xhigh"}, true, "xhigh"},
+		{"none disables thinking", ChatRequest{Model: "gm51model", ReasoningEffort: "none"}, false, "none"},
+		{"empty on plain model omits keys", ChatRequest{Model: "gm51model"}, nil, ""},
+		{"thinking model implies enable, no level", ChatRequest{Model: "qwen3-thinking"}, true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params := buildGenerationParameters(tc.req, 0.1)
+			if got := params["enable_thinking"]; got != tc.wantEnable {
+				t.Fatalf("enable_thinking = %#v, want %#v", got, tc.wantEnable)
+			}
+			got, _ := params["reasoning_effort"].(string)
+			if got != tc.wantEffort {
+				t.Fatalf("reasoning_effort = %q, want %q", got, tc.wantEffort)
+			}
+		})
+	}
+}
+
 func TestParseSSEPayloadExtractsNativeToolCallFragments(t *testing.T) {
 	payload := `{"body":"{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"file_path\\\":\\\"/tmp/a.txt\\\"}\"}}]}}]}","statusCodeValue":200}`
 	event, ok, err := parseSSEPayload(payload)

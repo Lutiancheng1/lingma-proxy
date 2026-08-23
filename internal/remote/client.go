@@ -637,10 +637,28 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 }
 
 // buildGenerationParameters assembles the upstream "parameters" object. The
-// QoderCN CLI only sends temperature + max_tokens here; top_p/top_k/stop are
-// forwarded best-effort when the client supplies them.
+// gateway honors temperature and the reasoning_effort/enable_thinking pair;
+// max_tokens is sent for parity with the CLI but the gateway ignores it (the
+// proxy enforces it downstream). top_p/top_k/stop are forwarded best-effort.
 func buildGenerationParameters(request ChatRequest, temperature float64) map[string]any {
 	params := map[string]any{"temperature": temperature}
+	// Reasoning effort / thinking toggle. Unlike max_tokens (which the gateway
+	// ignores), the QoderCN gateway honors these under parameters. We forward
+	// reasoning_effort verbatim so callers can reach QoderCN-native levels
+	// (none/low/medium/high/xhigh/max) beyond the OpenAI enum; the gateway
+	// validates each value against the target model's thinking_config.
+	switch effort := strings.ToLower(strings.TrimSpace(request.ReasoningEffort)); {
+	case effort == "none" || effort == "off" || effort == "disabled":
+		params["enable_thinking"] = false
+		params["reasoning_effort"] = "none"
+	case effort != "":
+		params["enable_thinking"] = true
+		params["reasoning_effort"] = strings.TrimSpace(request.ReasoningEffort)
+	case remoteReasoningEnabled(request):
+		// Model implies reasoning (e.g. a *-thinking variant) with no explicit
+		// level; enable thinking and let the gateway pick its default effort.
+		params["enable_thinking"] = true
+	}
 	if request.MaxTokens > 0 {
 		params["max_tokens"] = request.MaxTokens
 	}
