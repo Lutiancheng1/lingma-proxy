@@ -26,6 +26,7 @@ const (
 	chatPath       = "/algo/api/v2/service/pro/sse/agent_chat_generation"
 	chatQuery      = "?FetchKeys=llm_model_result&AgentId=agent_common"
 	modelListPath  = "/algo/api/v2/model/list"
+	quotaPath      = "/api/v2/quota/usage"
 )
 
 var remoteBaseURLPattern = regexp.MustCompile(`https?://[^\s"'<>),\]}]+`)
@@ -276,6 +277,94 @@ func baseURLCachePath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".config", "lingma-ipc-proxy", "remote-base-url.json"), nil
+}
+
+// Quota is the account credit/usage snapshot from the openapi host.
+type Quota struct {
+	UserType   string  `json:"user_type,omitempty"`
+	Unit       string  `json:"unit,omitempty"`
+	Total      float64 `json:"total"`
+	Used       float64 `json:"used"`
+	Remaining  float64 `json:"remaining"`
+	Percentage float64 `json:"percentage"`
+	IsExceeded bool    `json:"is_exceeded"`
+	ResetAtMS  int64   `json:"reset_at_ms,omitempty"`
+	Source     string  `json:"source,omitempty"`
+}
+
+// FetchQuota reads account credit/usage from the QoderCN openapi host. It only
+// needs the access token (Bearer); no cosy signature or machine headers.
+func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
+	cred, err := LoadCredential(c.cfg.AuthFile)
+	if err != nil {
+		return nil, err
+	}
+	token := strings.TrimSpace(cred.AccessToken)
+	if token == "" {
+		return nil, fmt.Errorf("no access token in credentials; re-login QoderCN/Lingma to enable quota lookup")
+	}
+	base, err := openAPIBaseURL(c.cfg.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+quotaPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("remote quota status %d: %s", resp.StatusCode, truncate(string(body), 300))
+	}
+	var parsed struct {
+		UserType        string `json:"userType"`
+		IsQuotaExceeded bool   `json:"isQuotaExceeded"`
+		ExpiresAt       int64  `json:"expiresAt"`
+		UserQuota       struct {
+			Total      float64 `json:"total"`
+			Used       float64 `json:"used"`
+			Remaining  float64 `json:"remaining"`
+			Percentage float64 `json:"percentage"`
+			Unit       string  `json:"unit"`
+		} `json:"userQuota"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("parse quota response: %w", err)
+	}
+	return &Quota{
+		UserType:   parsed.UserType,
+		Unit:       parsed.UserQuota.Unit,
+		Total:      parsed.UserQuota.Total,
+		Used:       parsed.UserQuota.Used,
+		Remaining:  parsed.UserQuota.Remaining,
+		Percentage: parsed.UserQuota.Percentage,
+		IsExceeded: parsed.IsQuotaExceeded,
+		ResetAtMS:  parsed.ExpiresAt,
+		Source:     base + quotaPath,
+	}, nil
+}
+
+// openAPIBaseURL derives the openapi host (quota / user APIs) from the chat base
+// URL. Only QoderCN exposes this quota endpoint.
+func openAPIBaseURL(chatBaseURL string) (string, error) {
+	raw := strings.TrimSpace(chatBaseURL)
+	if raw == "" {
+		raw = DefaultBaseURL
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("invalid remote base URL %q", chatBaseURL)
+	}
+	if u.Host == "qoder.com.cn" || strings.HasSuffix(u.Host, ".qoder.com.cn") {
+		return "https://openapi.qoder.com.cn", nil
+	}
+	return "", fmt.Errorf("account quota is only available for QoderCN accounts (base host %q)", u.Host)
 }
 
 func (c *Client) Warmup(ctx context.Context) error {

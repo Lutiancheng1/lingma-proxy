@@ -22,6 +22,7 @@ type Credential struct {
 	EncryptUserInfo string
 	UserID          string
 	MachineID       string
+	AccessToken     string // OAuth-style token for the openapi host (quota, user info)
 	Source          string
 	TokenExpireTime int64
 }
@@ -55,6 +56,7 @@ type storedCredentialFile struct {
 		EncryptUserInfo string `json:"encrypt_user_info"`
 		UserID          string `json:"user_id"`
 		MachineID       string `json:"machine_id"`
+		AccessToken     string `json:"access_token,omitempty"`
 	} `json:"auth"`
 }
 
@@ -108,6 +110,7 @@ func SaveCredentialFile(cred Credential, path string) error {
 	stored.Auth.EncryptUserInfo = cred.EncryptUserInfo
 	stored.Auth.UserID = cred.UserID
 	stored.Auth.MachineID = cred.MachineID
+	stored.Auth.AccessToken = cred.AccessToken
 
 	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {
@@ -179,6 +182,7 @@ func loadCredentialFile(path string) (Credential, error) {
 		EncryptUserInfo: stored.Auth.EncryptUserInfo,
 		UserID:          stored.Auth.UserID,
 		MachineID:       stored.Auth.MachineID,
+		AccessToken:     stored.Auth.AccessToken,
 		Source:          valueOr(stored.Source, path),
 		TokenExpireTime: parseExpire(stored.TokenExpireTime),
 	}
@@ -275,6 +279,7 @@ func importLingmaCacheCredentialFromDir(lingmaDir string) (Credential, error) {
 		Key             string `json:"key"`
 		EncryptUserInfo string `json:"encrypt_user_info"`
 		UserID          string `json:"uid"`
+		AccessToken     string `json:"access_token"`
 		ExpireTime      any    `json:"expire_time"`
 	}
 	if err := json.Unmarshal(plaintext, &payload); err != nil {
@@ -285,6 +290,7 @@ func importLingmaCacheCredentialFromDir(lingmaDir string) (Credential, error) {
 		EncryptUserInfo: payload.EncryptUserInfo,
 		UserID:          payload.UserID,
 		MachineID:       machineID,
+		AccessToken:     payload.AccessToken,
 		Source:          userPath,
 		TokenExpireTime: parseExpireAny(payload.ExpireTime),
 	}

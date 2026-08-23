@@ -348,6 +348,14 @@ func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
 	return models, nil
 }
 
+// Quota returns the account credit/usage snapshot (remote backend only).
+func (s *Service) Quota(ctx context.Context) (*remote.Quota, error) {
+	if s.backend() != BackendRemote {
+		return nil, errors.New("quota is only available in remote backend mode")
+	}
+	return s.remoteClientLocked().FetchQuota(ctx)
+}
+
 func (s *Service) Generate(ctx context.Context, req ChatRequest) (*ChatResult, error) {
 	var result *ChatResult
 	var err error

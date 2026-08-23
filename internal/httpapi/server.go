@@ -162,6 +162,8 @@ func NewServer(addr string, svc *service.Service) *Server {
 	mux.HandleFunc("/v1/props", s.handleModelProps)
 	mux.HandleFunc("/props", s.handleModelProps)
 	mux.HandleFunc("/version", s.handleVersion)
+	mux.HandleFunc("/quota", s.handleQuota)
+	mux.HandleFunc("/v1/quota", s.handleQuota)
 	mux.HandleFunc("/v1/messages/count_tokens", s.handleAnthropicCountTokens)
 	mux.HandleFunc("/v1/messages", s.handleAnthropicMessages)
 	mux.HandleFunc("/v1/chat/completions", s.handleOpenAIChatCompletions)
@@ -563,6 +565,21 @@ func (s *Server) handleModelProps(w http.ResponseWriter, r *http.Request) {
 			"top_p":       1,
 		},
 	})
+}
+
+func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	quota, err := s.svc.Quota(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, quota)
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
