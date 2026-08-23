@@ -2443,6 +2443,11 @@ func writeOpenAIChatCompletion(w http.ResponseWriter, result *service.ChatResult
 		"role":    "assistant",
 		"content": result.Text,
 	}
+	// Surface reasoning as the DeepSeek-style reasoning_content field, matching
+	// the streaming path (so OpenAI-compatible clients / converters see it).
+	if strings.TrimSpace(result.ThoughtText) != "" {
+		message["reasoning_content"] = result.ThoughtText
+	}
 	if len(result.ToolCalls) > 0 {
 		toolCalls := make([]map[string]any, 0, len(result.ToolCalls))
 		for _, tc := range result.ToolCalls {
