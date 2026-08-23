@@ -53,6 +53,21 @@ func TestOutputLimiterDisabledPassThrough(t *testing.T) {
 	}
 }
 
+func TestOutputLimiterFlushEmitsHeldBackTail(t *testing.T) {
+	// A multi-rune stop sets holdback>0, so a partial tail is buffered for
+	// cross-delta detection. When no stop ever matches, Flush must emit that
+	// tail — no legitimate output may be silently dropped.
+	l := newOutputLimiter(0, []string{"STOP"})
+	out := l.Push("hello") // holdback 3 -> emits "he", pending "llo"
+	out += l.Flush()       // no stop hit -> flush "llo"
+	if out != "hello" {
+		t.Fatalf("assembled = %q, want %q", out, "hello")
+	}
+	if l.triggered() {
+		t.Fatal("should not have triggered any stop/length limit")
+	}
+}
+
 func TestOutputLimiterApplyNonStream(t *testing.T) {
 	l := newOutputLimiter(0, []string{"\n\n"})
 	got := l.apply("line one\n\nline two")

@@ -318,7 +318,10 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("read quota response: %w", readErr)
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("remote quota status %d: %s", resp.StatusCode, truncate(string(body), 300))
 	}
@@ -557,7 +560,11 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(Str
 		if usage.CompletionTokens > 0 {
 			result.OutputTokens = usage.CompletionTokens
 		}
-		result.TotalTokens = usage.TotalTokens
+		if usage.TotalTokens > 0 {
+			result.TotalTokens = usage.TotalTokens
+		} else {
+			result.TotalTokens = result.InputTokens + result.OutputTokens
+		}
 		result.CachedInputTokens = usage.PromptTokensDetails.CachedTokens
 		result.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
 		result.Credits = usage.Credits

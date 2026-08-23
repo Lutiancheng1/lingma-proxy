@@ -674,3 +674,54 @@ func TestSanitizeRecordedBodyRedactsImagePayloads(t *testing.T) {
 		t.Fatalf("missing redaction marker: %s", got)
 	}
 }
+
+func TestOpenAIFinishReason(t *testing.T) {
+	tool := []toolemulation.ToolCall{{}}
+	cases := []struct {
+		name   string
+		result service.ChatResult
+		want   string
+	}{
+		{"tool calls win", service.ChatResult{ToolCalls: tool, FinishReason: "length"}, "tool_calls"},
+		{"length", service.ChatResult{FinishReason: "length"}, "length"},
+		{"content filter", service.ChatResult{FinishReason: "content_filter"}, "content_filter"},
+		{"stop passthrough", service.ChatResult{FinishReason: "stop"}, "stop"},
+		{"empty defaults to stop", service.ChatResult{}, "stop"},
+		{"unknown backend reason coerced to stop", service.ChatResult{FinishReason: "eos_token"}, "stop"},
+		{"whitespace normalized", service.ChatResult{FinishReason: " length "}, "length"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := openAIFinishReason(&tc.result); got != tc.want {
+				t.Fatalf("openAIFinishReason = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAnthropicStopReason(t *testing.T) {
+	tool := []toolemulation.ToolCall{{}}
+	cases := []struct {
+		name    string
+		result  service.ChatResult
+		reason  string
+		seqWant any
+	}{
+		{"tool use", service.ChatResult{ToolCalls: tool, FinishReason: "stop"}, "tool_use", nil},
+		{"length -> max_tokens", service.ChatResult{FinishReason: "length"}, "max_tokens", nil},
+		{"stop with sequence", service.ChatResult{FinishReason: "stop", StopSequence: "\n\n"}, "stop_sequence", "\n\n"},
+		{"stop without sequence", service.ChatResult{FinishReason: "stop"}, "end_turn", nil},
+		{"unknown -> end_turn", service.ChatResult{FinishReason: "eos_token"}, "end_turn", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, seq := anthropicStopReason(&tc.result)
+			if reason != tc.reason {
+				t.Fatalf("stop_reason = %q, want %q", reason, tc.reason)
+			}
+			if seq != tc.seqWant {
+				t.Fatalf("stop_sequence = %v, want %v", seq, tc.seqWant)
+			}
+		})
+	}
+}

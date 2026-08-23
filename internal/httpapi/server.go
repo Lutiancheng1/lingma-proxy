@@ -572,6 +572,10 @@ func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	quota, err := s.svc.Quota(ctx)
@@ -2430,8 +2434,10 @@ func openAIFinishReason(result *service.ChatResult) string {
 		return "tool_calls"
 	}
 	switch strings.TrimSpace(result.FinishReason) {
-	case "length", "content_filter":
-		return result.FinishReason
+	case "length":
+		return "length"
+	case "content_filter":
+		return "content_filter"
 	}
 	return "stop"
 }
@@ -2446,8 +2452,11 @@ func anthropicStopReason(result *service.ChatResult) (string, any) {
 	case "length":
 		return "max_tokens", nil
 	case "stop":
-		if s := strings.TrimSpace(result.StopSequence); s != "" {
-			return "stop_sequence", s
+		// StopSequence is only set when the limiter matched a configured stop,
+		// so any non-empty value is a real match — do not TrimSpace it, since
+		// whitespace-only stops ("\n\n", "\n") are legitimate sequences.
+		if result.StopSequence != "" {
+			return "stop_sequence", result.StopSequence
 		}
 		return "end_turn", nil
 	}
