@@ -1104,3 +1104,44 @@ func TestExtractAnthropicImagesHandlesURLAndBase64(t *testing.T) {
 		t.Fatalf("base64 image lost its data: %#v", imgs[1])
 	}
 }
+
+func TestCreditUsageExposedWhenCharged(t *testing.T) {
+	result := &service.ChatResult{
+		InputTokens:     10,
+		OutputTokens:    20,
+		Credits:         3.5,
+		OriginalCredits: 7,
+		Billable:        true,
+	}
+	for name, usage := range map[string]map[string]any{
+		"openai":    openAIUsageMap(result),
+		"responses": openAIResponsesUsageMap(result),
+		"anthropic": anthropicFinalUsage(result),
+	} {
+		if got := usage["credits"]; got != 3.5 {
+			t.Errorf("%s: credits = %v, want 3.5", name, got)
+		}
+		if got := usage["original_credits"]; got != float64(7) {
+			t.Errorf("%s: original_credits = %v, want 7", name, got)
+		}
+		if got := usage["billable"]; got != true {
+			t.Errorf("%s: billable = %v, want true", name, got)
+		}
+	}
+}
+
+func TestCreditUsageOmittedWhenFree(t *testing.T) {
+	result := &service.ChatResult{InputTokens: 10, OutputTokens: 20}
+	for name, usage := range map[string]map[string]any{
+		"openai":    openAIUsageMap(result),
+		"responses": openAIResponsesUsageMap(result),
+		"anthropic": anthropicFinalUsage(result),
+	} {
+		if _, ok := usage["credits"]; ok {
+			t.Errorf("%s: credits should be absent for a free turn", name)
+		}
+		if _, ok := usage["billable"]; ok {
+			t.Errorf("%s: billable should be absent for a free turn", name)
+		}
+	}
+}

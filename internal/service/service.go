@@ -118,7 +118,13 @@ type ChatResult struct {
 	// and future backends that do supply it. Never fabricated.
 	CacheCreationInputTokens int
 	ReasoningTokens          int
-	Credits                  float64
+	// Credits is the QoderCN gateway's real per-request charge; OriginalCredits
+	// is the pre-discount charge and Billable whether the call was metered. All
+	// three come straight from the gateway usage frame (never estimated) and are
+	// exposed in the response usage object for downstream billing (e.g. cc-switch).
+	Credits         float64
+	OriginalCredits float64
+	Billable        bool
 	ThinkingDuration  int64
 	PipePath          string
 	Endpoint          string
@@ -657,6 +663,8 @@ func (s *Service) generateRemoteWithModel(
 		ReasoningTokens:   remoteResult.ReasoningTokens,
 		UsedTokens:        remoteResult.TotalTokens,
 		Credits:           remoteResult.Credits,
+		OriginalCredits:   remoteResult.OriginalCredits,
+		Billable:          remoteResult.Billable,
 		SessionID:         "",
 		RequestID:         remoteResult.RequestID,
 		FinishReason:      finishReason,

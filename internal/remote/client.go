@@ -104,6 +104,7 @@ type ChatResult struct {
 	TotalTokens       int
 	Credits           float64
 	OriginalCredits   float64
+	Billable          bool
 	FinishReason      string
 	RequestID         string
 	CredentialSrc     string
@@ -570,6 +571,7 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(Str
 		result.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
 		result.Credits = usage.Credits
 		result.OriginalCredits = usage.OriginalCredits
+		result.Billable = usage.Billable
 	}
 	return result, nil
 }

@@ -2576,7 +2576,21 @@ func anthropicInputUsage(result *service.ChatResult) map[string]any {
 func anthropicFinalUsage(result *service.ChatResult) map[string]any {
 	usage := anthropicInputUsage(result)
 	usage["output_tokens"] = result.OutputTokens
+	addCreditUsage(usage, result)
 	return usage
+}
+
+// addCreditUsage exposes the gateway's real billing figures inside the usage
+// object so downstream tools (e.g. cc-switch) can meter per request. These are
+// non-standard fields that spec-compliant clients ignore; they are only added
+// when the gateway actually reported a charge, so free/usage-less turns stay
+// clean. Never estimated — sourced from the gateway usage frame.
+func addCreditUsage(usage map[string]any, result *service.ChatResult) {
+	if result.Credits > 0 || result.OriginalCredits > 0 {
+		usage["credits"] = result.Credits
+		usage["original_credits"] = result.OriginalCredits
+		usage["billable"] = result.Billable
+	}
 }
 
 // openAIUsageMap builds an OpenAI-style usage object. Unlike Anthropic, OpenAI
@@ -2598,6 +2612,7 @@ func openAIUsageMap(result *service.ChatResult) map[string]any {
 	if result.ReasoningTokens > 0 {
 		usage["completion_tokens_details"] = map[string]any{"reasoning_tokens": result.ReasoningTokens}
 	}
+	addCreditUsage(usage, result)
 	return usage
 }
 
@@ -2619,6 +2634,7 @@ func openAIResponsesUsageMap(result *service.ChatResult) map[string]any {
 	if result.ReasoningTokens > 0 {
 		usage["output_tokens_details"] = map[string]any{"reasoning_tokens": result.ReasoningTokens}
 	}
+	addCreditUsage(usage, result)
 	return usage
 }
 
