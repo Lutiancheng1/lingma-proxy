@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"lingma-ipc-proxy/internal/remote"
 	"lingma-ipc-proxy/internal/service"
 	"lingma-ipc-proxy/internal/toolemulation"
 )
@@ -474,18 +475,12 @@ func TestAnthropicHostedWebSearchCall(t *testing.T) {
 		}},
 	}
 
-	call, ok := anthropicHostedWebSearchCall(req)
-	if !ok {
-		t.Fatal("expected hosted web_search tool call")
+	hosted, query := anthropicHostedWebSearchInvocation(req)
+	if !hosted {
+		t.Fatal("expected hosted web_search invocation")
 	}
-	if call.Name != "web_search" {
-		t.Fatalf("tool name = %q", call.Name)
-	}
-	if call.Arguments["query"] != "Hermes agent web UI documentation" {
-		t.Fatalf("query = %#v", call.Arguments["query"])
-	}
-	if !strings.HasPrefix(call.ID, "toolu_") {
-		t.Fatalf("id = %q", call.ID)
+	if query != "Hermes agent web UI documentation" {
+		t.Fatalf("query = %q", query)
 	}
 }
 
@@ -505,7 +500,7 @@ func TestAnthropicHostedWebSearchCallIgnoresRegularClientWebSearch(t *testing.T)
 		}},
 	}
 
-	if _, ok := anthropicHostedWebSearchCall(req); ok {
+	if hosted, _ := anthropicHostedWebSearchInvocation(req); hosted {
 		t.Fatal("regular client web_search should stay in prompt tool emulation")
 	}
 }
@@ -534,7 +529,7 @@ func TestAnthropicHostedWebSearchCallIgnoresToolResultFollowup(t *testing.T) {
 		}},
 	}
 
-	if _, ok := anthropicHostedWebSearchCall(req); ok {
+	if hosted, _ := anthropicHostedWebSearchInvocation(req); hosted {
 		t.Fatal("hosted web_search should not short-circuit after a tool_result")
 	}
 }
@@ -1189,5 +1184,35 @@ func TestWithAuthKeyGate(t *testing.T) {
 			}()
 			s.withAuth(ok).ServeHTTP(rec, req)
 		})
+	}
+}
+
+func TestStripAndFormatHostedWebSearch(t *testing.T) {
+	tools := []any{
+		map[string]any{"name": "web_search", "type": "web_search_20250305"},
+		map[string]any{"name": "get_weather", "input_schema": map[string]any{"type": "object"}},
+	}
+	kept, ok := stripAnthropicHostedWebSearchTool(tools).([]any)
+	if !ok || len(kept) != 1 {
+		t.Fatalf("expected 1 client tool kept, got %#v", kept)
+	}
+	if m := kept[0].(map[string]any); m["name"] != "get_weather" {
+		t.Fatalf("wrong tool kept: %#v", m)
+	}
+	// A regular client web_search (has input_schema, no hosted type) is kept.
+	client := []any{map[string]any{"name": "web_search", "input_schema": map[string]any{}}}
+	if got, _ := stripAnthropicHostedWebSearchTool(client).([]any); len(got) != 1 {
+		t.Fatalf("client web_search should be kept: %#v", got)
+	}
+	// All-hosted strips to nil.
+	if stripAnthropicHostedWebSearchTool([]any{map[string]any{"name": "web_search", "type": "web_search_20250305"}}) != nil {
+		t.Fatal("all-hosted tools should strip to nil")
+	}
+
+	out := formatWebSearchResults("golang release", []remote.SearchResult{{Title: "Go", Link: "https://go.dev", Snippet: "released 2009"}})
+	for _, want := range []string{"golang release", "[1] Go", "https://go.dev", "released 2009"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("formatted results missing %q:\n%s", want, out)
+		}
 	}
 }

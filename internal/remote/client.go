@@ -26,6 +26,7 @@ const (
 	chatPath       = "/algo/api/v2/service/pro/sse/agent_chat_generation"
 	chatQuery      = "?FetchKeys=llm_model_result&AgentId=agent_common"
 	modelListPath  = "/algo/api/v2/model/list"
+	oneSearchPath  = "/algo/api/v1/webSearch/oneSearch"
 	quotaPath      = "/api/v2/quota/usage"
 )
 
@@ -357,6 +358,73 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 		ResetAtMS:  parsed.ExpiresAt,
 		Source:     base + quotaPath,
 	}, nil
+}
+
+// SearchResult is one web-search hit from the gateway's oneSearch endpoint.
+type SearchResult struct {
+	Title         string `json:"title"`
+	Link          string `json:"link"`
+	Snippet       string `json:"snippet"`
+	PublishedTime string `json:"publishedTime"`
+	Hostname      string `json:"hostname"`
+}
+
+// WebSearch runs a web search through the QoderCN gateway's oneSearch endpoint
+// (the same backend the QoderCN CLI uses). Auth reuses the cosy signature; the
+// body is sent plaintext with Encode=0 and the {payload, encodeVersion}
+// envelope the gateway expects.
+func (c *Client) WebSearch(ctx context.Context, query string) ([]SearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("web search query is empty")
+	}
+	cred, err := LoadCredential(c.cfg.AuthFile)
+	if err != nil {
+		return nil, err
+	}
+	inner, err := json.Marshal(map[string]any{
+		"query":     query,
+		"timeRange": "NoLimit",
+		"contents":  map[string]any{"mainText": false, "markdownText": false, "summary": false},
+	})
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(map[string]any{"payload": string(inner), "encodeVersion": "1"})
+	if err != nil {
+		return nil, err
+	}
+	headers, err := c.headers(cred, oneSearchPath, string(body))
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+oneSearchPath+"?Encode=0", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read web search response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("web search status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	var parsed struct {
+		PageItems []SearchResult `json:"pageItems"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("parse web search response: %w", err)
+	}
+	return parsed.PageItems, nil
 }
 
 // openAPIBaseURL derives the openapi host (quota / user APIs) from the chat base

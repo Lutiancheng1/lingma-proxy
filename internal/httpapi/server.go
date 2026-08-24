@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"lingma-ipc-proxy/internal/remote"
 	"lingma-ipc-proxy/internal/service"
 	"lingma-ipc-proxy/internal/toolemulation"
 	"lingma-ipc-proxy/internal/version"
@@ -685,17 +686,12 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if reqBody, _ := json.Marshal(req); len(reqBody) > 0 {
-		fmt.Printf("[ANTHROPIC REQUEST] %s\n", string(reqBody))
-	}
-
-	if call, ok := anthropicHostedWebSearchCall(req); ok {
-		if req.Stream {
-			s.writeAnthropicHostedToolStream(w, req.Model, call)
-			return
-		}
-		s.writeAnthropicHostedToolResponse(w, req.Model, call)
-		return
+	// Claude Code's hosted web_search is a server-side tool the gateway's chat
+	// endpoint cannot run inline. Service it with the gateway's own oneSearch:
+	// fetch results, inject them into the conversation, strip the hosted tool,
+	// then fall through to normal handling so the model answers using them.
+	if hosted, query := anthropicHostedWebSearchInvocation(req); hosted {
+		req = s.applyHostedWebSearch(r.Context(), req, query)
 	}
 
 	normalized, err := normalizeAnthropicRequest(req)
@@ -1325,96 +1321,6 @@ func writeAnthropicStreamBody(ctx context.Context, w http.ResponseWriter, flushe
 	})
 }
 
-func (s *Server) writeAnthropicHostedToolResponse(w http.ResponseWriter, model string, call toolemulation.ToolCall) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		model = "lingma"
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id":   fmt.Sprintf("msg_%d", time.Now().UnixNano()),
-		"type": "message",
-		"role": "assistant",
-		"content": []map[string]any{{
-			"type":  "tool_use",
-			"id":    call.ID,
-			"name":  call.Name,
-			"input": call.Arguments,
-		}},
-		"model":         model,
-		"stop_reason":   "tool_use",
-		"stop_sequence": nil,
-		"usage": map[string]any{
-			"input_tokens":  0,
-			"output_tokens": 0,
-		},
-	})
-}
-
-func (s *Server) writeAnthropicHostedToolStream(w http.ResponseWriter, model string, call toolemulation.ToolCall) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeAnthropicError(w, http.StatusInternalServerError, "api_error", "streaming is not supported by this server")
-		return
-	}
-
-	model = strings.TrimSpace(model)
-	if model == "" {
-		model = "lingma"
-	}
-	streamingHeaders(w)
-	msgID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
-	if err := writeSSEEvent(w, flusher, "message_start", map[string]any{
-		"type": "message_start",
-		"message": map[string]any{
-			"id":            msgID,
-			"type":          "message",
-			"role":          "assistant",
-			"content":       []any{},
-			"model":         model,
-			"stop_reason":   nil,
-			"stop_sequence": nil,
-			"usage": map[string]any{
-				"input_tokens":  0,
-				"output_tokens": 0,
-			},
-		},
-	}); err != nil {
-		return
-	}
-	if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
-		"type":          "content_block_start",
-		"index":         0,
-		"content_block": map[string]any{"type": "tool_use", "id": call.ID, "name": call.Name, "input": map[string]any{}},
-	}); err != nil {
-		return
-	}
-	argsJSON, _ := json.Marshal(call.Arguments)
-	if err := writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
-		"type":  "content_block_delta",
-		"index": 0,
-		"delta": map[string]any{"type": "input_json_delta", "partial_json": string(argsJSON)},
-	}); err != nil {
-		return
-	}
-	if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
-		"type":  "content_block_stop",
-		"index": 0,
-	}); err != nil {
-		return
-	}
-	_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{
-		"type": "message_delta",
-		"delta": map[string]any{
-			"stop_reason":   "tool_use",
-			"stop_sequence": nil,
-		},
-		"usage": map[string]any{
-			"output_tokens": 0,
-		},
-	})
-	_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
-}
-
 func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req service.ChatRequest, emitUsage bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -1949,26 +1855,79 @@ func truthyEnv(name string) bool {
 	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
-func anthropicHostedWebSearchCall(req anthropicRequest) (toolemulation.ToolCall, bool) {
+func anthropicHostedWebSearchInvocation(req anthropicRequest) (bool, string) {
 	if !hasAnthropicHostedWebSearchTool(req.Tools) {
-		return toolemulation.ToolCall{}, false
+		return false, ""
 	}
+	// A follow-up turn already carrying tool results: don't search again.
 	if hasAnthropicToolResult(req.Messages) {
-		return toolemulation.ToolCall{}, false
+		return false, ""
 	}
 	if !anthropicHostedWebSearchRequested(req.Tools, req.ToolChoice) {
-		return toolemulation.ToolCall{}, false
+		return false, ""
 	}
-
 	query := anthropicHostedWebSearchQuery(req.Messages)
 	if query == "" {
-		return toolemulation.ToolCall{}, false
+		return false, ""
 	}
-	return toolemulation.ToolCall{
-		ID:        fmt.Sprintf("toolu_%d", time.Now().UnixNano()),
-		Name:      "web_search",
-		Arguments: map[string]any{"query": query},
-	}, true
+	return true, query
+}
+
+// applyHostedWebSearch runs the gateway's oneSearch for the query, strips the
+// hosted web_search tool from the request, and appends the results to the
+// conversation so the model answers using them. On any search failure it still
+// strips the tool and proceeds (model answers unaided) so the request never
+// stalls waiting on a tool the client cannot execute.
+func (s *Server) applyHostedWebSearch(ctx context.Context, req anthropicRequest, query string) anthropicRequest {
+	req.Tools = stripAnthropicHostedWebSearchTool(req.Tools)
+	results, err := s.svc.WebSearch(ctx, query)
+	if err != nil || len(results) == 0 {
+		return req
+	}
+	req.Messages = append(req.Messages, rawMessage{Role: "user", Content: formatWebSearchResults(query, results)})
+	return req
+}
+
+// stripAnthropicHostedWebSearchTool removes hosted web_search tool definitions
+// from the raw tools list, leaving client (function) tools intact.
+func stripAnthropicHostedWebSearchTool(raw any) any {
+	items, ok := raw.([]any)
+	if !ok {
+		return raw
+	}
+	kept := make([]any, 0, len(items))
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok &&
+			strings.TrimSpace(stringFromAny(m["name"])) == "web_search" &&
+			toolemulation.IsAnthropicHostedToolType(stringFromAny(m["type"])) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+// formatWebSearchResults renders search hits as a plain-text context block the
+// model can cite when answering.
+func formatWebSearchResults(query string, results []remote.SearchResult) string {
+	const maxResults = 5
+	const maxSnippetRunes = 500
+	var b strings.Builder
+	fmt.Fprintf(&b, "Web search results for %q (use these to answer the question above; cite the source links):\n", query)
+	for i, r := range results {
+		if i >= maxResults {
+			break
+		}
+		snippet := strings.TrimSpace(r.Snippet)
+		if rs := []rune(snippet); len(rs) > maxSnippetRunes {
+			snippet = string(rs[:maxSnippetRunes]) + "…"
+		}
+		fmt.Fprintf(&b, "\n[%d] %s\n%s\n%s\n", i+1, strings.TrimSpace(r.Title), strings.TrimSpace(r.Link), snippet)
+	}
+	return b.String()
 }
 
 func hasAnthropicToolResult(messages []rawMessage) bool {
