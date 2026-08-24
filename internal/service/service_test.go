@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"lingma-ipc-proxy/internal/remote"
 	"lingma-ipc-proxy/internal/toolemulation"
 )
 
@@ -61,31 +62,6 @@ func TestRemoteFallbackModelsNormalizeAndDedupe(t *testing.T) {
 	want := []string{"kmodel", "mmodel"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("fallback models = %v, want %v", got, want)
-	}
-}
-
-func TestShouldProbeRemoteModelForListOnlyKnownMissingAliases(t *testing.T) {
-	if !shouldProbeRemoteModelForList("Kimi-K2.6") {
-		t.Fatal("expected Kimi alias to be probed")
-	}
-	if !shouldProbeRemoteModelForList("MiniMax-M2.7") {
-		t.Fatal("expected MiniMax alias to be probed")
-	}
-	if shouldProbeRemoteModelForList("dashscope_qwen3_coder") {
-		t.Fatal("unexpected probe for normal list model")
-	}
-}
-
-func TestRemoteModelDisplayNameForVerifiedFallbackAliases(t *testing.T) {
-	cases := map[string]string{
-		"kmodel":                "Kimi-K2.6",
-		"mmodel":                "MiniMax-M2.7",
-		"some-enterprise-model": "some-enterprise-model",
-	}
-	for input, want := range cases {
-		if got := remoteModelDisplayName(input); got != want {
-			t.Fatalf("remoteModelDisplayName(%q) = %q, want %q", input, got, want)
-		}
 	}
 }
 
@@ -346,5 +322,28 @@ func TestRemoteMessagesForChatNativePreservesToolTurnsAndImages(t *testing.T) {
 	flat := remoteMessagesForChat(req, "FLATTENED PROMPT", true)
 	if len(flat) != 1 || flat[0].Role != "user" || flat[0].Content != "FLATTENED PROMPT" {
 		t.Fatalf("emulation fallback should flatten to one user message, got %#v", flat)
+	}
+}
+
+func TestResolveRemoteModelUsesCachedUpstreamList(t *testing.T) {
+	svc := New(Config{Backend: BackendRemote, Timeout: time.Second})
+	svc.remoteModelsMu.Lock()
+	svc.remoteModels = []remote.Model{
+		{Key: "gm51model", DisplayName: "GLM-5.2"},
+		{Key: "qmodel_38max", DisplayName: "Qwen3.8-Max"},
+	}
+	svc.remoteModelsAt = time.Now()
+	svc.remoteModelsMu.Unlock()
+	ctx := context.Background()
+	cases := map[string]string{
+		"gm51model":          "gm51model",   // exact key
+		"GLM-5.2":            "gm51model",   // display name
+		"qwen3.8-max":        "qmodel_38max", // case-insensitive display name
+		"totally-unknown-xyz": "totally-unknown-xyz", // unknown -> passthrough (client's problem)
+	}
+	for in, want := range cases {
+		if got := svc.resolveRemoteModel(ctx, in); got != want {
+			t.Fatalf("resolveRemoteModel(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -173,7 +173,55 @@ type Service struct {
 	stickyModelID    string
 	modelMap         map[string]string // official name -> internal id
 	remoteClient     *remote.Client
-	remoteProbeCache map[string]remoteModelProbeEntry
+	remoteModelsMu   sync.Mutex
+	remoteModels     []remote.Model
+	remoteModelsAt   time.Time
+}
+
+// cachedRemoteModels returns the gateway's model list, refetched at most every
+// few minutes. On a fetch error it returns the last good snapshot (or nil), so
+// resolution degrades to pass-through rather than failing.
+func (s *Service) cachedRemoteModels(ctx context.Context) []remote.Model {
+	s.remoteModelsMu.Lock()
+	cached := s.remoteModels
+	fresh := cached != nil && time.Since(s.remoteModelsAt) < 5*time.Minute
+	s.remoteModelsMu.Unlock()
+	if fresh {
+		return cached
+	}
+	models, err := s.remoteClientLocked().ListModels(ctx)
+	if err != nil || len(models) == 0 {
+		return cached
+	}
+	s.remoteModelsMu.Lock()
+	s.remoteModels = models
+	s.remoteModelsAt = time.Now()
+	s.remoteModelsMu.Unlock()
+	return models
+}
+
+// resolveRemoteModel maps the requested model to a gateway key using the live
+// (cached) model list: exact key or display-name match wins. Unknown names pass
+// through verbatim (the gateway validates them — a client/config concern). The
+// small static alias map is only a last-resort fallback (e.g. "auto") and for
+// offline resilience when the list is unavailable.
+func (s *Service) resolveRemoteModel(ctx context.Context, model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ""
+	}
+	models := s.cachedRemoteModels(ctx)
+	for _, m := range models {
+		if strings.EqualFold(model, strings.TrimSpace(m.Key)) {
+			return strings.TrimSpace(m.Key)
+		}
+	}
+	for _, m := range models {
+		if strings.EqualFold(model, strings.TrimSpace(m.DisplayName)) {
+			return strings.TrimSpace(m.Key)
+		}
+	}
+	return normalizeModelForBackend(BackendRemote, model)
 }
 
 type promptRunResult struct {
@@ -192,10 +240,6 @@ const (
 	StreamEventToolCall = "tool_call"
 )
 
-type remoteModelProbeEntry struct {
-	Available bool
-	ExpiresAt time.Time
-}
 
 func New(cfg Config) *Service {
 	if strings.TrimSpace(cfg.Cwd) == "" {
@@ -324,7 +368,8 @@ func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
 			}
 			out = append(out, Model{ID: id, Name: name})
 		}
-		out = append(out, s.verifiedRemoteFallbackModels(ctx, seen)...)
+		// Trust the gateway's list as authoritative; no hardcoded fallback probing
+		// (which spent credits on a real chat per candidate).
 		return out, nil
 	}
 
@@ -488,7 +533,7 @@ func (s *Service) generateRemoteInternal(
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = s.DefaultModel()
 	}
-	req.Model = normalizeModelForBackend(BackendRemote, req.Model)
+	req.Model = s.resolveRemoteModel(ctx, req.Model)
 	prompt, err := buildLingmaPrompt(req, SessionModeFresh, emulateTools)
 	if err != nil {
 		return nil, err
@@ -787,7 +832,7 @@ func shouldRetryRemoteNativeTool(req ChatRequest, text string) bool {
 }
 
 func (s *Service) remoteAttemptModels(ctx context.Context, primary string) []string {
-	primary = normalizeModelForBackend(BackendRemote, primary)
+	primary = s.resolveRemoteModel(ctx, primary)
 	models := []string{primary}
 	if !s.cfg.RemoteFallbackEnabled {
 		return models
@@ -838,67 +883,6 @@ func (s *Service) remoteFallbackModels() []string {
 		out = append(out, model)
 	}
 	return out
-}
-
-func (s *Service) verifiedRemoteFallbackModels(ctx context.Context, seen map[string]bool) []Model {
-	out := make([]Model, 0, 2)
-	for _, model := range s.remoteFallbackModels() {
-		if seen[model] || !shouldProbeRemoteModelForList(model) {
-			continue
-		}
-		if !s.probeRemoteModel(ctx, model) {
-			continue
-		}
-		seen[model] = true
-		out = append(out, Model{ID: model, Name: remoteModelDisplayName(model)})
-	}
-	return out
-}
-
-func shouldProbeRemoteModelForList(model string) bool {
-	switch normalizeModelForBackend(BackendRemote, model) {
-	case "kmodel", "mmodel":
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *Service) probeRemoteModel(ctx context.Context, model string) bool {
-	model = normalizeModelForBackend(BackendRemote, model)
-	if model == "" {
-		return false
-	}
-	now := time.Now()
-	s.mu.Lock()
-	if entry, ok := s.remoteProbeCache[model]; ok && now.Before(entry.ExpiresAt) {
-		s.mu.Unlock()
-		return entry.Available
-	}
-	s.mu.Unlock()
-
-	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	temperature := 0.0
-	_, err := s.remoteClientLocked().Chat(probeCtx, remote.ChatRequest{
-		Model:       model,
-		Prompt:      "Reply with OK only.",
-		Messages:    []remote.Message{{Role: "user", Content: "Reply with OK only."}},
-		Temperature: &temperature,
-	}, nil)
-	available := err == nil
-	ttl := 5 * time.Minute
-	if available {
-		ttl = 30 * time.Minute
-	}
-
-	s.mu.Lock()
-	if s.remoteProbeCache == nil {
-		s.remoteProbeCache = make(map[string]remoteModelProbeEntry)
-	}
-	s.remoteProbeCache[model] = remoteModelProbeEntry{Available: available, ExpiresAt: now.Add(ttl)}
-	s.mu.Unlock()
-	return available
 }
 
 func isRemoteFallbackError(err error) bool {
@@ -1797,13 +1781,3 @@ func normalizeModelForBackend(backend BackendMode, model string) string {
 	}
 }
 
-func remoteModelDisplayName(model string) string {
-	switch normalizeModelForBackend(BackendRemote, model) {
-	case "kmodel":
-		return "Kimi-K2.6"
-	case "mmodel":
-		return "MiniMax-M2.7"
-	default:
-		return model
-	}
-}
