@@ -435,6 +435,23 @@ func (s *Service) WebSearch(ctx context.Context, query string) ([]remote.SearchR
 	return s.remoteClientLocked().WebSearch(ctx, query)
 }
 
+// ImageSearch runs an image search via the gateway (remote backend only).
+func (s *Service) ImageSearch(ctx context.Context, query string, count int) ([]remote.ImageResult, error) {
+	if s.backend() != BackendRemote {
+		return nil, errors.New("image search is only available in remote backend mode")
+	}
+	return s.remoteClientLocked().ImageSearch(ctx, query, count)
+}
+
+// GenerateImage generates an image via the gateway (remote backend only),
+// returning a data URL.
+func (s *Service) GenerateImage(ctx context.Context, prompt, size, model string) (string, error) {
+	if s.backend() != BackendRemote {
+		return "", errors.New("image generation is only available in remote backend mode")
+	}
+	return s.remoteClientLocked().GenerateImage(ctx, prompt, size, model)
+}
+
 func (s *Service) Generate(ctx context.Context, req ChatRequest) (*ChatResult, error) {
 	var result *ChatResult
 	var err error

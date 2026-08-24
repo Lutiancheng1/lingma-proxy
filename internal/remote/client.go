@@ -25,9 +25,11 @@ const (
 	DefaultBaseURL = "https://lingma.alibabacloud.com"
 	chatPath       = "/algo/api/v2/service/pro/sse/agent_chat_generation"
 	chatQuery      = "?FetchKeys=llm_model_result&AgentId=agent_common"
-	modelListPath  = "/algo/api/v2/model/list"
-	oneSearchPath  = "/algo/api/v1/webSearch/oneSearch"
-	quotaPath      = "/api/v2/quota/usage"
+	modelListPath     = "/algo/api/v2/model/list"
+	oneSearchPath     = "/algo/api/v1/webSearch/oneSearch"
+	imageSearchPath   = "/algo/api/v2/service/pro/imageSearch"
+	generateImagePath = "/algo/api/v2/service/pro/generateImage"
+	quotaPath         = "/api/v2/quota/usage"
 )
 
 var remoteBaseURLPattern = regexp.MustCompile(`https?://[^\s"'<>),\]}]+`)
@@ -361,10 +363,12 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 }
 
 // SearchResult is one web-search hit from the gateway's oneSearch endpoint.
+// Summary is populated only when the richer contents are requested.
 type SearchResult struct {
 	Title         string `json:"title"`
 	Link          string `json:"link"`
 	Snippet       string `json:"snippet"`
+	Summary       string `json:"summary"`
 	PublishedTime string `json:"publishedTime"`
 	Hostname      string `json:"hostname"`
 }
@@ -385,7 +389,9 @@ func (c *Client) WebSearch(ctx context.Context, query string) ([]SearchResult, e
 	inner, err := json.Marshal(map[string]any{
 		"query":     query,
 		"timeRange": "NoLimit",
-		"contents":  map[string]any{"mainText": false, "markdownText": false, "summary": false},
+		// Unlock the richer per-result summary (fuller than the snippet). mainText
+		// / markdownText stay off to keep the response size sane.
+		"contents": map[string]any{"mainText": false, "markdownText": false, "summary": true},
 	})
 	if err != nil {
 		return nil, err
@@ -425,6 +431,135 @@ func (c *Client) WebSearch(ctx context.Context, query string) ([]SearchResult, e
 		return nil, fmt.Errorf("parse web search response: %w", err)
 	}
 	return parsed.PageItems, nil
+}
+
+// ImageResult is one image hit from the gateway's imageSearch endpoint.
+type ImageResult struct {
+	Title    string `json:"title"`
+	ImageURL string `json:"imageUrl"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+// postEncoded signs and POSTs a plaintext {payload, encodeVersion, ...} body to
+// an Encode=0 gateway endpoint (the shape oneSearch/imageSearch/generateImage
+// share) and returns the raw JSON response.
+func (c *Client) postEncoded(ctx context.Context, path string, body []byte) ([]byte, error) {
+	cred, err := LoadCredential(c.cfg.AuthFile)
+	if err != nil {
+		return nil, err
+	}
+	headers, err := c.headers(cred, path, string(body))
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+path+"?Encode=0", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	return raw, nil
+}
+
+// ImageSearch runs an image search via the gateway's imageSearch endpoint.
+// count is clamped to 1..10 (default 5).
+func (c *Client) ImageSearch(ctx context.Context, query string, count int) ([]ImageResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("image search query is empty")
+	}
+	if count <= 0 || count > 10 {
+		count = 5
+	}
+	inner, err := json.Marshal(map[string]any{"query": query, "count": count})
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(map[string]any{"payload": string(inner), "encodeVersion": "1"})
+	if err != nil {
+		return nil, err
+	}
+	raw, err := c.postEncoded(ctx, imageSearchPath, body)
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Results []ImageResult `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("parse image search response: %w", err)
+	}
+	return parsed.Results, nil
+}
+
+// GenerateImage generates an image via the gateway's generateImage endpoint and
+// returns a data URL ("data:image/png;base64,..."). size defaults to 1024x1024,
+// model to a capable default when unset.
+func (c *Client) GenerateImage(ctx context.Context, prompt, size, model string) (string, error) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return "", fmt.Errorf("image generation prompt is empty")
+	}
+	if strings.TrimSpace(size) == "" {
+		size = "1024x1024"
+	}
+	if strings.TrimSpace(model) == "" {
+		model = "qmodel_38max"
+	}
+	version := c.cfg.CosyVersion
+	if strings.TrimSpace(version) == "" {
+		version = "1.1.28"
+	}
+	inner, err := json.Marshal(map[string]any{
+		"model":  model,
+		"prompt": prompt,
+		"size":   size,
+		"metadata": map[string]any{"business": map[string]any{
+			"product": "cli", "version": version, "type": "text2img",
+			"id": newUUID(), "begin_at": time.Now().UnixMilli(), "stage": "start",
+		}},
+	})
+	if err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(map[string]any{
+		"payload": string(inner), "encodeVersion": "1",
+		"sessionId": newUUID(), "requestId": newUUID(),
+	})
+	if err != nil {
+		return "", err
+	}
+	raw, err := c.postEncoded(ctx, generateImagePath, body)
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		Data []struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse generate image response: %w", err)
+	}
+	if len(parsed.Data) == 0 || strings.TrimSpace(parsed.Data[0].URL) == "" {
+		return "", fmt.Errorf("image generation returned no image")
+	}
+	return parsed.Data[0].URL, nil
 }
 
 // openAPIBaseURL derives the openapi host (quota / user APIs) from the chat base

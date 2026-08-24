@@ -174,6 +174,8 @@ func NewServer(addr string, svc *service.Service) *Server {
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/quota", s.handleQuota)
 	mux.HandleFunc("/v1/quota", s.handleQuota)
+	mux.HandleFunc("/v1/images/search", s.handleImageSearch)
+	mux.HandleFunc("/v1/images/generations", s.handleImageGenerations)
 	mux.HandleFunc("/v1/messages/count_tokens", s.handleAnthropicCountTokens)
 	mux.HandleFunc("/v1/messages", s.handleAnthropicMessages)
 	mux.HandleFunc("/v1/chat/completions", s.handleOpenAIChatCompletions)
@@ -627,6 +629,102 @@ func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, quota)
+}
+
+// handleImageSearch exposes the gateway's imageSearch as GET /v1/images/search?q=&n=
+// or POST {query,count}. Returns {query, data:[{title,image_url,width,height}]}.
+func (s *Server) handleImageSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var query string
+	var count int
+	switch r.Method {
+	case http.MethodGet:
+		query = strings.TrimSpace(valueOrString(r.URL.Query().Get("q"), r.URL.Query().Get("query")))
+		count, _ = strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("n")))
+	case http.MethodPost:
+		var body struct {
+			Query string `json:"query"`
+			Q     string `json:"q"`
+			Count int    `json:"count"`
+			N     int    `json:"n"`
+		}
+		if err := decodeJSON(r, &body); err != nil {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		query = strings.TrimSpace(valueOrString(body.Query, body.Q))
+		count = body.Count
+		if count == 0 {
+			count = body.N
+		}
+	default:
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
+	if query == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "query is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	results, err := s.svc.ImageSearch(ctx, query, count)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, "api_error", err.Error())
+		return
+	}
+	data := make([]map[string]any, 0, len(results))
+	for _, it := range results {
+		data = append(data, map[string]any{"title": it.Title, "image_url": it.ImageURL, "width": it.Width, "height": it.Height})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"query": query, "data": data})
+}
+
+// handleImageGenerations exposes the gateway's generateImage as the
+// OpenAI-compatible POST /v1/images/generations. Returns {created, data:[{b64_json|url}]}.
+func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+		return
+	}
+	var body struct {
+		Prompt         string `json:"prompt"`
+		Size           string `json:"size"`
+		Model          string `json:"model"`
+		ResponseFormat string `json:"response_format"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Prompt) == "" {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "prompt is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+	dataURL, err := s.svc.GenerateImage(ctx, body.Prompt, body.Size, body.Model)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, "api_error", err.Error())
+		return
+	}
+	item := map[string]any{}
+	if body.ResponseFormat == "url" {
+		item["url"] = dataURL
+	} else {
+		b64 := dataURL
+		if i := strings.Index(dataURL, "base64,"); i >= 0 {
+			b64 = dataURL[i+len("base64,"):]
+		}
+		item["b64_json"] = b64
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"created": time.Now().Unix(), "data": []map[string]any{item}})
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
@@ -1921,7 +2019,12 @@ func formatWebSearchResults(query string, results []remote.SearchResult) string 
 		if i >= maxResults {
 			break
 		}
-		snippet := strings.TrimSpace(r.Snippet)
+		// Prefer the richer summary (unlocked via contents.summary) over the
+		// short snippet when present.
+		snippet := strings.TrimSpace(r.Summary)
+		if snippet == "" {
+			snippet = strings.TrimSpace(r.Snippet)
+		}
 		if rs := []rune(snippet); len(rs) > maxSnippetRunes {
 			snippet = string(rs[:maxSnippetRunes]) + "…"
 		}
@@ -2519,6 +2622,13 @@ func stringFromAny(value any) string {
 	default:
 		return ""
 	}
+}
+
+func valueOrString(primary, fallback string) string {
+	if strings.TrimSpace(primary) != "" {
+		return primary
+	}
+	return fallback
 }
 
 func decodeJSON(r *http.Request, out any) error {
