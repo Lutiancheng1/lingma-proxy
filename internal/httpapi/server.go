@@ -12,9 +12,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -3555,78 +3553,16 @@ func parseImageURL(url string) *service.Image {
 	if strings.HasPrefix(url, "data:") {
 		return normalizeImage(parseDataURL(url))
 	}
-	if img := parseLocalImagePath(url); img != nil {
-		return normalizeImage(img)
-	}
 	if u := strings.TrimSpace(url); strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 		// Pass remote URLs through; the gateway fetches them itself. Avoids
 		// proxy-side SSRF / unbounded download / hang from arbitrary client URLs.
 		return &service.Image{URL: u}
 	}
+	// Anything else (file://, ~, absolute paths, bare paths) is rejected: the
+	// proxy must never read host-local files on behalf of a request. Reading
+	// a client-supplied local path would let a caller exfiltrate credentials,
+	// keys, or system files by pointing image_url at them.
 	return nil
-}
-
-func parseLocalImagePath(raw string) *service.Image {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-
-	path := raw
-	if strings.HasPrefix(raw, "file://") {
-		if strings.Contains(raw, `\`) {
-			path = strings.TrimPrefix(raw, "file://")
-		} else {
-			u, err := url.Parse(raw)
-			if err != nil {
-				return nil
-			}
-			path = u.Path
-			if host := strings.TrimSpace(u.Host); host != "" {
-				path = "//" + host + path
-			}
-		}
-	}
-	if strings.HasPrefix(path, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil
-		}
-		path = home + strings.TrimPrefix(path, "~")
-	}
-	path = filepath.FromSlash(path)
-	if len(path) >= 3 && path[0] == filepath.Separator && path[2] == ':' {
-		path = path[1:]
-	}
-	if !filepath.IsAbs(path) {
-		return nil
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
-		return nil
-	}
-	return &service.Image{
-		MediaType: mediaTypeForImagePath(path),
-		Data:      base64.StdEncoding.EncodeToString(data),
-		URL:       raw,
-	}
-}
-
-func mediaTypeForImagePath(path string) string {
-	lower := strings.ToLower(path)
-	switch {
-	case strings.HasSuffix(lower, ".png"):
-		return "image/png"
-	case strings.HasSuffix(lower, ".gif"):
-		return "image/gif"
-	case strings.HasSuffix(lower, ".webp"):
-		return "image/webp"
-	case strings.HasSuffix(lower, ".bmp"):
-		return "image/bmp"
-	default:
-		return "image/jpeg"
-	}
 }
 
 func parseDataURL(url string) *service.Image {

@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -626,43 +625,26 @@ func TestToolStreamFilterBuffersActionBlock(t *testing.T) {
 	}
 }
 
-func TestParseImageURLReadsLocalFileURL(t *testing.T) {
+func TestParseImageURLRejectsLocalPaths(t *testing.T) {
+	// A hosted proxy must never read host-local files on behalf of a request.
+	// Every local-path form must be rejected (nil), even when the file exists.
 	dir := t.TempDir()
-	path := filepath.Join(dir, "sample.jpg")
-	data := []byte{0xff, 0xd8, 0xff, 0xd9}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	existing := filepath.Join(dir, "sample.png")
+	if err := os.WriteFile(existing, []byte{0x89, 0x50, 0x4e, 0x47}, 0644); err != nil {
 		t.Fatal(err)
 	}
-
-	img := parseImageURL("file://" + path)
-	if img == nil {
-		t.Fatal("expected image")
+	rejected := []string{
+		"file://" + existing,
+		existing,
+		"/etc/passwd",
+		"~/.qoder-cn/.auth/user",
+		"file:///etc/shadow",
+		"../../etc/passwd",
 	}
-	if img.MediaType != "image/jpeg" {
-		t.Fatalf("media type = %q", img.MediaType)
-	}
-	if img.Data != base64.StdEncoding.EncodeToString(data) {
-		t.Fatalf("data = %q", img.Data)
-	}
-}
-
-func TestParseImageURLReadsAbsoluteLocalPath(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "sample.png")
-	data := []byte{0x89, 0x50, 0x4e, 0x47}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	img := parseImageURL(path)
-	if img == nil {
-		t.Fatal("expected image")
-	}
-	if img.MediaType != "image/png" {
-		t.Fatalf("media type = %q", img.MediaType)
-	}
-	if img.Data != base64.StdEncoding.EncodeToString(data) {
-		t.Fatalf("data = %q", img.Data)
+	for _, u := range rejected {
+		if img := parseImageURL(u); img != nil {
+			t.Errorf("parseImageURL(%q) = %+v, want nil (local reads must be refused)", u, img)
+		}
 	}
 }
 
