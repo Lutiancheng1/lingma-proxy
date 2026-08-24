@@ -2045,8 +2045,18 @@ func normalizeAnthropicRequest(req anthropicRequest) (service.ChatRequest, error
 				messages = append(messages, service.ChatMessage{Role: role, Text: text, Images: images})
 			}
 			for _, tr := range toolResults {
-				if strings.TrimSpace(tr.Content) != "" {
-					messages = append(messages, service.ChatMessage{Role: "tool", Text: tr.Content, ToolCallID: tr.ToolUseID})
+				text := tr.Content
+				if tr.IsError {
+					// The gateway's tool message has no is_error field; mark the
+					// failure inline so it is not mistaken for a successful result.
+					if strings.TrimSpace(text) != "" {
+						text = "[tool_error] " + text
+					} else {
+						text = "[tool_error]"
+					}
+				}
+				if strings.TrimSpace(text) != "" || len(tr.Images) > 0 {
+					messages = append(messages, service.ChatMessage{Role: "tool", Text: text, ToolCallID: tr.ToolUseID, Images: tr.Images})
 				}
 			}
 		case "assistant":
@@ -2522,6 +2532,9 @@ func anthropicInputUsage(result *service.ChatResult) map[string]any {
 		usage["cache_read_input_tokens"] = cached
 		input -= cached
 	}
+	if result.CacheCreationInputTokens > 0 {
+		usage["cache_creation_input_tokens"] = result.CacheCreationInputTokens
+	}
 	usage["input_tokens"] = input
 	return usage
 }
@@ -2624,6 +2637,8 @@ func anthropicStopReason(result *service.ChatResult) (string, any) {
 	switch strings.TrimSpace(result.FinishReason) {
 	case "length":
 		return "max_tokens", nil
+	case "content_filter":
+		return "refusal", nil
 	case "stop":
 		// StopSequence is only set when the limiter matched a configured stop,
 		// so any non-empty value is a real match — do not TrimSpace it, since
@@ -3285,6 +3300,8 @@ func extractOpenAIToolCalls(raw []any) []toolemulation.ToolCall {
 type anthropicToolResult struct {
 	ToolUseID string
 	Content   string
+	IsError   bool
+	Images    []service.Image
 }
 
 // anthropicToolBlock tracks one streaming tool_use content block (keyed by the
@@ -3320,10 +3337,14 @@ func extractAnthropicUserContent(content any) (string, []anthropicToolResult) {
 		case "tool_result":
 			toolUseID := stringFromAny(m["tool_use_id"])
 			resultText := extractText(m["content"])
-			if resultText != "" {
+			isErr, _ := m["is_error"].(bool)
+			images := extractAnthropicImages(m["content"])
+			if resultText != "" || len(images) > 0 {
 				results = append(results, anthropicToolResult{
 					ToolUseID: toolUseID,
 					Content:   resultText,
+					IsError:   isErr,
+					Images:    images,
 				})
 			}
 		}

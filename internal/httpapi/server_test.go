@@ -713,6 +713,7 @@ func TestAnthropicStopReason(t *testing.T) {
 		{"length -> max_tokens", service.ChatResult{FinishReason: "length"}, "max_tokens", nil},
 		{"stop with sequence", service.ChatResult{FinishReason: "stop", StopSequence: "\n\n"}, "stop_sequence", "\n\n"},
 		{"stop without sequence", service.ChatResult{FinishReason: "stop"}, "end_turn", nil},
+		{"content_filter -> refusal", service.ChatResult{FinishReason: "content_filter"}, "refusal", nil},
 		{"unknown -> end_turn", service.ChatResult{FinishReason: "eos_token"}, "end_turn", nil},
 	}
 	for _, tc := range cases {
@@ -996,5 +997,35 @@ func TestWriteAnthropicStreamBodyThinkingTextToolCoexist(t *testing.T) {
 	}
 	if toolIdx != 2 {
 		t.Fatalf("tool block index = %d, want 2 (after thinking+text)", toolIdx)
+	}
+}
+
+func TestNormalizeAnthropicRequestToolResultError(t *testing.T) {
+	req := anthropicRequest{
+		Model: "m",
+		Messages: []rawMessage{
+			{Role: "user", Content: []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "call_1", "is_error": true, "content": "boom"},
+			}},
+		},
+	}
+	cr, err := normalizeAnthropicRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var toolMsg *service.ChatMessage
+	for i := range cr.Messages {
+		if cr.Messages[i].Role == "tool" {
+			toolMsg = &cr.Messages[i]
+		}
+	}
+	if toolMsg == nil {
+		t.Fatal("no tool message produced")
+	}
+	if !strings.HasPrefix(toolMsg.Text, "[tool_error]") {
+		t.Fatalf("error not marked inline: %q", toolMsg.Text)
+	}
+	if toolMsg.ToolCallID != "call_1" {
+		t.Fatalf("tool_call_id = %q, want call_1", toolMsg.ToolCallID)
 	}
 }

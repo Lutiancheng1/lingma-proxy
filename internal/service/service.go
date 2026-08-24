@@ -113,8 +113,12 @@ type ChatResult struct {
 	UsedTokens        int
 	LimitTokens       int
 	CachedInputTokens int
-	ReasoningTokens   int
-	Credits           float64
+	// CacheCreationInputTokens is the Anthropic cache-write count. The QoderCN
+	// gateway does not report it, so it stays 0; kept for protocol completeness
+	// and future backends that do supply it. Never fabricated.
+	CacheCreationInputTokens int
+	ReasoningTokens          int
+	Credits                  float64
 	ThinkingDuration  int64
 	PipePath          string
 	Endpoint          string
