@@ -60,6 +60,10 @@ type Model struct {
 	DisplayName string `json:"display_name"`
 	Model       string `json:"model"`
 	Enable      bool   `json:"enable"`
+	// Raw holds the complete upstream model object (max_input_tokens,
+	// context_config, is_vl, is_reasoning, thinking_config, price_factor,
+	// promotion, ...) so downstream can receive every field the gateway sends.
+	Raw map[string]any `json:"-"`
 }
 
 type ChatRequest struct {
@@ -418,13 +422,28 @@ func (c *Client) listModels(ctx context.Context) ([]Model, error) {
 		return nil, c.modelListStatusError(resp.StatusCode, string(body))
 	}
 	var payload struct {
-		Chat   []Model `json:"chat"`
-		Inline []Model `json:"inline"`
+		Chat   []json.RawMessage `json:"chat"`
+		Inline []json.RawMessage `json:"inline"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err
 	}
-	return append(payload.Chat, payload.Inline...), nil
+	parse := func(entries []json.RawMessage) []Model {
+		out := make([]Model, 0, len(entries))
+		for _, e := range entries {
+			var m Model
+			if err := json.Unmarshal(e, &m); err != nil {
+				continue
+			}
+			var raw map[string]any
+			if err := json.Unmarshal(e, &raw); err == nil {
+				m.Raw = raw
+			}
+			out = append(out, m)
+		}
+		return out
+	}
+	return append(parse(payload.Chat), parse(payload.Inline)...), nil
 }
 
 func (c *Client) listModelsWithAutoBaseURLFallback(ctx context.Context, firstErr error) ([]Model, error) {

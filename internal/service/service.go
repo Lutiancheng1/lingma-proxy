@@ -160,6 +160,9 @@ type Model struct {
 	Name       string `json:"name"`
 	Scene      string `json:"scene,omitempty"`
 	InternalID string `json:"-"`
+	// Raw is the full upstream model object (remote backend only), forwarded
+	// verbatim to downstream so no gateway-provided field is dropped.
+	Raw map[string]any `json:"-"`
 }
 
 type State struct {
@@ -380,7 +383,7 @@ func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
 			// The key is kept in InternalID (surfaced as gateway_key); requests
 			// resolve either the name or the key back to the key via
 			// resolveRemoteModel.
-			out = append(out, Model{ID: name, Name: name, InternalID: key})
+			out = append(out, Model{ID: name, Name: name, InternalID: key, Raw: model.Raw})
 		}
 		// Trust the gateway's list as authoritative; no hardcoded fallback probing
 		// (which spent credits on a real chat per candidate).

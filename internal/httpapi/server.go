@@ -119,16 +119,6 @@ type rawMessage struct {
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
-type modelResponse struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
-	Name    string `json:"name,omitempty"`
-	// GatewayKey is the underlying QoderCN model key (e.g. "gm51model") behind
-	// the human-readable id/name (e.g. "GLM-5.2"). Either resolves on requests.
-	GatewayKey string `json:"gateway_key,omitempty"`
-}
 
 type debugRequestRecord struct {
 	Time       string `json:"time"`
@@ -390,22 +380,38 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := make([]modelResponse, 0, len(models))
+	data := make([]map[string]any, 0, len(models))
 	created := time.Now().Unix()
 	for _, model := range models {
-		data = append(data, modelResponse{
-			ID:         model.ID,
-			Object:     "model",
-			Created:    created,
-			OwnedBy:    "lingma",
-			Name:       model.Name,
-			GatewayKey: model.InternalID,
-		})
+		data = append(data, modelObject(model, created))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
 		"data":   data,
 	})
+}
+
+// modelObject merges the full upstream model object (model.Raw:
+// max_input_tokens, context_config, is_vl, is_reasoning, thinking_config,
+// price_factor, promotion, ...) with the canonical OpenAI fields, so downstream
+// receives every gateway-provided attribute plus a stable id/name/gateway_key.
+// For non-remote backends Raw is empty and only the canonical fields appear.
+func modelObject(model service.Model, created int64) map[string]any {
+	obj := make(map[string]any, len(model.Raw)+5)
+	for k, v := range model.Raw {
+		obj[k] = v
+	}
+	obj["id"] = model.ID
+	obj["object"] = "model"
+	obj["created"] = created
+	obj["owned_by"] = "lingma"
+	if model.Name != "" {
+		obj["name"] = model.Name
+	}
+	if model.InternalID != "" {
+		obj["gateway_key"] = model.InternalID
+	}
+	return obj
 }
 
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -510,23 +516,32 @@ func (s *Server) handleLMStudioModels(w http.ResponseWriter, r *http.Request) {
 		if gatewayKey == "" {
 			gatewayKey = model.ID
 		}
-		items = append(items, map[string]any{
-			"id":                 model.ID,
-			"key":                gatewayKey,
-			"display_name":       model.Name,
-			"type":               "llm",
-			"publisher":          "lingma",
-			"max_context_length": 128000,
-			"loaded_instances": []map[string]any{
-				{
-					"id":    model.ID,
-					"model": model.ID,
-					"config": map[string]any{
-						"context_length": 128000,
-					},
+		// Real context limit from upstream (max_input_tokens); fall back only
+		// when the gateway did not supply it (e.g. IPC backend).
+		maxCtx := 128000
+		if v, ok := model.Raw["max_input_tokens"].(float64); ok && v > 0 {
+			maxCtx = int(v)
+		}
+		item := make(map[string]any, len(model.Raw)+8)
+		for k, v := range model.Raw {
+			item[k] = v
+		}
+		item["id"] = model.ID
+		item["key"] = gatewayKey
+		item["display_name"] = model.Name
+		item["type"] = "llm"
+		item["publisher"] = "lingma"
+		item["max_context_length"] = maxCtx
+		item["loaded_instances"] = []map[string]any{
+			{
+				"id":    model.ID,
+				"model": model.ID,
+				"config": map[string]any{
+					"context_length": maxCtx,
 				},
 			},
-		})
+		}
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": items})
 }
@@ -549,19 +564,22 @@ func (s *Server) handleOllamaTags(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]map[string]any, 0, len(models))
 	for _, model := range models {
-		items = append(items, map[string]any{
-			"name":        model.ID,
-			"model":       model.ID,
-			"modified_at": time.Now().UTC().Format(time.RFC3339),
-			"size":        0,
-			"digest":      "",
-			"details": map[string]any{
-				"family":             "lingma",
-				"families":           []string{"lingma"},
-				"parameter_size":     "",
-				"quantization_level": "",
-			},
-		})
+		item := make(map[string]any, len(model.Raw)+8)
+		for k, v := range model.Raw {
+			item[k] = v
+		}
+		item["name"] = model.ID
+		item["model"] = model.ID
+		item["modified_at"] = time.Now().UTC().Format(time.RFC3339)
+		item["size"] = 0
+		item["digest"] = ""
+		item["details"] = map[string]any{
+			"family":             "lingma",
+			"families":           []string{"lingma"},
+			"parameter_size":     "",
+			"quantization_level": "",
+		}
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": items})
 }
