@@ -366,16 +366,21 @@ func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
 		out := make([]Model, 0, len(models))
 		seen := map[string]bool{}
 		for _, model := range models {
-			id := strings.TrimSpace(model.Key)
-			if id == "" || seen[id] {
+			key := strings.TrimSpace(model.Key)
+			if key == "" || seen[key] {
 				continue
 			}
-			seen[id] = true
+			seen[key] = true
 			name := strings.TrimSpace(model.DisplayName)
 			if name == "" {
-				name = id
+				name = key
 			}
-			out = append(out, Model{ID: id, Name: name})
+			// Expose the real model name (display name) as the id so downstream
+			// sees e.g. "GLM-5.2" instead of the opaque gateway key "gm51model".
+			// The key is kept in InternalID (surfaced as gateway_key); requests
+			// resolve either the name or the key back to the key via
+			// resolveRemoteModel.
+			out = append(out, Model{ID: name, Name: name, InternalID: key})
 		}
 		// Trust the gateway's list as authoritative; no hardcoded fallback probing
 		// (which spent credits on a real chat per candidate).

@@ -125,6 +125,9 @@ type modelResponse struct {
 	Created int64  `json:"created"`
 	OwnedBy string `json:"owned_by"`
 	Name    string `json:"name,omitempty"`
+	// GatewayKey is the underlying QoderCN model key (e.g. "gm51model") behind
+	// the human-readable id/name (e.g. "GLM-5.2"). Either resolves on requests.
+	GatewayKey string `json:"gateway_key,omitempty"`
 }
 
 type debugRequestRecord struct {
@@ -391,11 +394,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().Unix()
 	for _, model := range models {
 		data = append(data, modelResponse{
-			ID:      model.ID,
-			Object:  "model",
-			Created: created,
-			OwnedBy: "lingma",
-			Name:    model.Name,
+			ID:         model.ID,
+			Object:     "model",
+			Created:    created,
+			OwnedBy:    "lingma",
+			Name:       model.Name,
+			GatewayKey: model.InternalID,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -502,9 +506,13 @@ func (s *Server) handleLMStudioModels(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]map[string]any, 0, len(models))
 	for _, model := range models {
+		gatewayKey := model.InternalID
+		if gatewayKey == "" {
+			gatewayKey = model.ID
+		}
 		items = append(items, map[string]any{
 			"id":                 model.ID,
-			"key":                model.ID,
+			"key":                gatewayKey,
 			"display_name":       model.Name,
 			"type":               "llm",
 			"publisher":          "lingma",
