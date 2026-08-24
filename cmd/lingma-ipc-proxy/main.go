@@ -49,6 +49,7 @@ type fileConfig struct {
 	TimeoutSeconds        int      `json:"timeout"`
 	RemoteFallbackEnabled *bool    `json:"remote_fallback_enabled"`
 	RemoteFallbackModels  []string `json:"remote_fallback_models"`
+	AuthKeysFile          string   `json:"auth_keys_file"`
 }
 
 func main() {
@@ -68,6 +69,23 @@ func main() {
 	warmupCancel()
 
 	server := httpapi.NewServer(addr, svc)
+
+	// Inbound auth is opt-in: only enabled when an auth-keys file is configured.
+	// If configured but empty/unreadable we fail closed rather than silently
+	// exposing the gateway (important when fronted by a public tunnel).
+	if cfg.AuthKeysFile != "" {
+		keys, err := loadAuthKeys(cfg.AuthKeysFile)
+		if err != nil {
+			log.Fatalf("load auth keys file %q: %v", cfg.AuthKeysFile, err)
+		}
+		if len(keys) == 0 {
+			log.Fatalf("auth keys file %q has no usable keys; refusing to start with auth enabled but empty", cfg.AuthKeysFile)
+		}
+		server.SetAuthKeys(keys)
+		log.Printf("inbound auth: ENABLED (%d key(s) from %s)", len(keys), cfg.AuthKeysFile)
+	} else {
+		log.Printf("inbound auth: disabled (no -auth-keys-file); relying on bind host %s", cfg.Host)
+	}
 
 	log.Printf("lingma-proxy listening on http://%s", addr)
 	log.Printf("session mode: %s", cfg.SessionMode)
@@ -146,6 +164,7 @@ func loadConfig() (service.Config, string) {
 	timeoutSeconds := flag.Int("timeout", int(cfg.Timeout/time.Second), "Per-request timeout in seconds; 0 disables the proxy deadline")
 	remoteFallbackEnabled := flag.Bool("remote-fallback", cfg.RemoteFallbackEnabled, "Enable remote timeout/5xx fallback to the next available model")
 	remoteFallbackModels := flag.String("remote-fallback-models", strings.Join(cfg.RemoteFallbackModels, ","), "Comma-separated remote fallback model IDs")
+	authKeysFile := flag.String("auth-keys-file", cfg.AuthKeysFile, "Path to an inbound API-key allowlist (one key per line, '#' comments); empty disables inbound auth")
 	exportRemoteAuth := flag.String("export-remote-auth", "", "Export portable Remote API credentials.json to the given path and exit")
 	exportServerBundle := flag.String("export-server-bundle", "", "Export a server deployment zip containing credentials.json, config, and docker-compose.yml, then exit")
 	remoteAuthPick := flag.String("remote-auth-pick", "auto", "Remote login cache pick policy for export: auto, newest, or longest")
@@ -176,6 +195,7 @@ func loadConfig() (service.Config, string) {
 	cfg.Timeout = time.Duration(*timeoutSeconds) * time.Second
 	cfg.RemoteFallbackEnabled = *remoteFallbackEnabled
 	cfg.RemoteFallbackModels = splitCSV(*remoteFallbackModels)
+	cfg.AuthKeysFile = strings.TrimSpace(*authKeysFile)
 	utilityOptions.exportRemoteAuth = strings.TrimSpace(*exportRemoteAuth)
 	utilityOptions.exportServerBundle = strings.TrimSpace(*exportServerBundle)
 	utilityOptions.remoteAuthPick = strings.TrimSpace(*remoteAuthPick)
@@ -190,6 +210,25 @@ func loadConfig() (service.Config, string) {
 	}
 
 	return cfg, configPath
+}
+
+// loadAuthKeys reads an inbound API-key allowlist: one key per line, with blank
+// lines and lines beginning with '#' ignored. Duplicates and ordering do not
+// matter. Returns the parsed keys (possibly empty) or a read error.
+func loadAuthKeys(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		keys = append(keys, line)
+	}
+	return keys, nil
 }
 
 func handleUtilityCommands(cfg service.Config) bool {
@@ -334,6 +373,9 @@ func overlayFileConfig(dst *service.Config, src fileConfig) {
 	if len(src.RemoteFallbackModels) > 0 {
 		dst.RemoteFallbackModels = cleanStringSlice(src.RemoteFallbackModels)
 	}
+	if strings.TrimSpace(src.AuthKeysFile) != "" {
+		dst.AuthKeysFile = strings.TrimSpace(src.AuthKeysFile)
+	}
 }
 
 func overlayEnvConfig(dst *service.Config) {
@@ -393,6 +435,9 @@ func overlayEnvConfig(dst *service.Config) {
 	}
 	if value := strings.TrimSpace(os.Getenv("LINGMA_REMOTE_FALLBACK_MODELS")); value != "" {
 		dst.RemoteFallbackModels = splitCSV(value)
+	}
+	if value := strings.TrimSpace(os.Getenv("LINGMA_AUTH_KEYS_FILE")); value != "" {
+		dst.AuthKeysFile = value
 	}
 }
 

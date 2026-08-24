@@ -58,6 +58,9 @@ type Config struct {
 	WarmupTimeout         time.Duration
 	RemoteFallbackEnabled bool
 	RemoteFallbackModels  []string
+	// AuthKeysFile points at an inbound API-key allowlist (one key per line).
+	// Empty disables inbound authentication (open access, the default).
+	AuthKeysFile string
 }
 
 type Image struct {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,10 @@ type Server struct {
 	recMu   sync.RWMutex
 	records []debugRequestRecord
 	logs    []debugLogRecord
+	// authKeys, when non-empty, gates every non-OPTIONS request behind an
+	// Authorization: Bearer <key> or x-api-key: <key> match. Empty means open
+	// access (the default); populated only when an auth key file is configured.
+	authKeys map[string]struct{}
 	// OnRequest is called after each request completes with summary info.
 	// method, path, statusCode, duration, requestBody, responseBody
 	OnRequest func(method, path string, statusCode int, duration time.Duration, reqBody, respBody string)
@@ -184,7 +189,7 @@ func NewServer(addr string, svc *service.Service) *Server {
 
 	s.http = &http.Server{
 		Addr:              addr,
-		Handler:           s.withRecorder(withCORS(mux)),
+		Handler:           s.withRecorder(withCORS(s.withAuth(mux))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return s
@@ -3264,6 +3269,73 @@ func mustMarshalJSON(value any) []byte {
 
 func truncateRecordedString(value string) string {
 	return value
+}
+
+// SetAuthKeys enables inbound API-key authentication with the given keys. Blank
+// entries are ignored; passing no usable keys leaves authentication disabled
+// (open access). Must be called before ListenAndServe.
+func (s *Server) SetAuthKeys(keys []string) {
+	set := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		if k = strings.TrimSpace(k); k != "" {
+			set[k] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		s.authKeys = nil
+		return
+	}
+	s.authKeys = set
+}
+
+// withAuth gates requests behind the configured inbound API keys. When no keys
+// are set it is a pass-through (the default open behaviour). OPTIONS preflight
+// is already short-circuited by withCORS, so it never reaches here.
+//
+// An unauthenticated request gets no response at all: we panic with
+// http.ErrAbortHandler, which makes net/http drop the connection silently
+// (no status line, no body, no stack trace logged). The client sees an empty
+// reply / reset connection rather than a 401, so a probe cannot even tell that
+// an auth-gated service is listening here.
+func (s *Server) withAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(s.authKeys) == 0 || s.authorized(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		panic(http.ErrAbortHandler)
+	})
+}
+
+// authorized reports whether the request carries a configured API key. Every
+// key is compared in constant time so response timing cannot reveal which keys
+// exist or how many characters of a guess were correct.
+func (s *Server) authorized(r *http.Request) bool {
+	presented := extractRequestKey(r)
+	if presented == "" {
+		return false
+	}
+	match := 0
+	for k := range s.authKeys {
+		match |= subtle.ConstantTimeCompare([]byte(presented), []byte(k))
+	}
+	return match == 1
+}
+
+// extractRequestKey pulls the client's key from the Anthropic x-api-key header
+// or an OpenAI-style Authorization header (Bearer scheme or a bare token).
+func extractRequestKey(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("x-api-key")); v != "" {
+		return v
+	}
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if auth == "" {
+		return ""
+	}
+	if len(auth) >= 7 && strings.EqualFold(auth[:7], "Bearer ") {
+		return strings.TrimSpace(auth[7:])
+	}
+	return auth
 }
 
 func withCORS(next http.Handler) http.Handler {

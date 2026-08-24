@@ -1127,3 +1127,67 @@ func TestCreditUsageOmittedWhenFree(t *testing.T) {
 		}
 	}
 }
+
+func TestWithAuthKeyGate(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	// Disabled (no keys configured): pass through untouched.
+	open := &Server{}
+	rec := httptest.NewRecorder()
+	open.withAuth(ok).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disabled auth should pass through, got %d", rec.Code)
+	}
+
+	// Blank-only keys must not enable auth (fail-open would be a footgun, but
+	// SetAuthKeys treats an all-blank list as "no keys").
+	blank := &Server{}
+	blank.SetAuthKeys([]string{" ", "", "\t"})
+	if blank.authKeys != nil {
+		t.Fatal("blank-only keys should leave auth disabled")
+	}
+
+	s := &Server{}
+	s.SetAuthKeys([]string{"  ", "secret-key", ""})
+	cases := []struct {
+		name  string
+		set   func(*http.Request)
+		allow bool // true: expect 200; false: expect a silent connection abort
+	}{
+		{"no key", func(r *http.Request) {}, false},
+		{"wrong bearer", func(r *http.Request) { r.Header.Set("Authorization", "Bearer nope") }, false},
+		{"good bearer", func(r *http.Request) { r.Header.Set("Authorization", "Bearer secret-key") }, true},
+		{"scheme case-insensitive", func(r *http.Request) { r.Header.Set("Authorization", "bearer secret-key") }, true},
+		{"good x-api-key", func(r *http.Request) { r.Header.Set("x-api-key", "secret-key") }, true},
+		{"bare token", func(r *http.Request) { r.Header.Set("Authorization", "secret-key") }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			tc.set(req)
+			rec := httptest.NewRecorder()
+			if tc.allow {
+				s.withAuth(ok).ServeHTTP(rec, req)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("authorized request: got %d want 200", rec.Code)
+				}
+				return
+			}
+			// Denied requests must abort the connection with no response body,
+			// surfaced as a panic(http.ErrAbortHandler) at the handler layer.
+			defer func() {
+				switch v := recover(); v {
+				case http.ErrAbortHandler:
+					if rec.Code != 200 || rec.Body.Len() != 0 {
+						t.Fatalf("denied request wrote a response: code=%d body=%q", rec.Code, rec.Body.String())
+					}
+				case nil:
+					t.Fatalf("denied request did not abort (got response code %d)", rec.Code)
+				default:
+					t.Fatalf("unexpected panic: %v", v)
+				}
+			}()
+			s.withAuth(ok).ServeHTTP(rec, req)
+		})
+	}
+}
