@@ -2441,6 +2441,11 @@ func extractAnthropicReasoningEffort(thinking any) string {
 	switch mode {
 	case "", "enabled", "adaptive":
 		// treat adaptive as an enabled reasoning request with default effort
+	case "disabled":
+		// Explicitly turn thinking off (maps to enable_thinking:false downstream)
+		// so Anthropic clients can stop a reasoning-default model from consuming
+		// the whole budget on hidden thinking.
+		return "none"
 	default:
 		return ""
 	}

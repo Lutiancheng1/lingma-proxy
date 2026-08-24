@@ -741,6 +741,7 @@ func TestResolveAnthropicEffort(t *testing.T) {
 		{"explicit output_config beats budget bucket", anthropicRequest{Thinking: map[string]any{"type": "enabled", "budget_tokens": float64(30000)}, OutputConfig: map[string]any{"effort": "medium"}}, "medium"},
 		{"budget fallback bucket", anthropicRequest{Thinking: map[string]any{"type": "enabled", "budget_tokens": float64(500)}}, "low"},
 		{"none passes through", anthropicRequest{Effort: "none"}, "none"},
+		{"thinking disabled -> none", anthropicRequest{Thinking: map[string]any{"type": "disabled"}}, "none"},
 		{"empty", anthropicRequest{}, ""},
 	}
 	for _, tc := range cases {
