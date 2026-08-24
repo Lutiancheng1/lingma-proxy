@@ -298,3 +298,53 @@ func TestRemoteMessagesFromRequestKeepsReasoningOnlyTurn(t *testing.T) {
 		t.Fatalf("reasoning-only turn dropped or wrong: %#v", out)
 	}
 }
+
+func TestRemoteToolEmulationDisabledByDefault(t *testing.T) {
+	if remoteToolEmulationEnabled() {
+		t.Fatal("tool emulation should be OFF by default (native tools)")
+	}
+	for _, v := range []string{"1", "true", "yes", "YES"} {
+		t.Setenv("LINGMA_REMOTE_EMULATE_TOOLS", v)
+		if !remoteToolEmulationEnabled() {
+			t.Fatalf("LINGMA_REMOTE_EMULATE_TOOLS=%q should enable emulation", v)
+		}
+	}
+	t.Setenv("LINGMA_REMOTE_EMULATE_TOOLS", "off")
+	if remoteToolEmulationEnabled() {
+		t.Fatal("LINGMA_REMOTE_EMULATE_TOOLS=off should keep emulation disabled")
+	}
+}
+
+func TestRemoteMessagesForChatNativePreservesToolTurnsAndImages(t *testing.T) {
+	req := ChatRequest{
+		Tools:      []toolemulation.ToolDef{{Name: "get_image"}},
+		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
+		Messages: []ChatMessage{
+			{Role: "user", Text: "look at this"},
+			{Role: "assistant", ToolCalls: []toolemulation.ToolCall{{ID: "c1", Name: "get_image"}}},
+			{Role: "tool", ToolCallID: "c1", Text: "here", Images: []Image{{MediaType: "image/png", Data: "abc"}}},
+		},
+	}
+	// Native (emulateTools=false): full structured multi-message, tool turn + image preserved.
+	native := remoteMessagesForChat(req, "FLATTENED PROMPT", false)
+	if len(native) < 3 {
+		t.Fatalf("native path should keep structured messages, got %d", len(native))
+	}
+	foundTool := false
+	for _, m := range native {
+		if m.Role == "tool" {
+			foundTool = true
+			if m.ToolCallID != "c1" || len(m.Images) == 0 {
+				t.Fatalf("tool message lost id/images: %#v", m)
+			}
+		}
+	}
+	if !foundTool {
+		t.Fatal("native path dropped the tool-role message")
+	}
+	// Emulation fallback (emulateTools=true): flattened to a single user prompt.
+	flat := remoteMessagesForChat(req, "FLATTENED PROMPT", true)
+	if len(flat) != 1 || flat[0].Role != "user" || flat[0].Content != "FLATTENED PROMPT" {
+		t.Fatalf("emulation fallback should flatten to one user message, got %#v", flat)
+	}
+}

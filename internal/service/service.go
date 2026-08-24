@@ -477,7 +477,11 @@ func (s *Service) generateRemoteInternal(
 	onDelta func(StreamEvent),
 	emulateTools bool,
 ) (*ChatResult, error) {
-	emulateTools = emulateTools || shouldEmulateRemoteTools(req)
+	// Default to the gateway's NATIVE structured tool messages (assistant
+	// tool_calls + tool-role results + native tools/tool_choice), which every
+	// current QoderCN model supports. Text-emulation flattening is kept as an
+	// opt-in fallback via LINGMA_REMOTE_EMULATE_TOOLS for models that regress.
+	emulateTools = emulateTools || (shouldEmulateRemoteTools(req) && remoteToolEmulationEnabled())
 	// Images are sent natively as base64 content parts (image_url) — the remote
 	// gateway accepts inline base64 for vision models, so no IPC round-trip or
 	// image upload step is required.
@@ -650,6 +654,18 @@ func (s *Service) generateRemoteWithModel(
 
 func shouldEmulateRemoteTools(req ChatRequest) bool {
 	return len(req.Tools) > 0 && req.ToolChoice.Mode != "none"
+}
+
+// remoteToolEmulationEnabled opts back into the legacy text-emulation tool path
+// (flatten the conversation to a prompt + inject tool instructions) instead of
+// the default native structured tool messages. Escape hatch for a model that
+// misbehaves with native function calling.
+func remoteToolEmulationEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LINGMA_REMOTE_EMULATE_TOOLS"))) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
 
 func remoteMessagesForChat(req ChatRequest, prompt string, emulateTools bool) []remote.Message {
