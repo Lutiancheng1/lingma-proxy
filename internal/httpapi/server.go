@@ -1918,9 +1918,9 @@ func normalizeAnthropicRequest(req anthropicRequest) (service.ChatRequest, error
 				}
 			}
 		case "assistant":
-			text, calls := extractAnthropicAssistantContent(message.Content)
-			if text != "" || len(calls) > 0 {
-				messages = append(messages, service.ChatMessage{Role: role, Text: text, ToolCalls: calls})
+			text, reasoning, calls := extractAnthropicAssistantContent(message.Content)
+			if text != "" || len(calls) > 0 || reasoning != "" {
+				messages = append(messages, service.ChatMessage{Role: role, Text: text, ToolCalls: calls, ReasoningText: reasoning})
 			}
 		}
 	}
@@ -3193,13 +3193,14 @@ func extractAnthropicUserContent(content any) (string, []anthropicToolResult) {
 	return text, results
 }
 
-func extractAnthropicAssistantContent(content any) (string, []toolemulation.ToolCall) {
+func extractAnthropicAssistantContent(content any) (string, string, []toolemulation.ToolCall) {
 	items, ok := content.([]any)
 	if !ok {
-		return extractText(content), nil
+		return extractText(content), "", nil
 	}
 	calls := make([]toolemulation.ToolCall, 0, len(items))
 	var textParts []string
+	var reasoningParts []string
 	for _, item := range items {
 		m, ok := item.(map[string]any)
 		if !ok {
@@ -3210,8 +3211,16 @@ func extractAnthropicAssistantContent(content any) (string, []toolemulation.Tool
 			if t := stringFromAny(m["text"]); t != "" {
 				textParts = append(textParts, t)
 			}
-		case "thinking", "redacted_thinking":
-			// Skip thinking blocks — they are not part of the conversation text
+		case "thinking":
+			// Preserve reasoning text so multi-turn extended thinking survives the
+			// round-trip; forwarded to the gateway as reasoning_content (no signature,
+			// which is always empty upstream anyway).
+			if t := stringFromAny(m["thinking"]); t != "" {
+				reasoningParts = append(reasoningParts, t)
+			}
+		case "redacted_thinking":
+			// Redacted thinking is opaque ciphertext with no usable plaintext and is
+			// meaningless to the gateway; drop it rather than forward a placeholder.
 			continue
 		case "tool_use":
 			id := stringFromAny(m["id"])
@@ -3238,7 +3247,11 @@ func extractAnthropicAssistantContent(content any) (string, []toolemulation.Tool
 	if len(textParts) > 0 {
 		text = strings.Join(textParts, "\n")
 	}
-	return text, calls
+	reasoning := ""
+	if len(reasoningParts) > 0 {
+		reasoning = strings.Join(reasoningParts, "\n")
+	}
+	return text, reasoning, calls
 }
 
 func extractOpenAIImages(content any) []service.Image {

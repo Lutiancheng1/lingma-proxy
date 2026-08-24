@@ -85,12 +85,13 @@ type Image struct {
 }
 
 type Message struct {
-	Role       string
-	Content    string
-	Images     []Image
-	Name       string
-	ToolCallID string
-	ToolCalls  []toolemulation.ToolCall
+	Role          string
+	Content       string
+	Images        []Image
+	Name          string
+	ToolCallID    string
+	ToolCalls     []toolemulation.ToolCall
+	ReasoningText string
 }
 
 type ChatResult struct {
@@ -741,6 +742,11 @@ func projectMessages(request ChatRequest) []map[string]any {
 		}
 		if message.ToolCallID != "" {
 			item["tool_call_id"] = message.ToolCallID
+		}
+		// Round-trip prior extended thinking as reasoning_content (the gateway
+		// accepts it in assistant history; the signature stays empty upstream).
+		if strings.EqualFold(role, "assistant") && strings.TrimSpace(message.ReasoningText) != "" {
+			item["reasoning_content"] = message.ReasoningText
 		}
 		if calls := projectMessageToolCalls(message.ToolCalls); len(calls) > 0 {
 			item["tool_calls"] = calls

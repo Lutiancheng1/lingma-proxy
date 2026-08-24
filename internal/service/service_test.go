@@ -275,3 +275,26 @@ func TestExtractLastUserImagesFindsPreviousImageTurn(t *testing.T) {
 		t.Fatalf("images = %#v", images)
 	}
 }
+
+func TestRemoteMessagesFromRequestMapsReasoningText(t *testing.T) {
+	req := ChatRequest{Messages: []ChatMessage{
+		{Role: "assistant", Text: "answer", ReasoningText: "prior thinking"},
+	}}
+	out := remoteMessagesFromRequest(req)
+	if len(out) != 1 {
+		t.Fatalf("message count = %d", len(out))
+	}
+	if out[0].ReasoningText != "prior thinking" {
+		t.Fatalf("ReasoningText = %q, want %q", out[0].ReasoningText, "prior thinking")
+	}
+}
+
+func TestRemoteMessagesFromRequestKeepsReasoningOnlyTurn(t *testing.T) {
+	req := ChatRequest{Messages: []ChatMessage{
+		{Role: "assistant", ReasoningText: "only thinking"},
+	}}
+	out := remoteMessagesFromRequest(req)
+	if len(out) != 1 || out[0].ReasoningText != "only thinking" {
+		t.Fatalf("reasoning-only turn dropped or wrong: %#v", out)
+	}
+}

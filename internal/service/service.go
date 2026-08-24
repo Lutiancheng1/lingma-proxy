@@ -72,6 +72,9 @@ type ChatMessage struct {
 	Images     []Image
 	ToolCallID string
 	ToolCalls  []toolemulation.ToolCall
+	// ReasoningText carries an assistant turn's prior thinking so extended
+	// thinking survives multi-turn round-trips (forwarded as reasoning_content).
+	ReasoningText string
 }
 
 type ChatRequest struct {
@@ -665,15 +668,17 @@ func remoteMessagesFromRequest(req ChatRequest) []remote.Message {
 			continue
 		}
 		content := strings.TrimSpace(message.Text)
-		if content == "" && len(message.Images) == 0 && len(message.ToolCalls) == 0 {
+		reasoning := strings.TrimSpace(message.ReasoningText)
+		if content == "" && reasoning == "" && len(message.Images) == 0 && len(message.ToolCalls) == 0 {
 			continue
 		}
 		out = append(out, remote.Message{
-			Role:       role,
-			Content:    content,
-			Images:     remoteImagesFromChatMessage(message),
-			ToolCallID: strings.TrimSpace(message.ToolCallID),
-			ToolCalls:  message.ToolCalls,
+			Role:          role,
+			Content:       content,
+			Images:        remoteImagesFromChatMessage(message),
+			ToolCallID:    strings.TrimSpace(message.ToolCallID),
+			ToolCalls:     message.ToolCalls,
+			ReasoningText: reasoning,
 		})
 	}
 	return out

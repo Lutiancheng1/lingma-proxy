@@ -761,3 +761,49 @@ func TestReasoningEffortEnabled(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractAnthropicAssistantContentCapturesThinking(t *testing.T) {
+	content := []any{
+		map[string]any{"type": "thinking", "thinking": "step 1"},
+		map[string]any{"type": "text", "text": "the answer"},
+	}
+	text, reasoning, _ := extractAnthropicAssistantContent(content)
+	if text != "the answer" {
+		t.Fatalf("text = %q, want %q", text, "the answer")
+	}
+	if reasoning != "step 1" {
+		t.Fatalf("reasoning = %q, want %q", reasoning, "step 1")
+	}
+}
+
+func TestNormalizeAnthropicRequestThinkingRoundTrip(t *testing.T) {
+	req := anthropicRequest{
+		Model: "m",
+		Messages: []rawMessage{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", Content: []any{
+				map[string]any{"type": "thinking", "thinking": "pondering"},
+				map[string]any{"type": "text", "text": "hello"},
+			}},
+		},
+	}
+	cr, err := normalizeAnthropicRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range cr.Messages {
+		if m.Role == "assistant" {
+			found = true
+			if m.ReasoningText != "pondering" {
+				t.Fatalf("ReasoningText = %q, want %q", m.ReasoningText, "pondering")
+			}
+			if m.Text != "hello" {
+				t.Fatalf("Text = %q, want %q", m.Text, "hello")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no assistant message produced")
+	}
+}

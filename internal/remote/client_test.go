@@ -747,3 +747,29 @@ func TestParseSSEPayloadUsage(t *testing.T) {
 		t.Fatalf("finish=%q", ev.FinishReason)
 	}
 }
+
+func TestProjectMessagesEmitsReasoningContent(t *testing.T) {
+	req := ChatRequest{Messages: []Message{
+		{Role: "assistant", Content: "final answer", ReasoningText: "because reasons"},
+	}}
+	out := projectMessages(req)
+	if len(out) != 1 {
+		t.Fatalf("message count = %d", len(out))
+	}
+	if out[0]["reasoning_content"] != "because reasons" {
+		t.Fatalf("reasoning_content = %#v, want %q", out[0]["reasoning_content"], "because reasons")
+	}
+	if out[0]["reasoning_content_signature"] != "" {
+		t.Fatalf("reasoning_content_signature = %#v, want empty (never synthesized)", out[0]["reasoning_content_signature"])
+	}
+}
+
+func TestProjectMessagesOmitsReasoningForUser(t *testing.T) {
+	req := ChatRequest{Messages: []Message{
+		{Role: "user", Content: "hi", ReasoningText: "should be ignored"},
+	}}
+	out := projectMessages(req)
+	if _, ok := out[0]["reasoning_content"]; ok {
+		t.Fatalf("user message should not carry reasoning_content: %#v", out[0])
+	}
+}
