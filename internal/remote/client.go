@@ -575,10 +575,6 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(Str
 }
 
 func (c *Client) buildBody(requestID string, request ChatRequest) (string, error) {
-	temperature := 0.1
-	if request.Temperature != nil {
-		temperature = *request.Temperature
-	}
 	model := strings.TrimSpace(request.Model)
 	if strings.EqualFold(model, "auto") {
 		model = ""
@@ -601,7 +597,7 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 		"source":           1,
 		"version":          "3",
 		"chat_prompt":      "",
-		"parameters":       buildGenerationParameters(request, temperature),
+		"parameters":       buildGenerationParameters(request),
 		"aliyun_user_type": "",
 		"agent_id":         "agent_common",
 		"task_id":          "common",
@@ -641,8 +637,13 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 // gateway honors temperature and the reasoning_effort/enable_thinking pair;
 // max_tokens is sent for parity with the CLI but the gateway ignores it (the
 // proxy enforces it downstream). top_p/top_k/stop are forwarded best-effort.
-func buildGenerationParameters(request ChatRequest, temperature float64) map[string]any {
-	params := map[string]any{"temperature": temperature}
+func buildGenerationParameters(request ChatRequest) map[string]any {
+	params := map[string]any{}
+	// Only send temperature when the caller set it; otherwise let the gateway
+	// use its own default (forcing 0.1 silently overrode e.g. Anthropic's 1.0).
+	if request.Temperature != nil {
+		params["temperature"] = *request.Temperature
+	}
 	// Reasoning effort / thinking toggle. Unlike max_tokens (which the gateway
 	// ignores), the QoderCN gateway honors these under parameters. We forward
 	// reasoning_effort verbatim so callers can reach QoderCN-native levels

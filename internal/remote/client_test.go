@@ -382,7 +382,7 @@ func TestBuildGenerationParametersForwardsReasoningEffort(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			params := buildGenerationParameters(tc.req, 0.1)
+			params := buildGenerationParameters(tc.req)
 			if got := params["enable_thinking"]; got != tc.wantEnable {
 				t.Fatalf("enable_thinking = %#v, want %#v", got, tc.wantEnable)
 			}
@@ -771,5 +771,15 @@ func TestProjectMessagesOmitsReasoningForUser(t *testing.T) {
 	out := projectMessages(req)
 	if _, ok := out[0]["reasoning_content"]; ok {
 		t.Fatalf("user message should not carry reasoning_content: %#v", out[0])
+	}
+}
+
+func TestBuildGenerationParametersOmitsTemperatureWhenUnset(t *testing.T) {
+	if _, ok := buildGenerationParameters(ChatRequest{})["temperature"]; ok {
+		t.Fatal("temperature should be omitted when caller did not set it")
+	}
+	temp := 0.9
+	if v := buildGenerationParameters(ChatRequest{Temperature: &temp})["temperature"]; v != 0.9 {
+		t.Fatalf("temperature = %v, want 0.9", v)
 	}
 }

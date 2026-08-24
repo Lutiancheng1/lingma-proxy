@@ -101,10 +101,11 @@ type openAIResponsesRequest struct {
 }
 
 type rawMessage struct {
-	Role       string `json:"role"`
-	Content    any    `json:"content"`
-	ToolCalls  []any  `json:"tool_calls,omitempty"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
+	Role             string `json:"role"`
+	Content          any    `json:"content"`
+	ToolCalls        []any  `json:"tool_calls,omitempty"`
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type modelResponse struct {
@@ -682,7 +683,9 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	if shouldEmitAnthropicThinking(normalized, result) {
 		content = append(content, map[string]any{"type": "thinking", "thinking": result.ThoughtText})
 	}
-	content = append(content, map[string]any{"type": "text", "text": result.Text})
+	if strings.TrimSpace(result.Text) != "" {
+		content = append(content, map[string]any{"type": "text", "text": result.Text})
+	}
 	for _, tc := range result.ToolCalls {
 		content = append(content, map[string]any{
 			"type":  "tool_use",
@@ -690,6 +693,10 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 			"name":  tc.Name,
 			"input": tc.Arguments,
 		})
+	}
+	if len(content) == 0 {
+		// An Anthropic message must carry at least one content block.
+		content = append(content, map[string]any{"type": "text", "text": ""})
 	}
 	stopReason, stopSequence := anthropicStopReason(result)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -1940,23 +1947,24 @@ func hasAnthropicToolResult(messages []rawMessage) bool {
 }
 
 func estimateAnthropicInputTokens(req anthropicRequest) int {
-	payload := map[string]any{
-		"model":       req.Model,
-		"system":      req.System,
-		"messages":    req.Messages,
-		"tools":       req.Tools,
-		"tool_choice": req.ToolChoice,
-		"thinking":    req.Thinking,
+	// Estimate from TEXT only; image base64 must never be counted rune-by-rune
+	// (a single 1MB image would otherwise inflate the estimate by ~460k tokens
+	// and break clients that use count_tokens for context budgeting/compaction).
+	var b strings.Builder
+	b.WriteString(req.Model)
+	b.WriteByte('\n')
+	b.WriteString(extractText(req.System))
+	images := 0
+	for _, m := range req.Messages {
+		b.WriteByte('\n')
+		b.WriteString(extractText(m.Content)) // ignores image blocks
+		images += countAnthropicImageBlocks(m.Content)
 	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return 1
+	if meta, err := json.Marshal(map[string]any{"tools": req.Tools, "tool_choice": req.ToolChoice, "thinking": req.Thinking}); err == nil {
+		b.Write(meta)
 	}
-	runes := len([]rune(string(raw)))
-	if runes == 0 {
-		return 1
-	}
-	tokens := (runes + 2) / 3
+	tokens := (len([]rune(b.String())) + 2) / 3
+	tokens += images * 1600 // rough per-image cost (no dimensions available here)
 	if tokens < 1 {
 		return 1
 	}
@@ -2055,9 +2063,10 @@ func normalizeAnthropicRequest(req anthropicRequest) (service.ChatRequest, error
 						text = "[tool_error]"
 					}
 				}
-				if strings.TrimSpace(text) != "" || len(tr.Images) > 0 {
-					messages = append(messages, service.ChatMessage{Role: "tool", Text: text, ToolCallID: tr.ToolUseID, Images: tr.Images})
+				if strings.TrimSpace(text) == "" && len(tr.Images) == 0 {
+					text = "(no output)" // keep the tool turn paired with its tool_use
 				}
+				messages = append(messages, service.ChatMessage{Role: "tool", Text: text, ToolCallID: tr.ToolUseID, Images: tr.Images})
 			}
 		case "assistant":
 			text, reasoning, calls := extractAnthropicAssistantContent(message.Content)
@@ -2110,13 +2119,19 @@ func normalizeOpenAIRequest(req openAIChatRequest) (service.ChatRequest, error) 
 		case "assistant":
 			text := strings.TrimSpace(extractText(message.Content))
 			calls := extractOpenAIToolCalls(message.ToolCalls)
-			if text != "" || len(calls) > 0 {
-				messages = append(messages, service.ChatMessage{Role: role, Text: text, ToolCalls: calls})
+			reasoning := strings.TrimSpace(message.ReasoningContent)
+			if text != "" || len(calls) > 0 || reasoning != "" {
+				messages = append(messages, service.ChatMessage{Role: role, Text: text, ToolCalls: calls, ReasoningText: reasoning})
 			}
 		case "tool":
-			output := strings.TrimSpace(extractText(message.Content))
-			if output == "" || message.ToolCallID == "" {
+			if message.ToolCallID == "" {
 				continue
+			}
+			// Forward even an empty tool result so the matching assistant
+			// tool_call is not orphaned (a placeholder keeps it through the pipeline).
+			output := strings.TrimSpace(extractText(message.Content))
+			if output == "" {
+				output = "(no output)"
 			}
 			messages = append(messages, service.ChatMessage{Role: "tool", Text: output, ToolCallID: message.ToolCallID})
 		}
@@ -3339,7 +3354,8 @@ func extractAnthropicUserContent(content any) (string, []anthropicToolResult) {
 			resultText := extractText(m["content"])
 			isErr, _ := m["is_error"].(bool)
 			images := extractAnthropicImages(m["content"])
-			if resultText != "" || len(images) > 0 {
+			// Keep the result even when empty so the matching tool_use is not orphaned.
+			if toolUseID != "" {
 				results = append(results, anthropicToolResult{
 					ToolUseID: toolUseID,
 					Content:   resultText,
@@ -3445,6 +3461,22 @@ func extractOpenAIImages(content any) []service.Image {
 		}
 	}
 	return images
+}
+
+// countAnthropicImageBlocks counts image content parts (any source type) for
+// token estimation without touching the (possibly huge) base64 payload.
+func countAnthropicImageBlocks(content any) int {
+	items, ok := content.([]any)
+	if !ok {
+		return 0
+	}
+	n := 0
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok && stringFromAny(m["type"]) == "image" {
+			n++
+		}
+	}
+	return n
 }
 
 func extractAnthropicImages(content any) []service.Image {

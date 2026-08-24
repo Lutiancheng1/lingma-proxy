@@ -1029,3 +1029,50 @@ func TestNormalizeAnthropicRequestToolResultError(t *testing.T) {
 		t.Fatalf("tool_call_id = %q, want call_1", toolMsg.ToolCallID)
 	}
 }
+
+func TestEstimateAnthropicInputTokensExcludesImageData(t *testing.T) {
+	bigB64 := strings.Repeat("A", 200000) // ~200k base64 chars; must NOT be counted rune-by-rune
+	req := anthropicRequest{
+		Model: "m",
+		Messages: []rawMessage{{Role: "user", Content: []any{
+			map[string]any{"type": "text", "text": "hi"},
+			map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": bigB64}},
+		}}},
+	}
+	got := estimateAnthropicInputTokens(req)
+	if got > 5000 {
+		t.Fatalf("estimate = %d; image base64 was counted (should be excluded, ~1600/image + text)", got)
+	}
+}
+
+func TestNormalizeOpenAIRequestKeepsEmptyToolResultAndReasoning(t *testing.T) {
+	req := openAIChatRequest{
+		Model: "m",
+		Messages: []rawMessage{
+			{Role: "user", Content: "go"},
+			{Role: "assistant", ReasoningContent: "thinking...", ToolCalls: []any{
+				map[string]any{"id": "c1", "type": "function", "function": map[string]any{"name": "f", "arguments": "{}"}},
+			}},
+			{Role: "tool", ToolCallID: "c1", Content: ""},
+		},
+	}
+	cr, err := normalizeOpenAIRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asst, tool *service.ChatMessage
+	for i := range cr.Messages {
+		switch cr.Messages[i].Role {
+		case "assistant":
+			asst = &cr.Messages[i]
+		case "tool":
+			tool = &cr.Messages[i]
+		}
+	}
+	if asst == nil || asst.ReasoningText != "thinking..." {
+		t.Fatalf("assistant reasoning not preserved: %#v", asst)
+	}
+	if tool == nil || tool.ToolCallID != "c1" || strings.TrimSpace(tool.Text) == "" {
+		t.Fatalf("empty tool result dropped or unpaired: %#v", tool)
+	}
+}
