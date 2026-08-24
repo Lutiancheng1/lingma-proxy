@@ -792,6 +792,13 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		req = s.applyHostedWebSearch(r.Context(), req, query)
 	}
 
+	// Opt-in: advertise + server-side execute the gateway's ImageSearch/ImageGen
+	// tools so a client without them can still search/generate images.
+	if mediaToolsEnabled() {
+		s.handleAnthropicMediaTools(w, r, req)
+		return
+	}
+
 	normalized, err := normalizeAnthropicRequest(req)
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
