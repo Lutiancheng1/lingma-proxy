@@ -1076,3 +1076,30 @@ func TestNormalizeOpenAIRequestKeepsEmptyToolResultAndReasoning(t *testing.T) {
 		t.Fatalf("empty tool result dropped or unpaired: %#v", tool)
 	}
 }
+
+func TestParseImageURLPassesRemoteURLThrough(t *testing.T) {
+	img := parseImageURL("https://qoder-cn-vl.oss-cn-beijing.aliyuncs.com/x.png")
+	if img == nil || img.URL != "https://qoder-cn-vl.oss-cn-beijing.aliyuncs.com/x.png" {
+		t.Fatalf("remote URL not passed through: %#v", img)
+	}
+	if img.Data != "" {
+		t.Fatalf("remote URL should not be downloaded/inlined: %#v", img)
+	}
+}
+
+func TestExtractAnthropicImagesHandlesURLAndBase64(t *testing.T) {
+	content := []any{
+		map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": "https://example.com/pic.png"}},
+		map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}},
+	}
+	imgs := extractAnthropicImages(content)
+	if len(imgs) != 2 {
+		t.Fatalf("want 2 images, got %d: %#v", len(imgs), imgs)
+	}
+	if imgs[0].URL != "https://example.com/pic.png" {
+		t.Fatalf("URL-source image not passed through: %#v", imgs[0])
+	}
+	if imgs[1].Data == "" {
+		t.Fatalf("base64 image lost its data: %#v", imgs[1])
+	}
+}

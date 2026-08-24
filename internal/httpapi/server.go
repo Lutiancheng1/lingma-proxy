@@ -62,9 +62,10 @@ type anthropicRequest struct {
 
 type openAIChatRequest struct {
 	Model               string       `json:"model"`
-	Messages            []rawMessage `json:"messages"`
-	Stream              bool         `json:"stream,omitempty"`
-	MaxTokens           int          `json:"max_tokens,omitempty"`
+	Messages            []rawMessage   `json:"messages"`
+	Stream              bool           `json:"stream,omitempty"`
+	StreamOptions       *streamOptions `json:"stream_options,omitempty"`
+	MaxTokens           int            `json:"max_tokens,omitempty"`
 	MaxCompletionTokens int          `json:"max_completion_tokens,omitempty"`
 	Tools               any          `json:"tools,omitempty"`
 	ToolChoice          any          `json:"tool_choice,omitempty"`
@@ -98,6 +99,13 @@ type openAIResponsesRequest struct {
 	User              string   `json:"user,omitempty"`
 	Reasoning         any      `json:"reasoning,omitempty"`
 	Text              any      `json:"text,omitempty"`
+}
+
+// streamOptions mirrors OpenAI's stream_options; include_usage gates the
+// trailing usage chunk. We only suppress on an explicit false so usage-reliant
+// clients (e.g. cc-switch) that omit it keep receiving real token counts.
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type rawMessage struct {
@@ -740,7 +748,8 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 	s.applyDefaultModel(&normalized)
 
 	if req.Stream {
-		s.handleOpenAIStream(w, r, normalized)
+		emitUsage := req.StreamOptions == nil || req.StreamOptions.IncludeUsage
+		s.handleOpenAIStream(w, r, normalized, emitUsage)
 		return
 	}
 
@@ -1377,7 +1386,7 @@ func (s *Server) writeAnthropicHostedToolStream(w http.ResponseWriter, model str
 	_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 }
 
-func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req service.ChatRequest) {
+func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req service.ChatRequest, emitUsage bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeOpenAIError(w, http.StatusInternalServerError, "api_error", "streaming is not supported by this server")
@@ -1649,17 +1658,20 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 	}); err != nil {
 		return
 	}
-	// Final usage chunk (real upstream tokens). OpenAI streams carry usage in a
-	// trailing choices:[] chunk; we always emit it so streaming clients get
-	// the same real token/cache counts as the non-streaming response.
-	_ = writeOpenAIChunk(w, flusher, map[string]any{
-		"id":      chatID,
-		"object":  "chat.completion.chunk",
-		"created": created,
-		"model":   model,
-		"choices": []map[string]any{},
-		"usage":   openAIUsageMap(final),
-	})
+	// Final usage chunk (real upstream tokens) in a trailing choices:[] chunk.
+	// Suppressed only when the client explicitly set stream_options.include_usage
+	// = false (per OpenAI spec); emitted otherwise so usage-reliant clients keep
+	// the real token/cache counts.
+	if emitUsage {
+		_ = writeOpenAIChunk(w, flusher, map[string]any{
+			"id":      chatID,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
+			"choices": []map[string]any{},
+			"usage":   openAIUsageMap(final),
+		})
+	}
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
@@ -3497,18 +3509,23 @@ func extractAnthropicImages(content any) []service.Image {
 		if !ok {
 			continue
 		}
-		if stringFromAny(source["type"]) != "base64" {
-			continue
+		switch stringFromAny(source["type"]) {
+		case "base64":
+			data := stringFromAny(source["data"])
+			if data == "" {
+				continue
+			}
+			// Resize like the OpenAI path so large Claude Code screenshots
+			// don't bloat / get rejected (normalizeImage passes through on failure).
+			if img := normalizeImage(&service.Image{MediaType: stringFromAny(source["media_type"]), Data: data}); img != nil {
+				images = append(images, *img)
+			}
+		case "url":
+			// Pass the URL through; the gateway fetches it (no proxy-side download).
+			if u := strings.TrimSpace(stringFromAny(source["url"])); u != "" {
+				images = append(images, service.Image{URL: u})
+			}
 		}
-		mediaType := stringFromAny(source["media_type"])
-		data := stringFromAny(source["data"])
-		if data == "" {
-			continue
-		}
-		images = append(images, service.Image{
-			MediaType: mediaType,
-			Data:      data,
-		})
 	}
 	return images
 }
@@ -3520,11 +3537,12 @@ func parseImageURL(url string) *service.Image {
 	if img := parseLocalImagePath(url); img != nil {
 		return normalizeImage(img)
 	}
-	img, err := fetchImageAsBase64(url)
-	if err != nil {
-		return nil
+	if u := strings.TrimSpace(url); strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+		// Pass remote URLs through; the gateway fetches them itself. Avoids
+		// proxy-side SSRF / unbounded download / hang from arbitrary client URLs.
+		return &service.Image{URL: u}
 	}
-	return normalizeImage(img)
+	return nil
 }
 
 func parseLocalImagePath(raw string) *service.Image {
@@ -3616,37 +3634,6 @@ func parseDataURL(url string) *service.Image {
 	}
 }
 
-func fetchImageAsBase64(url string) (*service.Image, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch image failed: %s", resp.Status)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	mediaType := resp.Header.Get("Content-Type")
-	if mediaType == "" {
-		mediaType = "image/jpeg"
-	} else {
-		// Strip parameters like "image/png; charset=utf-8"
-		if idx := strings.Index(mediaType, ";"); idx >= 0 {
-			mediaType = strings.TrimSpace(mediaType[:idx])
-		}
-	}
-
-	return &service.Image{
-		MediaType: mediaType,
-		Data:      base64.StdEncoding.EncodeToString(data),
-	}, nil
-}
 
 func normalizeImage(img *service.Image) *service.Image {
 	if img == nil || strings.TrimSpace(img.Data) == "" {

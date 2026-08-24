@@ -977,7 +977,10 @@ type remoteToolCallDelta struct {
 
 func scanSSE(reader io.Reader, onEvent func(sseEvent) error) error {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// Cap generously: a single double-wrapped SSE frame can carry a large tool-call
+	// argument blob or a whole non-streamed response; too small a cap makes
+	// bufio.Scanner return ErrTooLong and discard the entire buffered response.
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
