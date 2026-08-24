@@ -54,6 +54,10 @@ type anthropicRequest struct {
 	StopSequences []string       `json:"stop_sequences,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
 	Thinking      any            `json:"thinking,omitempty"`
+	// OutputConfig carries newer Claude Code fields; effort is read from
+	// output_config.effort. Effort is the top-level fallback location.
+	OutputConfig map[string]any `json:"output_config,omitempty"`
+	Effort       string         `json:"effort,omitempty"`
 }
 
 type openAIChatRequest struct {
@@ -943,7 +947,7 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 	doneCh := done
 	var final *service.ChatResult
 	var finalErr error
-	thinkingEnabled := strings.TrimSpace(req.ReasoningEffort) != ""
+	thinkingEnabled := reasoningEffortEnabled(req.ReasoningEffort)
 	thinkingOpen := false
 	textOpen := false
 	textIndex := 0
@@ -1576,7 +1580,7 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 	var finalErr error
 	pendingText := make([]string, 0, 16)
 	pendingThought := make([]string, 0, 16)
-	reasoningEnabled := strings.TrimSpace(req.ReasoningEffort) != ""
+	reasoningEnabled := reasoningEffortEnabled(req.ReasoningEffort)
 	reasoningEmitted := false
 
 	for eventsCh != nil || doneCh != nil {
@@ -1940,7 +1944,7 @@ func normalizeAnthropicRequest(req anthropicRequest) (service.ChatRequest, error
 		TopK:            req.TopK,
 		Stop:            req.StopSequences,
 		MaxTokens:       req.MaxTokens,
-		ReasoningEffort: extractAnthropicReasoningEffort(req.Thinking),
+		ReasoningEffort: resolveAnthropicEffort(req),
 	}, nil
 }
 
@@ -2217,6 +2221,43 @@ func extractReasoningEffort(reasoning any) string {
 		return ""
 	}
 	return stringFromAny(m["effort"])
+}
+
+// resolveAnthropicEffort picks the reasoning effort for a request. Explicit
+// effort strings take precedence over any budget-derived bucket, and they are
+// forwarded VERBATIM (no clamping) so QoderCN-native levels such as xhigh/max
+// reach the gateway. Priority: thinking.effort -> output_config.effort ->
+// top-level effort -> coarse budget_tokens bucket.
+func resolveAnthropicEffort(req anthropicRequest) string {
+	if e := anthropicThinkingEffortString(req.Thinking); e != "" {
+		return e
+	}
+	if e := strings.TrimSpace(stringFromAny(req.OutputConfig["effort"])); e != "" {
+		return e
+	}
+	if e := strings.TrimSpace(req.Effort); e != "" {
+		return e
+	}
+	return extractAnthropicReasoningEffort(req.Thinking)
+}
+
+// anthropicThinkingEffortString returns an explicit thinking.effort string, if any.
+func anthropicThinkingEffortString(thinking any) string {
+	m, ok := thinking.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(stringFromAny(m["effort"]))
+}
+
+// reasoningEffortEnabled reports whether an effort value should turn thinking
+// on. Empty and explicit-off values ("none"/"off"/"disabled") mean disabled.
+func reasoningEffortEnabled(effort string) bool {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "", "none", "off", "disabled":
+		return false
+	}
+	return true
 }
 
 func extractAnthropicReasoningEffort(thinking any) string {
@@ -2774,7 +2815,7 @@ func writeOpenAIResponseStreamCompleted(emitter *openAIResponseStreamEmitter, re
 }
 
 func shouldEmitAnthropicThinking(req service.ChatRequest, result *service.ChatResult) bool {
-	return strings.TrimSpace(req.ReasoningEffort) != "" && result != nil && strings.TrimSpace(result.ThoughtText) != ""
+	return reasoningEffortEnabled(req.ReasoningEffort) && result != nil && strings.TrimSpace(result.ThoughtText) != ""
 }
 
 func shouldEmitResponsesReasoning(req service.ChatRequest, result *service.ChatResult) bool {

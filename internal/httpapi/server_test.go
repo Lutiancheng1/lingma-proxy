@@ -725,3 +725,39 @@ func TestAnthropicStopReason(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveAnthropicEffort(t *testing.T) {
+	cases := []struct {
+		name string
+		req  anthropicRequest
+		want string
+	}{
+		{"thinking.effort verbatim", anthropicRequest{Thinking: map[string]any{"type": "adaptive", "effort": "xhigh"}}, "xhigh"},
+		{"output_config.effort", anthropicRequest{OutputConfig: map[string]any{"effort": "max"}}, "max"},
+		{"top-level effort", anthropicRequest{Effort: "high"}, "high"},
+		{"explicit output_config beats budget bucket", anthropicRequest{Thinking: map[string]any{"type": "enabled", "budget_tokens": float64(30000)}, OutputConfig: map[string]any{"effort": "medium"}}, "medium"},
+		{"budget fallback bucket", anthropicRequest{Thinking: map[string]any{"type": "enabled", "budget_tokens": float64(500)}}, "low"},
+		{"none passes through", anthropicRequest{Effort: "none"}, "none"},
+		{"empty", anthropicRequest{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveAnthropicEffort(tc.req); got != tc.want {
+				t.Fatalf("resolveAnthropicEffort = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReasoningEffortEnabled(t *testing.T) {
+	for _, e := range []string{"", "none", "off", "disabled", "NONE", " off "} {
+		if reasoningEffortEnabled(e) {
+			t.Fatalf("reasoningEffortEnabled(%q) = true, want false", e)
+		}
+	}
+	for _, e := range []string{"low", "medium", "high", "xhigh", "max"} {
+		if !reasoningEffortEnabled(e) {
+			t.Fatalf("reasoningEffortEnabled(%q) = false, want true", e)
+		}
+	}
+}
