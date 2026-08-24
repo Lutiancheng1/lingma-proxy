@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -805,5 +807,194 @@ func TestNormalizeAnthropicRequestThinkingRoundTrip(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no assistant message produced")
+	}
+}
+
+type sseRec struct {
+	typ         string
+	index       int
+	blockType   string
+	id, name    string
+	partialJSON string
+	text        string
+	thinking    string
+}
+
+func parseAnthropicSSE(t *testing.T, body string) []sseRec {
+	t.Helper()
+	str := func(v any) string {
+		if v == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	var out []sseRec
+	for _, block := range strings.Split(body, "\n\n") {
+		var data string
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, "data: ") {
+				data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		if data == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(data), &m); err != nil {
+			continue
+		}
+		rec := sseRec{typ: str(m["type"])}
+		if idx, ok := m["index"].(float64); ok {
+			rec.index = int(idx)
+		}
+		if cb, ok := m["content_block"].(map[string]any); ok {
+			rec.blockType = str(cb["type"])
+			rec.id = str(cb["id"])
+			rec.name = str(cb["name"])
+		}
+		if d, ok := m["delta"].(map[string]any); ok {
+			rec.partialJSON = str(d["partial_json"])
+			rec.text = str(d["text"])
+			rec.thinking = str(d["thinking"])
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+func runAnthropicStream(req service.ChatRequest, events []service.StreamEvent, final *service.ChatResult) string {
+	evCh := make(chan service.StreamEvent, len(events)+1)
+	for _, e := range events {
+		evCh <- e
+	}
+	close(evCh)
+	doneCh := make(chan service.StreamResult, 1)
+	doneCh <- service.StreamResult{Result: final}
+	close(doneCh)
+	rec := httptest.NewRecorder()
+	writeAnthropicStreamBody(context.Background(), rec, rec, req, evCh, doneCh)
+	return rec.Body.String()
+}
+
+func TestWriteAnthropicStreamBodyIncrementalToolUse(t *testing.T) {
+	req := service.ChatRequest{Tools: []toolemulation.ToolDef{{Name: "read_file"}}}
+	events := []service.StreamEvent{
+		{Type: service.StreamEventToolCall, ToolCall: &service.StreamToolCall{Index: 0, ID: "call_1", Name: "read_file"}},
+		{Type: service.StreamEventToolCall, ToolCall: &service.StreamToolCall{Index: 0, ArgsFragment: `{"path":`}},
+		{Type: service.StreamEventToolCall, ToolCall: &service.StreamToolCall{Index: 0, ArgsFragment: `"/a.txt"}`}},
+	}
+	final := &service.ChatResult{ToolCalls: []toolemulation.ToolCall{{ID: "call_1", Name: "read_file", Arguments: map[string]any{"path": "/a.txt"}}}, FinishReason: "tool_calls"}
+	recs := parseAnthropicSSE(t, runAnthropicStream(req, events, final))
+
+	starts, stops := 0, 0
+	startIdx := -1
+	var gotID, gotName, args string
+	for _, r := range recs {
+		if r.typ == "content_block_start" && r.blockType == "tool_use" {
+			starts++
+			startIdx = r.index
+			gotID = r.id
+			gotName = r.name
+		}
+		if r.typ == "content_block_delta" && r.partialJSON != "" {
+			args += r.partialJSON
+		}
+	}
+	for _, r := range recs {
+		if r.typ == "content_block_stop" && r.index == startIdx {
+			stops++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("tool_use content_block_start count = %d, want 1 (no duplicate aggregated block)", starts)
+	}
+	if gotID != "call_1" || gotName != "read_file" {
+		t.Fatalf("tool id/name = %q/%q, want call_1/read_file", gotID, gotName)
+	}
+	if args != `{"path":"/a.txt"}` {
+		t.Fatalf("assembled args = %q, want %q", args, `{"path":"/a.txt"}`)
+	}
+	if stops != 1 {
+		t.Fatalf("content_block_stop for tool block = %d, want 1", stops)
+	}
+}
+
+func TestWriteAnthropicStreamBodyToolLateStart(t *testing.T) {
+	req := service.ChatRequest{Tools: []toolemulation.ToolDef{{Name: "x"}}}
+	events := []service.StreamEvent{
+		{Type: service.StreamEventToolCall, ToolCall: &service.StreamToolCall{Index: 0, ArgsFragment: `{"a":1}`}},
+	}
+	final := &service.ChatResult{ToolCalls: []toolemulation.ToolCall{{}}, FinishReason: "tool_calls"}
+	recs := parseAnthropicSSE(t, runAnthropicStream(req, events, final))
+	startIdx := -1
+	var gotID, gotName, args string
+	for _, r := range recs {
+		if r.typ == "content_block_start" && r.blockType == "tool_use" {
+			startIdx = r.index
+			gotID = r.id
+			gotName = r.name
+		}
+		if r.typ == "content_block_delta" && r.partialJSON != "" {
+			args += r.partialJSON
+		}
+	}
+	if startIdx < 0 {
+		t.Fatal("expected a late-started tool block")
+	}
+	if gotID != "tool_call_0" || gotName != "unknown_tool" {
+		t.Fatalf("fallback id/name = %q/%q, want tool_call_0/unknown_tool", gotID, gotName)
+	}
+	if args != `{"a":1}` {
+		t.Fatalf("late args = %q, want %q", args, `{"a":1}`)
+	}
+}
+
+func TestWriteAnthropicStreamBodyEmulatedToolAggregated(t *testing.T) {
+	req := service.ChatRequest{Tools: []toolemulation.ToolDef{{Name: "read_file"}}}
+	final := &service.ChatResult{ToolCalls: []toolemulation.ToolCall{{ID: "call_9", Name: "read_file", Arguments: map[string]any{"path": "/b"}}}, FinishReason: "tool_calls"}
+	recs := parseAnthropicSSE(t, runAnthropicStream(req, nil, final))
+	starts := 0
+	var gotID string
+	for _, r := range recs {
+		if r.typ == "content_block_start" && r.blockType == "tool_use" {
+			starts++
+			gotID = r.id
+		}
+	}
+	if starts != 1 || gotID != "call_9" {
+		t.Fatalf("aggregated tool_use starts=%d id=%q, want 1/call_9", starts, gotID)
+	}
+}
+
+func TestWriteAnthropicStreamBodyThinkingTextToolCoexist(t *testing.T) {
+	req := service.ChatRequest{ReasoningEffort: "high", Tools: []toolemulation.ToolDef{{Name: "read_file"}}}
+	events := []service.StreamEvent{
+		{Type: service.StreamEventThinking, Delta: "let me think about this"},
+		{Type: service.StreamEventText, Delta: "checking now for you"},
+		{Type: service.StreamEventToolCall, ToolCall: &service.StreamToolCall{Index: 0, ID: "call_1", Name: "read_file", ArgsFragment: `{}`}},
+	}
+	final := &service.ChatResult{ToolCalls: []toolemulation.ToolCall{{ID: "call_1", Name: "read_file"}}, FinishReason: "tool_calls"}
+	recs := parseAnthropicSSE(t, runAnthropicStream(req, events, final))
+	thinkingIdx, textIdx, toolIdx := -1, -1, -1
+	for _, r := range recs {
+		if r.typ == "content_block_start" {
+			switch r.blockType {
+			case "thinking":
+				thinkingIdx = r.index
+			case "text":
+				textIdx = r.index
+			case "tool_use":
+				toolIdx = r.index
+			}
+		}
+	}
+	if thinkingIdx != 0 {
+		t.Fatalf("thinking block index = %d, want 0", thinkingIdx)
+	}
+	if textIdx != 1 {
+		t.Fatalf("text block index = %d, want 1", textIdx)
+	}
+	if toolIdx != 2 {
+		t.Fatalf("tool block index = %d, want 2 (after thinking+text)", toolIdx)
 	}
 }

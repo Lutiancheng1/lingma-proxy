@@ -942,6 +942,13 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 
+	writeAnthropicStreamBody(r.Context(), w, flusher, req, events, done)
+}
+
+// writeAnthropicStreamBody consumes the service stream and emits the Anthropic
+// SSE sequence after message_start (written by the caller). Extracted so the
+// incremental tool_use / thinking / text block state machine is unit-testable.
+func writeAnthropicStreamBody(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, req service.ChatRequest, events <-chan service.StreamEvent, done <-chan service.StreamResult) {
 	filter := newToolStreamFilter(len(req.Tools) > 0)
 	eventsCh := events
 	doneCh := done
@@ -955,9 +962,47 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 		textIndex = 1
 	}
 
+	// Incremental tool_use streaming state (keyed by upstream tool-call index).
+	streamedTool := false
+	toolBlocks := map[int]*anthropicToolBlock{}
+	var toolOrder []int
+	nextToolBlockIndex := 0
+	openToolIndex := -1
+
+	// emitText closes any open thinking block, opens the text block if needed,
+	// and writes a text_delta. Shared by the streaming loop and the tail flush.
+	emitText := func(delta string) error {
+		if delta == "" {
+			return nil
+		}
+		if thinkingOpen {
+			if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+				"type": "content_block_stop", "index": 0,
+			}); err != nil {
+				return err
+			}
+			thinkingOpen = false
+		}
+		if !textOpen {
+			if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+				"type":          "content_block_start",
+				"index":         textIndex,
+				"content_block": map[string]any{"type": "text", "text": ""},
+			}); err != nil {
+				return err
+			}
+			textOpen = true
+		}
+		return writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
+			"type":  "content_block_delta",
+			"index": textIndex,
+			"delta": map[string]any{"type": "text_delta", "text": delta},
+		})
+	}
+
 	for eventsCh != nil || doneCh != nil {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case event, ok := <-eventsCh:
 			if !ok {
@@ -965,8 +1010,100 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 				continue
 			}
 			switch event.Type {
+			case service.StreamEventToolCall:
+				if event.ToolCall == nil {
+					continue
+				}
+				if !streamedTool {
+					// First tool fragment: flush any buffered text tail into the
+					// text block, then close open thinking/text blocks. Tool blocks
+					// are allocated after them.
+					for _, delta := range filter.Flush() {
+						if err := emitText(delta); err != nil {
+							return
+						}
+					}
+					nextToolBlockIndex = 1
+					if textOpen {
+						nextToolBlockIndex = textIndex + 1
+					}
+					if thinkingOpen {
+						if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+							"type": "content_block_stop", "index": 0,
+						}); err != nil {
+							return
+						}
+						thinkingOpen = false
+					}
+					if textOpen {
+						if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+							"type": "content_block_stop", "index": textIndex,
+						}); err != nil {
+							return
+						}
+						textOpen = false
+					}
+					streamedTool = true
+				}
+				tc := event.ToolCall
+				state := toolBlocks[tc.Index]
+				if state == nil {
+					state = &anthropicToolBlock{anthropicIndex: nextToolBlockIndex}
+					nextToolBlockIndex++
+					toolBlocks[tc.Index] = state
+					toolOrder = append(toolOrder, tc.Index)
+				}
+				if tc.ID != "" {
+					state.id = tc.ID
+				}
+				if tc.Name != "" {
+					state.name = tc.Name
+				}
+				// Start the block once id+name are known; close the previous open
+				// tool block first (QoderCN streams tool calls contiguously by index).
+				if !state.started && state.id != "" && state.name != "" {
+					if openToolIndex >= 0 {
+						if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+							"type": "content_block_stop", "index": openToolIndex,
+						}); err != nil {
+							return
+						}
+					}
+					if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+						"type":          "content_block_start",
+						"index":         state.anthropicIndex,
+						"content_block": map[string]any{"type": "tool_use", "id": state.id, "name": state.name, "input": map[string]any{}},
+					}); err != nil {
+						return
+					}
+					state.started = true
+					openToolIndex = state.anthropicIndex
+					if state.pendingArgs != "" {
+						if err := writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
+							"type":  "content_block_delta",
+							"index": state.anthropicIndex,
+							"delta": map[string]any{"type": "input_json_delta", "partial_json": state.pendingArgs},
+						}); err != nil {
+							return
+						}
+						state.pendingArgs = ""
+					}
+				}
+				if tc.ArgsFragment != "" {
+					if state.started {
+						if err := writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
+							"type":  "content_block_delta",
+							"index": state.anthropicIndex,
+							"delta": map[string]any{"type": "input_json_delta", "partial_json": tc.ArgsFragment},
+						}); err != nil {
+							return
+						}
+					} else {
+						state.pendingArgs += tc.ArgsFragment
+					}
+				}
 			case service.StreamEventThinking:
-				if !thinkingEnabled || strings.TrimSpace(event.Delta) == "" {
+				if !thinkingEnabled || streamedTool || strings.TrimSpace(event.Delta) == "" {
 					continue
 				}
 				if !thinkingOpen {
@@ -990,37 +1127,15 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 					return
 				}
 			default:
+				if streamedTool {
+					// Anthropic blocks are strictly ordered; once a tool block has
+					// opened we must not reopen earlier text/thinking indices.
+					// QoderCN ends the turn at the tool call, so there is no
+					// legitimate trailing text to emit here.
+					continue
+				}
 				for _, delta := range filter.Push(event.Delta) {
-					if delta == "" {
-						continue
-					}
-					if thinkingOpen {
-						if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
-							"type":  "content_block_stop",
-							"index": 0,
-						}); err != nil {
-							return
-						}
-						thinkingOpen = false
-					}
-					if !textOpen {
-						if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
-							"type":          "content_block_start",
-							"index":         textIndex,
-							"content_block": map[string]any{"type": "text", "text": ""},
-						}); err != nil {
-							return
-						}
-						textOpen = true
-					}
-					if err := writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
-						"type":  "content_block_delta",
-						"index": textIndex,
-						"delta": map[string]any{
-							"type": "text_delta",
-							"text": delta,
-						},
-					}); err != nil {
+					if err := emitText(delta); err != nil {
 						return
 					}
 				}
@@ -1058,36 +1173,7 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 	}
 	if len(final.ToolCalls) == 0 {
 		for _, delta := range filter.Flush() {
-			if delta == "" {
-				continue
-			}
-			if thinkingOpen {
-				if err := writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
-					"type":  "content_block_stop",
-					"index": 0,
-				}); err != nil {
-					return
-				}
-				thinkingOpen = false
-			}
-			if !textOpen {
-				if err := writeSSEEvent(w, flusher, "content_block_start", map[string]any{
-					"type":          "content_block_start",
-					"index":         textIndex,
-					"content_block": map[string]any{"type": "text", "text": ""},
-				}); err != nil {
-					return
-				}
-				textOpen = true
-			}
-			if err := writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
-				"type":  "content_block_delta",
-				"index": textIndex,
-				"delta": map[string]any{
-					"type": "text_delta",
-					"text": delta,
-				},
-			}); err != nil {
+			if err := emitText(delta); err != nil {
 				return
 			}
 		}
@@ -1109,28 +1195,74 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 	}
-	for i, tc := range final.ToolCalls {
-		blockIndex := i + 1
-		if textOpen {
-			blockIndex = textIndex + 1 + i
-		} else if thinkingEnabled {
-			blockIndex = 1 + i
+	if streamedTool {
+		// Incremental path already streamed the tool blocks. Late-start any block
+		// that never received id+name but has buffered args, then close all blocks.
+		for _, idx := range toolOrder {
+			state := toolBlocks[idx]
+			if state.started || (state.pendingArgs == "" && state.id == "" && state.name == "") {
+				continue
+			}
+			if openToolIndex >= 0 {
+				_ = writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+					"type": "content_block_stop", "index": openToolIndex,
+				})
+				openToolIndex = -1
+			}
+			id := state.id
+			if id == "" {
+				id = fmt.Sprintf("tool_call_%d", idx)
+			}
+			name := state.name
+			if name == "" {
+				name = "unknown_tool"
+			}
+			_ = writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+				"type":          "content_block_start",
+				"index":         state.anthropicIndex,
+				"content_block": map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{}},
+			})
+			state.started = true
+			if state.pendingArgs != "" {
+				_ = writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": state.anthropicIndex,
+					"delta": map[string]any{"type": "input_json_delta", "partial_json": state.pendingArgs},
+				})
+			}
+			openToolIndex = state.anthropicIndex
 		}
-		_ = writeSSEEvent(w, flusher, "content_block_start", map[string]any{
-			"type":          "content_block_start",
-			"index":         blockIndex,
-			"content_block": map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": map[string]any{}},
-		})
-		argsJSON, _ := json.Marshal(tc.Arguments)
-		_ = writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
-			"type":  "content_block_delta",
-			"index": blockIndex,
-			"delta": map[string]any{"type": "input_json_delta", "partial_json": string(argsJSON)},
-		})
-		_ = writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
-			"type":  "content_block_stop",
-			"index": blockIndex,
-		})
+		if openToolIndex >= 0 {
+			_ = writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+				"type": "content_block_stop", "index": openToolIndex,
+			})
+			openToolIndex = -1
+		}
+	} else {
+		// Emulation / non-native path: no fragments streamed, emit aggregated blocks.
+		for i, tc := range final.ToolCalls {
+			blockIndex := i + 1
+			if textOpen {
+				blockIndex = textIndex + 1 + i
+			} else if thinkingEnabled {
+				blockIndex = 1 + i
+			}
+			_ = writeSSEEvent(w, flusher, "content_block_start", map[string]any{
+				"type":          "content_block_start",
+				"index":         blockIndex,
+				"content_block": map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": map[string]any{}},
+			})
+			argsJSON, _ := json.Marshal(tc.Arguments)
+			_ = writeSSEEvent(w, flusher, "content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": blockIndex,
+				"delta": map[string]any{"type": "input_json_delta", "partial_json": string(argsJSON)},
+			})
+			_ = writeSSEEvent(w, flusher, "content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": blockIndex,
+			})
+		}
 	}
 	stopReason, stopSequence := anthropicStopReason(final)
 	if err := writeSSEEvent(w, flusher, "message_delta", map[string]any{
@@ -3153,6 +3285,16 @@ func extractOpenAIToolCalls(raw []any) []toolemulation.ToolCall {
 type anthropicToolResult struct {
 	ToolUseID string
 	Content   string
+}
+
+// anthropicToolBlock tracks one streaming tool_use content block (keyed by the
+// upstream tool-call index) while its id/name/argument fragments arrive.
+type anthropicToolBlock struct {
+	anthropicIndex int
+	id             string
+	name           string
+	started        bool
+	pendingArgs    string
 }
 
 func extractAnthropicUserContent(content any) (string, []anthropicToolResult) {
