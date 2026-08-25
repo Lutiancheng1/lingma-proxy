@@ -24,6 +24,10 @@ const imageSearchToolDescription = `Search the web for images and return structu
 Use this for visual research and real-world asset sourcing, such as brand references, product imagery, places, events, or other existing/factual visuals.
 After picking the result(s) you want, download the original image yourself with Bash curl or another suitable tool before using it as a local asset.`
 
+const textPolishToolDescription = `Polish raw or unpunctuated text: add correct punctuation, fix capitalization and spacing, and clean up spoken-language artifacts, WITHOUT changing the wording, meaning, or language.
+Ideal for cleaning up speech-to-text transcriptions, rough dictation, or messy pasted text before using it.
+Returns only the cleaned text. It does NOT rewrite, summarize, translate, or answer the content.`
+
 // serverToolSpec is the canonical definition of a proxy-executed "server tool":
 // a gateway-only capability the proxy advertises to the model and runs
 // server-side. One spec generates both the Anthropic tool def (a raw map with
@@ -57,6 +61,18 @@ var imageSearchSpec = serverToolSpec{
 			"count": map[string]any{"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of image results (1-10, default 5)."},
 		},
 		"required": []any{"query"},
+	},
+}
+
+var textPolishSpec = serverToolSpec{
+	name:        "TextPolish",
+	description: textPolishToolDescription,
+	schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"text": map[string]any{"type": "string", "description": "The raw text to polish (add punctuation, fix casing/spacing)."},
+		},
+		"required": []any{"text"},
 	},
 }
 

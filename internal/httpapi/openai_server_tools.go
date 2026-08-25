@@ -26,7 +26,7 @@ func injectOpenAIServerTools(req service.ChatRequest) service.ChatRequest {
 	for _, t := range req.Tools {
 		existing[strings.TrimSpace(t.Name)] = true
 	}
-	for _, spec := range []serverToolSpec{webSearchSpec, imageSearchSpec} {
+	for _, spec := range []serverToolSpec{webSearchSpec, imageSearchSpec, textPolishSpec} {
 		if existing[spec.name] {
 			continue
 		}

@@ -498,8 +498,8 @@ func TestAnthropicServerToolDefsWebSearch(t *testing.T) {
 func TestAnthropicServerToolDefsImageSearchFlag(t *testing.T) {
 	t.Setenv("LINGMA_INJECT_MEDIA_TOOLS", "1")
 	defs, ok := (&Server{}).anthropicServerToolDefs(anthropicRequest{})
-	if !ok || !defsContainTool(defs, "ImageSearch") {
-		t.Fatalf("expected ImageSearch when the flag is set: ok=%v defs=%#v", ok, defs)
+	if !ok || !defsContainTool(defs, "ImageSearch") || !defsContainTool(defs, "TextPolish") {
+		t.Fatalf("expected ImageSearch + TextPolish when the flag is set: ok=%v defs=%#v", ok, defs)
 	}
 	if defsContainTool(defs, "web_search") {
 		t.Fatal("web_search should not be offered unless the client declares it")
@@ -542,7 +542,7 @@ func TestInjectAnthropicServerToolsReplacesHostedWebSearch(t *testing.T) {
 	if hosted != 0 || callable != 1 || bash != 1 {
 		t.Fatalf("hosted=%d callable=%d bash=%d tools=%#v", hosted, callable, bash, tools)
 	}
-	if !isServerTool("web_search") || !isServerTool("ImageSearch") || isServerTool("Bash") {
+	if !isServerTool("web_search") || !isServerTool("ImageSearch") || !isServerTool("TextPolish") || isServerTool("Bash") {
 		t.Fatal("isServerTool classification wrong")
 	}
 }
@@ -550,17 +550,19 @@ func TestInjectAnthropicServerToolsReplacesHostedWebSearch(t *testing.T) {
 func TestInjectOpenAIServerToolsDeduplicates(t *testing.T) {
 	req := service.ChatRequest{Tools: []toolemulation.ToolDef{{Name: "web_search"}}}
 	out := injectOpenAIServerTools(req)
-	var web, img int
+	var web, img, polish int
 	for _, tool := range out.Tools {
 		switch tool.Name {
 		case "web_search":
 			web++
 		case "ImageSearch":
 			img++
+		case "TextPolish":
+			polish++
 		}
 	}
-	if web != 1 || img != 1 {
-		t.Fatalf("expected web_search kept once + ImageSearch added: web=%d img=%d", web, img)
+	if web != 1 || img != 1 || polish != 1 {
+		t.Fatalf("expected web_search kept once + ImageSearch + TextPolish added: web=%d img=%d polish=%d", web, img, polish)
 	}
 }
 

@@ -31,6 +31,7 @@ const (
 	oneSearchPath     = "/algo/api/v1/webSearch/oneSearch"
 	imageSearchPath   = "/algo/api/v2/service/pro/imageSearch"
 	generateImagePath = "/algo/api/v2/service/pro/generateImage"
+	voicePolishPath   = "/algo/api/v2/service/voice/polish"
 	quotaPath         = "/api/v2/quota/usage"
 )
 
@@ -623,6 +624,83 @@ func stripPNGMetadata(png []byte) ([]byte, bool) {
 		}
 	}
 	return out, true
+}
+
+// postSigned posts a plain JSON body to path with cosy signing (no Encode
+// envelope, unlike postEncoded) and returns the raw JSON response.
+func (c *Client) postSigned(ctx context.Context, path string, body []byte) ([]byte, error) {
+	cred, err := LoadCredential(c.cfg.AuthFile)
+	if err != nil {
+		return nil, err
+	}
+	headers, err := c.headers(cred, path, string(body))
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+path, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	return raw, nil
+}
+
+// PolishText cleans up raw text via the gateway's voice/polish endpoint (adds
+// punctuation, fixes casing/spacing, without changing the meaning). The gateway
+// expects the text wrapped as a transcription message. Returns the polished text.
+func (c *Client) PolishText(ctx context.Context, text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", fmt.Errorf("polish text is empty")
+	}
+	body, err := json.Marshal(map[string]any{
+		"session_id":  newUUID(),
+		"request_id":  newUUID(),
+		"client_type": "5",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "<transcription>" + text + "</transcription>"},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	raw, err := c.postSigned(ctx, voicePolishPath, body)
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		Success *bool `json:"success"`
+		Result  struct {
+			Content string `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse polish response: %w", err)
+	}
+	if parsed.Success != nil && !*parsed.Success {
+		return "", fmt.Errorf("polish failed: %s", truncate(string(raw), 200))
+	}
+	content := strings.TrimSpace(parsed.Result.Content)
+	if content == "" {
+		return "", fmt.Errorf("polish returned empty result")
+	}
+	return content, nil
 }
 
 // openAPIBaseURL derives the openapi host (quota / user APIs) from the chat base

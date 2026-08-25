@@ -452,6 +452,15 @@ func (s *Service) GenerateImage(ctx context.Context, prompt, size, model string)
 	return s.remoteClientLocked().GenerateImage(ctx, prompt, size, model)
 }
 
+// PolishText cleans up raw text via the gateway (remote backend only): adds
+// punctuation and fixes casing/spacing without changing the meaning.
+func (s *Service) PolishText(ctx context.Context, text string) (string, error) {
+	if s.backend() != BackendRemote {
+		return "", errors.New("text polish is only available in remote backend mode")
+	}
+	return s.remoteClientLocked().PolishText(ctx, text)
+}
+
 func (s *Service) Generate(ctx context.Context, req ChatRequest) (*ChatResult, error) {
 	var result *ChatResult
 	var err error

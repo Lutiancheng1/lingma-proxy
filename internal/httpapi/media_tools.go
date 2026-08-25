@@ -34,7 +34,7 @@ func mediaToolsEnabled() bool { return truthyEnv("LINGMA_INJECT_MEDIA_TOOLS") }
 // isServerTool reports whether a tool name is one the proxy executes itself.
 func isServerTool(name string) bool {
 	switch strings.TrimSpace(name) {
-	case "web_search", "ImageSearch":
+	case "web_search", "ImageSearch", "TextPolish":
 		return true
 	}
 	return false
@@ -50,7 +50,7 @@ func (s *Server) anthropicServerToolDefs(req anthropicRequest) ([]any, bool) {
 		defs = append(defs, webSearchSpec.anthropicDef())
 	}
 	if mediaToolsEnabled() {
-		defs = append(defs, imageSearchSpec.anthropicDef())
+		defs = append(defs, imageSearchSpec.anthropicDef(), textPolishSpec.anthropicDef())
 	}
 	return defs, len(defs) > 0
 }
@@ -144,6 +144,16 @@ func (s *Server) executeServerTool(ctx context.Context, call toolemulation.ToolC
 			fmt.Fprintf(&b, "[%d] %s — %s (%dx%d)\n", i+1, strings.TrimSpace(r.Title), strings.TrimSpace(r.ImageURL), r.Width, r.Height)
 		}
 		return b.String()
+	case "TextPolish":
+		text := strings.TrimSpace(stringFromAny(call.Arguments["text"]))
+		if text == "" {
+			return "Text polish failed: empty text"
+		}
+		polished, err := s.svc.PolishText(ctx, text)
+		if err != nil {
+			return "Text polish failed: " + err.Error()
+		}
+		return polished
 	}
 	return "unknown tool"
 }
