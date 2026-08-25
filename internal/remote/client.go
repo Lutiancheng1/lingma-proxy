@@ -371,16 +371,37 @@ type SearchResult struct {
 	Link          string `json:"link"`
 	Snippet       string `json:"snippet"`
 	Summary       string `json:"summary"`
+	MainText      string `json:"mainText"`
+	MarkdownText  string `json:"markdownText"`
 	PublishedTime string `json:"publishedTime"`
 	Hostname      string `json:"hostname"`
 }
 
+// WebSearchOptions controls the oneSearch request. TimeRange filters by recency
+// (NoLimit / OneDay / OneWeek / OneMonth / OneYear — other values are ignored by
+// the gateway). The contents flags unlock richer per-result fields: Summary is an
+// AI summary, MainText the full page text, MarkdownText the page text as markdown.
+type WebSearchOptions struct {
+	TimeRange    string
+	MainText     bool
+	MarkdownText bool
+	Summary      bool
+}
+
+var webSearchTimeRanges = map[string]bool{
+	"NoLimit": true, "OneDay": true, "OneWeek": true, "OneMonth": true, "OneYear": true,
+}
+
 // WebSearch runs a web search through the QoderCN gateway's oneSearch endpoint,
 // posting the {payload, encodeVersion} envelope plaintext with Encode=0.
-func (c *Client) WebSearch(ctx context.Context, query string) ([]SearchResult, error) {
+func (c *Client) WebSearch(ctx context.Context, query string, opts WebSearchOptions) ([]SearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("web search query is empty")
+	}
+	timeRange := strings.TrimSpace(opts.TimeRange)
+	if !webSearchTimeRanges[timeRange] {
+		timeRange = "NoLimit" // gateway silently ignores unknown values; normalize
 	}
 	cred, err := LoadCredential(c.cfg.AuthFile)
 	if err != nil {
@@ -388,10 +409,12 @@ func (c *Client) WebSearch(ctx context.Context, query string) ([]SearchResult, e
 	}
 	inner, err := json.Marshal(map[string]any{
 		"query":     query,
-		"timeRange": "NoLimit",
-		// Unlock the richer per-result summary (fuller than the snippet). mainText
-		// / markdownText stay off to keep the response size sane.
-		"contents": map[string]any{"mainText": false, "markdownText": false, "summary": true},
+		"timeRange": timeRange,
+		"contents": map[string]any{
+			"mainText":     opts.MainText,
+			"markdownText": opts.MarkdownText,
+			"summary":      opts.Summary,
+		},
 	})
 	if err != nil {
 		return nil, err

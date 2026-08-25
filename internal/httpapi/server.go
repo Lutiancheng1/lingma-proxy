@@ -2025,23 +2025,25 @@ func stripAnthropicHostedWebSearchTool(raw any) any {
 // model can cite when answering.
 func formatWebSearchResults(query string, results []remote.SearchResult) string {
 	const maxResults = 5
-	const maxSnippetRunes = 500
+	const maxBodyRunes = 1500
 	var b strings.Builder
 	fmt.Fprintf(&b, "Web search results for %q (use these to answer the question above; cite the source links):\n", query)
 	for i, r := range results {
 		if i >= maxResults {
 			break
 		}
-		// Prefer the richer summary (unlocked via contents.summary) over the
-		// short snippet when present.
-		snippet := strings.TrimSpace(r.Summary)
-		if snippet == "" {
-			snippet = strings.TrimSpace(r.Snippet)
+		// Use the richest field the caller unlocked: full page text > markdown >
+		// AI summary > short snippet.
+		body := ""
+		for _, cand := range []string{r.MainText, r.MarkdownText, r.Summary, r.Snippet} {
+			if body = strings.TrimSpace(cand); body != "" {
+				break
+			}
 		}
-		if rs := []rune(snippet); len(rs) > maxSnippetRunes {
-			snippet = string(rs[:maxSnippetRunes]) + "…"
+		if rs := []rune(body); len(rs) > maxBodyRunes {
+			body = string(rs[:maxBodyRunes]) + "…"
 		}
-		fmt.Fprintf(&b, "\n[%d] %s\n%s\n%s\n", i+1, strings.TrimSpace(r.Title), strings.TrimSpace(r.Link), snippet)
+		fmt.Fprintf(&b, "\n[%d] %s\n%s\n%s\n", i+1, strings.TrimSpace(r.Title), strings.TrimSpace(r.Link), body)
 	}
 	return b.String()
 }

@@ -417,11 +417,11 @@ func (s *Service) Quota(ctx context.Context) (*remote.Quota, error) {
 
 // WebSearch runs a web search via the gateway's oneSearch endpoint (remote
 // backend only), servicing Claude Code's hosted web_search tool.
-func (s *Service) WebSearch(ctx context.Context, query string) ([]remote.SearchResult, error) {
+func (s *Service) WebSearch(ctx context.Context, query string, opts remote.WebSearchOptions) ([]remote.SearchResult, error) {
 	if s.backend() != BackendRemote {
 		return nil, errors.New("web search is only available in remote backend mode")
 	}
-	return s.remoteClientLocked().WebSearch(ctx, query)
+	return s.remoteClientLocked().WebSearch(ctx, query, opts)
 }
 
 // ImageSearch runs an image search via the gateway (remote backend only).

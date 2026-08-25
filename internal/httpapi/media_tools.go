@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"lingma-ipc-proxy/internal/remote"
 	"lingma-ipc-proxy/internal/service"
 	"lingma-ipc-proxy/internal/toolemulation"
 )
@@ -96,6 +97,15 @@ func partitionServerToolCalls(calls []toolemulation.ToolCall) (ours, others []to
 	return ours, others
 }
 
+// argBool reads a boolean tool argument, falling back to def when absent (so an
+// omitted flag keeps its default rather than becoming false).
+func argBool(args map[string]any, key string, def bool) bool {
+	if v, ok := args[key].(bool); ok {
+		return v
+	}
+	return def
+}
+
 // executeServerTool runs one injected tool call and returns its result as text.
 func (s *Server) executeServerTool(ctx context.Context, call toolemulation.ToolCall) string {
 	switch call.Name {
@@ -104,7 +114,13 @@ func (s *Server) executeServerTool(ctx context.Context, call toolemulation.ToolC
 		if query == "" {
 			return "Web search failed: empty query"
 		}
-		results, err := s.svc.WebSearch(ctx, query)
+		opts := remote.WebSearchOptions{
+			TimeRange:    strings.TrimSpace(stringFromAny(call.Arguments["timeRange"])),
+			MainText:     argBool(call.Arguments, "mainText", false),
+			MarkdownText: argBool(call.Arguments, "markdownText", false),
+			Summary:      argBool(call.Arguments, "summary", true), // default on: richer than snippet
+		}
+		results, err := s.svc.WebSearch(ctx, query, opts)
 		if err != nil {
 			return "Web search failed: " + err.Error()
 		}

@@ -13,7 +13,9 @@ CRITICAL REQUIREMENT - You MUST follow this:
   - After answering the user's question, you MUST include a "Sources:" section at the end of your response
   - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
 IMPORTANT - Use the correct year in search queries:
-  - You MUST use the current year when searching for recent information, documentation, or current events.`
+  - You MUST use the current year when searching for recent information, documentation, or current events.
+- For time-sensitive queries, set timeRange (OneDay/OneWeek/OneMonth/OneYear) to restrict results by recency; leave it NoLimit otherwise.
+- summary is on by default. Set mainText for deep reading of the full page text; these enlarge the result, so use them only when needed.`
 
 const imageSearchToolDescription = `Search the web for images and return structured metadata for candidate results. The tool DOES NOT download originals into the workspace; it returns result metadata such as title, imageUrl, and dimensions.
 Use this for visual research and real-world asset sourcing, such as brand references, product imagery, places, events, or other existing/factual visuals.
@@ -48,6 +50,14 @@ var webSearchSpec = serverToolSpec{
 		"type": "object",
 		"properties": map[string]any{
 			"query": map[string]any{"type": "string", "description": "The web search query."},
+			"timeRange": map[string]any{
+				"type":        "string",
+				"enum":        []any{"NoLimit", "OneDay", "OneWeek", "OneMonth", "OneYear"},
+				"description": "Recency filter: NoLimit (default), OneDay, OneWeek, OneMonth, or OneYear.",
+			},
+			"summary":      map[string]any{"type": "boolean", "description": "Include an AI-generated summary per result (default true; richer than the snippet)."},
+			"mainText":     map[string]any{"type": "boolean", "description": "Include the full extracted page text per result (default false; large — deep reading only)."},
+			"markdownText": map[string]any{"type": "boolean", "description": "Include the page text as markdown per result (default false; best-effort)."},
 		},
 		"required": []any{"query"},
 	},
