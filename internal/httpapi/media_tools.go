@@ -16,11 +16,10 @@ import (
 // proxy advertises the gateway-only ImageSearch/ImageGen tools to the model and
 // executes them server-side in an agentic loop, so a client that has no such
 // tools (e.g. Claude Code) can search/generate images. The injected tool calls
-// are never surfaced to the client; only the final answer is.
-//
-// Trade-off: while enabled, the final answer is produced by a non-streaming
-// generation loop and then emitted, so it is not token-by-token streamed. Keep
-// the flag off for latency-sensitive pure-coding use.
+// are never surfaced to the client; only the model's answer is. Streaming
+// requests keep real token-by-token streaming — thinking and text flow live and
+// only our own tool calls are intercepted (executed server-side, with the
+// post-tool continuation stitched into the same message).
 
 const maxMediaToolRounds = 4
 
@@ -144,14 +143,17 @@ func splitDataURL(u string) (mediaType, b64 string) {
 	return mediaType, b64
 }
 
-// handleAnthropicMediaTools runs the agentic loop: generate, execute any of our
-// injected tool calls, feed results back, repeat, then emit the final answer.
+// handleAnthropicMediaTools advertises + executes our injected media tools in an
+// agentic loop. Streaming requests keep real token-by-token streaming (thinking
+// and text flow live); only our own tool calls are suppressed and the post-tool
+// continuation is stitched into the same message.
 func (s *Server) handleAnthropicMediaTools(w http.ResponseWriter, r *http.Request, req anthropicRequest) {
-	ctx := r.Context()
 	req = injectMediaTools(req)
-
-	var finalResult *service.ChatResult
-	var finalReq service.ChatRequest
+	if req.Stream {
+		s.streamAnthropicMediaTools(w, r, req)
+		return
+	}
+	ctx := r.Context()
 	for round := 0; ; round++ {
 		normalized, err := normalizeAnthropicRequest(req)
 		if err != nil {
@@ -166,40 +168,159 @@ func (s *Server) handleAnthropicMediaTools(w http.ResponseWriter, r *http.Reques
 		}
 		ours, others := partitionMediaToolCalls(result.ToolCalls)
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
-			finalResult, finalReq = result, normalized
-			break
+			s.emitAnthropicResultJSON(w, normalized, result)
+			return
 		}
-		// Record the assistant tool_use turn and the tool_result turn, then loop.
-		assistantContent := make([]any, 0, len(ours)+1)
-		if strings.TrimSpace(result.Text) != "" {
-			assistantContent = append(assistantContent, map[string]any{"type": "text", "text": result.Text})
-		}
-		for _, c := range ours {
-			assistantContent = append(assistantContent, map[string]any{"type": "tool_use", "id": c.ID, "name": c.Name, "input": c.Arguments})
-		}
-		req.Messages = append(req.Messages, rawMessage{Role: "assistant", Content: assistantContent})
-
-		userContent := make([]any, 0, len(ours))
-		for _, c := range ours {
-			userContent = append(userContent, map[string]any{
-				"type":        "tool_result",
-				"tool_use_id": c.ID,
-				"content":     s.executeMediaTool(ctx, c),
-			})
-		}
-		req.Messages = append(req.Messages, rawMessage{Role: "user", Content: userContent})
-
-		// On the last permitted round, strip our tools so the model must answer.
-		if round+1 >= maxMediaToolRounds {
-			req.Tools = stripInjectedMediaTools(req.Tools)
-		}
+		req = s.appendMediaToolTurn(ctx, req, result, ours, round+1 >= maxMediaToolRounds)
 	}
+}
 
-	if req.Stream {
-		s.emitAnthropicResultStream(w, finalReq, finalResult)
+// appendMediaToolTurn records the assistant tool_use turn and the executed
+// tool_result turn onto req, and strips our tools on the last round so the model
+// is forced to answer.
+func (s *Server) appendMediaToolTurn(ctx context.Context, req anthropicRequest, result *service.ChatResult, ours []toolemulation.ToolCall, lastRound bool) anthropicRequest {
+	assistantContent := make([]any, 0, len(ours)+1)
+	if strings.TrimSpace(result.Text) != "" {
+		assistantContent = append(assistantContent, map[string]any{"type": "text", "text": result.Text})
+	}
+	for _, c := range ours {
+		assistantContent = append(assistantContent, map[string]any{"type": "tool_use", "id": c.ID, "name": c.Name, "input": c.Arguments})
+	}
+	req.Messages = append(req.Messages, rawMessage{Role: "assistant", Content: assistantContent})
+
+	userContent := make([]any, 0, len(ours))
+	for _, c := range ours {
+		userContent = append(userContent, map[string]any{
+			"type":        "tool_result",
+			"tool_use_id": c.ID,
+			"content":     s.executeMediaTool(ctx, c),
+		})
+	}
+	req.Messages = append(req.Messages, rawMessage{Role: "user", Content: userContent})
+	if lastRound {
+		req.Tools = stripInjectedMediaTools(req.Tools)
+	}
+	return req
+}
+
+// streamAnthropicMediaTools streams the agentic loop as a single Anthropic
+// message: thinking/text deltas are forwarded live, our tool calls are executed
+// server-side (never sent to the client), and the post-tool continuation is
+// appended as further content blocks in the same message.
+func (s *Server) streamAnthropicMediaTools(w http.ResponseWriter, r *http.Request, req anthropicRequest) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeAnthropicError(w, http.StatusInternalServerError, "api_error", "streaming is not supported by this server")
 		return
 	}
-	s.emitAnthropicResultJSON(w, finalReq, finalResult)
+	ctx := r.Context()
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = "lingma"
+	}
+	streamingHeaders(w)
+	_ = writeSSEEvent(w, flusher, "message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id": fmt.Sprintf("msg_%d", time.Now().UnixNano()), "type": "message", "role": "assistant",
+			"content": []any{}, "model": model, "stop_reason": nil, "stop_sequence": nil,
+			"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
+		},
+	})
+
+	index := 0
+	totalOutput := 0
+	blockStart := func(block map[string]any) {
+		_ = writeSSEEvent(w, flusher, "content_block_start", map[string]any{"type": "content_block_start", "index": index, "content_block": block})
+	}
+	blockDelta := func(delta map[string]any) {
+		_ = writeSSEEvent(w, flusher, "content_block_delta", map[string]any{"type": "content_block_delta", "index": index, "delta": delta})
+	}
+	blockStop := func() {
+		_ = writeSSEEvent(w, flusher, "content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
+		index++
+	}
+
+	for round := 0; ; round++ {
+		normalized, err := normalizeAnthropicRequest(req)
+		if err != nil {
+			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]any{"output_tokens": totalOutput}})
+			_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
+			return
+		}
+		s.applyDefaultModel(&normalized)
+		emitThinking := reasoningEffortEnabled(normalized.ReasoningEffort)
+
+		events, done, err := s.svc.GenerateStream(ctx, normalized)
+		if err != nil {
+			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]any{"output_tokens": totalOutput}})
+			_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
+			return
+		}
+
+		thinkingOpen, textOpen := false, false
+		for ev := range events {
+			switch ev.Type {
+			case service.StreamEventThinking:
+				if !emitThinking {
+					continue
+				}
+				if textOpen {
+					blockStop()
+					textOpen = false
+				}
+				if !thinkingOpen {
+					blockStart(map[string]any{"type": "thinking", "thinking": ""})
+					thinkingOpen = true
+				}
+				blockDelta(map[string]any{"type": "thinking_delta", "thinking": ev.Delta})
+			case service.StreamEventText:
+				if thinkingOpen {
+					blockStop()
+					thinkingOpen = false
+				}
+				if !textOpen {
+					blockStart(map[string]any{"type": "text", "text": ""})
+					textOpen = true
+				}
+				blockDelta(map[string]any{"type": "text_delta", "text": ev.Delta})
+				// StreamEventToolCall fragments are buffered by the service and
+				// surface in the final result; we decide on them there.
+			}
+		}
+		if thinkingOpen {
+			blockStop()
+		}
+		if textOpen {
+			blockStop()
+		}
+
+		res := <-done
+		if res.Err != nil || res.Result == nil {
+			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]any{"output_tokens": totalOutput}})
+			_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
+			return
+		}
+		result := res.Result
+		totalOutput += result.OutputTokens
+		ours, others := partitionMediaToolCalls(result.ToolCalls)
+
+		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
+			// Finalize: forward any genuine client tool calls, then close the message.
+			for _, tc := range others {
+				argsJSON, _ := json.Marshal(tc.Arguments)
+				blockStart(map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": map[string]any{}})
+				blockDelta(map[string]any{"type": "input_json_delta", "partial_json": string(argsJSON)})
+				blockStop()
+			}
+			stopReason, stopSequence := anthropicStopReason(result)
+			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": stopSequence}, "usage": map[string]any{"output_tokens": totalOutput}})
+			_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
+			return
+		}
+		// Execute our tools server-side and continue the same message next round.
+		req = s.appendMediaToolTurn(ctx, req, result, ours, round+1 >= maxMediaToolRounds)
+	}
 }
 
 func (s *Server) emitAnthropicResultJSON(w http.ResponseWriter, req service.ChatRequest, result *service.ChatResult) {
@@ -238,49 +359,3 @@ func (s *Server) emitAnthropicResultJSON(w http.ResponseWriter, req service.Chat
 	})
 }
 
-func (s *Server) emitAnthropicResultStream(w http.ResponseWriter, req service.ChatRequest, result *service.ChatResult) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeAnthropicError(w, http.StatusInternalServerError, "api_error", "streaming is not supported by this server")
-		return
-	}
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		model = "lingma"
-	}
-	msgID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
-	streamingHeaders(w)
-	_ = writeSSEEvent(w, flusher, "message_start", map[string]any{
-		"type": "message_start",
-		"message": map[string]any{
-			"id": msgID, "type": "message", "role": "assistant", "content": []any{},
-			"model": model, "stop_reason": nil, "stop_sequence": nil, "usage": anthropicInputUsage(result),
-		},
-	})
-	index := 0
-	if shouldEmitAnthropicThinking(req, result) {
-		_ = writeSSEEvent(w, flusher, "content_block_start", map[string]any{"type": "content_block_start", "index": index, "content_block": map[string]any{"type": "thinking", "thinking": ""}})
-		_ = writeSSEEvent(w, flusher, "content_block_delta", map[string]any{"type": "content_block_delta", "index": index, "delta": map[string]any{"type": "thinking_delta", "thinking": result.ThoughtText}})
-		_ = writeSSEEvent(w, flusher, "content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
-		index++
-	}
-	if strings.TrimSpace(result.Text) != "" {
-		_ = writeSSEEvent(w, flusher, "content_block_start", map[string]any{"type": "content_block_start", "index": index, "content_block": map[string]any{"type": "text", "text": ""}})
-		_ = writeSSEEvent(w, flusher, "content_block_delta", map[string]any{"type": "content_block_delta", "index": index, "delta": map[string]any{"type": "text_delta", "text": result.Text}})
-		_ = writeSSEEvent(w, flusher, "content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
-		index++
-	}
-	for _, tc := range result.ToolCalls {
-		if isEmbeddedMediaTool(tc.Name) {
-			continue
-		}
-		argsJSON, _ := json.Marshal(tc.Arguments)
-		_ = writeSSEEvent(w, flusher, "content_block_start", map[string]any{"type": "content_block_start", "index": index, "content_block": map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": map[string]any{}}})
-		_ = writeSSEEvent(w, flusher, "content_block_delta", map[string]any{"type": "content_block_delta", "index": index, "delta": map[string]any{"type": "input_json_delta", "partial_json": string(argsJSON)}})
-		_ = writeSSEEvent(w, flusher, "content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
-		index++
-	}
-	stopReason, stopSequence := anthropicStopReason(result)
-	_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": stopSequence}, "usage": map[string]any{"output_tokens": result.OutputTokens}})
-	_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
-}
