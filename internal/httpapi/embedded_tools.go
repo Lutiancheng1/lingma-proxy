@@ -2,13 +2,8 @@ package httpapi
 
 import "lingma-ipc-proxy/internal/toolemulation"
 
-// Embedded tool descriptions extracted verbatim from the QoderCN CLI
-// (qoderclicn) tool registry. These back gateway-only capabilities that clients
-// like Claude Code / OpenAI clients do not have natively (web search / image
-// search). The text is the model-facing description the CLI ships, reused so an
-// advertised tool behaves the same way the CLI's does. The proxy advertises
-// these as "server tools": the model decides whether to call them, and the
-// proxy executes them server-side (see media_tools.go / openai_server_tools.go).
+// Model-facing tool descriptions taken verbatim from the QoderCN CLI so the
+// proxy's advertised "server tools" behave the way that CLI's do.
 
 const webSearchToolDescription = `- Allows the model to search the web and use the results to inform responses
 - Provides up-to-date information for current events and recent data
@@ -38,11 +33,8 @@ const (
 	textPolishToolName  = "TextPolish" + serverToolSuffix
 )
 
-// serverToolSpec is the canonical definition of a proxy-executed "server tool":
-// a gateway-only capability the proxy advertises to the model and runs
-// server-side. One spec generates both the Anthropic tool def (a raw map with
-// input_schema) and the OpenAI/service ToolDef, so the two API surfaces stay in
-// sync from a single source.
+// serverToolSpec is the canonical definition of a proxy-executed server tool;
+// one spec feeds both the Anthropic tool def and the OpenAI ToolDef.
 type serverToolSpec struct {
 	name        string
 	description string

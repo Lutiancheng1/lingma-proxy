@@ -1,9 +1,7 @@
 name: Release (fork CLI)
 
-# Fork-only CLI release. Kept separate from release.yml so a PR back upstream
-# stays clean. Manual dispatch only (does not trigger on tag push), so it never
-# double-runs alongside the upstream release.yml (which triggers on "v*").
-# The tag is created by the release step on the ref you dispatch from.
+# Fork-only CLI release, kept separate from release.yml so upstream PRs stay
+# clean. Manual dispatch only, so it never double-runs with release.yml (on "v*").
 on:
   workflow_dispatch:
     inputs:

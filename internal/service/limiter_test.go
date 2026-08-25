@@ -54,9 +54,7 @@ func TestOutputLimiterDisabledPassThrough(t *testing.T) {
 }
 
 func TestOutputLimiterFlushEmitsHeldBackTail(t *testing.T) {
-	// A multi-rune stop sets holdback>0, so a partial tail is buffered for
-	// cross-delta detection. When no stop ever matches, Flush must emit that
-	// tail — no legitimate output may be silently dropped.
+	// No stop matches, so Flush must emit the held-back tail rather than drop it.
 	l := newOutputLimiter(0, []string{"STOP"})
 	out := l.Push("hello") // holdback 3 -> emits "he", pending "llo"
 	out += l.Flush()       // no stop hit -> flush "llo"

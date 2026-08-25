@@ -1,22 +1,13 @@
-// cc-switch custom usage script for lingma-proxy.
+// cc-switch custom usage script for lingma-proxy: shows the QoderCN/Lingma
+// credit quota from the proxy's /quota endpoint (real gateway numbers).
 //
-// Shows the QoderCN/Lingma account credit quota in cc-switch's usage display
-// by calling the proxy's /quota endpoint (real numbers from the gateway's
-// openapi, never estimated).
+// In cc-switch (provider → usage query → template "custom"): base URL = your
+// proxy, API key = your proxy inbound key, script = this whole file. cc-switch
+// substitutes {{apiKey}}/{{baseUrl}} and runs the HTTP request itself (its JS
+// sandbox has no network), passing the parsed JSON to extractor().
 //
-// How to use (cc-switch → provider → usage query → template: "custom"):
-//   - base URL  : your proxy, e.g. http://127.0.0.1:8095
-//   - API key   : your proxy inbound key (the one in auth-keys.txt)
-//   - script    : paste this whole file
-//
-// cc-switch substitutes {{apiKey}} / {{baseUrl}} before running the script,
-// then performs the HTTP request itself (the JS sandbox has no network) and
-// passes the parsed JSON response to extractor(). The request is same-origin
-// with base URL and loopback, so it passes cc-switch's URL safety checks.
-//
-// /quota response shape:
-//   { user_type, unit, total, used, remaining, percentage, is_exceeded,
-//     reset_at_ms, source }
+// /quota response: { user_type, unit, total, used, remaining, percentage,
+//   is_exceeded, reset_at_ms, source }
 ({
   request: {
     url: "{{baseUrl}}".replace(/\/+$/, "") + "/quota",

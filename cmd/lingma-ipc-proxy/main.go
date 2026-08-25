@@ -70,9 +70,8 @@ func main() {
 
 	server := httpapi.NewServer(addr, svc)
 
-	// Inbound auth is opt-in: only enabled when an auth-keys file is configured.
-	// If configured but empty/unreadable we fail closed rather than silently
-	// exposing the gateway (important when fronted by a public tunnel).
+	// Inbound auth is opt-in via an auth-keys file; if configured but empty/unreadable
+	// we fail closed rather than silently expose the gateway (e.g. behind a public tunnel).
 	if cfg.AuthKeysFile != "" {
 		keys, err := loadAuthKeys(cfg.AuthKeysFile)
 		if err != nil {
@@ -212,9 +211,8 @@ func loadConfig() (service.Config, string) {
 	return cfg, configPath
 }
 
-// loadAuthKeys reads an inbound API-key allowlist: one key per line, with blank
-// lines and lines beginning with '#' ignored. Duplicates and ordering do not
-// matter. Returns the parsed keys (possibly empty) or a read error.
+// loadAuthKeys reads an inbound API-key allowlist: one key per line, blank lines
+// and lines beginning with '#' ignored.
 func loadAuthKeys(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

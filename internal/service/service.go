@@ -116,15 +116,12 @@ type ChatResult struct {
 	UsedTokens        int
 	LimitTokens       int
 	CachedInputTokens int
-	// CacheCreationInputTokens is the Anthropic cache-write count. The QoderCN
-	// gateway does not report it, so it stays 0; kept for protocol completeness
-	// and future backends that do supply it. Never fabricated.
+	// CacheCreationInputTokens is the Anthropic cache-write count. QoderCN never
+	// reports it (stays 0); kept for protocol completeness and future backends.
 	CacheCreationInputTokens int
 	ReasoningTokens          int
-	// Credits is the QoderCN gateway's real per-request charge; OriginalCredits
-	// is the pre-discount charge and Billable whether the call was metered. All
-	// three come straight from the gateway usage frame (never estimated) and are
-	// exposed in the response usage object for downstream billing (e.g. cc-switch).
+	// Credits is the QoderCN gateway's real per-request charge; OriginalCredits is
+	// the pre-discount charge and Billable whether the call was metered.
 	Credits         float64
 	OriginalCredits float64
 	Billable        bool
@@ -191,8 +188,7 @@ type Service struct {
 }
 
 // cachedRemoteModels returns the gateway's model list, refetched at most every
-// few minutes. On a fetch error it returns the last good snapshot (or nil), so
-// resolution degrades to pass-through rather than failing.
+// few minutes; on error it returns the last good snapshot (or nil).
 func (s *Service) cachedRemoteModels(ctx context.Context) []remote.Model {
 	s.remoteModelsMu.Lock()
 	cached := s.remoteModels
@@ -212,11 +208,8 @@ func (s *Service) cachedRemoteModels(ctx context.Context) []remote.Model {
 	return models
 }
 
-// resolveRemoteModel maps the requested model to a gateway key using the live
-// (cached) model list: exact key or display-name match wins. Unknown names pass
-// through verbatim (the gateway validates them — a client/config concern). The
-// small static alias map is only a last-resort fallback (e.g. "auto") and for
-// offline resilience when the list is unavailable.
+// resolveRemoteModel maps the requested model to a gateway key via the cached
+// model list (key or display-name match), falling back to the static alias map.
 func (s *Service) resolveRemoteModel(ctx context.Context, model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -378,11 +371,8 @@ func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
 			if name == "" {
 				name = key
 			}
-			// Expose the real model name (display name) as the id so downstream
-			// sees e.g. "GLM-5.2" instead of the opaque gateway key "gm51model".
-			// The key is kept in InternalID (surfaced as gateway_key); requests
-			// resolve either the name or the key back to the key via
-			// resolveRemoteModel.
+			// Expose the display name as the id (so downstream sees "GLM-5.2" not
+			// the opaque key "gm51model"); the key is kept in InternalID for resolution.
 			out = append(out, Model{ID: name, Name: name, InternalID: key, Raw: model.Raw})
 		}
 		// Trust the gateway's list as authoritative; no hardcoded fallback probing
@@ -426,8 +416,7 @@ func (s *Service) Quota(ctx context.Context) (*remote.Quota, error) {
 }
 
 // WebSearch runs a web search via the gateway's oneSearch endpoint (remote
-// backend only). Used to service Claude Code's hosted web_search tool, which
-// the gateway's chat endpoint cannot execute inline.
+// backend only), servicing Claude Code's hosted web_search tool.
 func (s *Service) WebSearch(ctx context.Context, query string) ([]remote.SearchResult, error) {
 	if s.backend() != BackendRemote {
 		return nil, errors.New("web search is only available in remote backend mode")
@@ -482,9 +471,8 @@ func (s *Service) Generate(ctx context.Context, req ChatRequest) (*ChatResult, e
 	return result, err
 }
 
-// applyLimiterFinish records the proxy-enforced finish reason onto a result.
-// FinishReason stays canonical OpenAI-style ("length"/"stop"); the Anthropic
-// stop_reason is derived from it downstream.
+// applyLimiterFinish records the proxy-enforced finish reason (canonical
+// OpenAI-style "length"/"stop"; Anthropic stop_reason is derived downstream).
 func applyLimiterFinish(result *ChatResult, lim *outputLimiter) {
 	result.FinishReason = lim.openAIFinish()
 	result.StopSequence = lim.stopSeq
@@ -575,14 +563,11 @@ func (s *Service) generateRemoteInternal(
 	onDelta func(StreamEvent),
 	emulateTools bool,
 ) (*ChatResult, error) {
-	// Default to the gateway's NATIVE structured tool messages (assistant
-	// tool_calls + tool-role results + native tools/tool_choice), which every
-	// current QoderCN model supports. Text-emulation flattening is kept as an
+	// Default to native structured tool messages; text-emulation flattening is an
 	// opt-in fallback via LINGMA_REMOTE_EMULATE_TOOLS for models that regress.
 	emulateTools = emulateTools || (shouldEmulateRemoteTools(req) && remoteToolEmulationEnabled())
-	// Images are sent natively as base64 content parts (image_url) — the remote
-	// gateway accepts inline base64 for vision models, so no IPC round-trip or
-	// image upload step is required.
+	// Images are sent natively as base64 content parts; the gateway accepts inline
+	// base64 for vision models, so no IPC round-trip is required.
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = s.DefaultModel()
 	}
@@ -757,9 +742,7 @@ func shouldEmulateRemoteTools(req ChatRequest) bool {
 }
 
 // remoteToolEmulationEnabled opts back into the legacy text-emulation tool path
-// (flatten the conversation to a prompt + inject tool instructions) instead of
-// the default native structured tool messages. Escape hatch for a model that
-// misbehaves with native function calling.
+// instead of native structured tool messages — an escape hatch for regressions.
 func remoteToolEmulationEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("LINGMA_REMOTE_EMULATE_TOOLS"))) {
 	case "1", "true", "yes":

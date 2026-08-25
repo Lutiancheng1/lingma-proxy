@@ -32,9 +32,8 @@ type Server struct {
 	recMu   sync.RWMutex
 	records []debugRequestRecord
 	logs    []debugLogRecord
-	// authKeys, when non-empty, gates every non-OPTIONS request behind an
-	// Authorization: Bearer <key> or x-api-key: <key> match. Empty means open
-	// access (the default); populated only when an auth key file is configured.
+	// authKeys, when non-empty, gates every request behind an Authorization:
+	// Bearer or x-api-key match. Empty (the default) means open access.
 	authKeys map[string]struct{}
 	// OnRequest is called after each request completes with summary info.
 	// method, path, statusCode, duration, requestBody, responseBody
@@ -105,9 +104,9 @@ type openAIResponsesRequest struct {
 	Text              any      `json:"text,omitempty"`
 }
 
-// streamOptions mirrors OpenAI's stream_options; include_usage gates the
-// trailing usage chunk. We only suppress on an explicit false so usage-reliant
-// clients (e.g. cc-switch) that omit it keep receiving real token counts.
+// streamOptions mirrors OpenAI's stream_options. We suppress the trailing usage
+// chunk only on an explicit include_usage=false, so clients that omit it still
+// get real token counts.
 type streamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
 }
@@ -396,11 +395,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// modelObject merges the full upstream model object (model.Raw:
-// max_input_tokens, context_config, is_vl, is_reasoning, thinking_config,
-// price_factor, promotion, ...) with the canonical OpenAI fields, so downstream
-// receives every gateway-provided attribute plus a stable id/name/gateway_key.
-// For non-remote backends Raw is empty and only the canonical fields appear.
+// modelObject merges the full upstream model object (model.Raw) with the
+// canonical OpenAI fields (id/name/gateway_key). Raw is empty for non-remote
+// backends, leaving only the canonical fields.
 func modelObject(model service.Model, created int64) map[string]any {
 	obj := make(map[string]any, len(model.Raw)+5)
 	for k, v := range model.Raw {
@@ -801,10 +798,8 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Advertise gateway-only "server tools" and execute them server-side in an
-	// agentic loop: web_search whenever the client declares a hosted web_search
-	// tool (the gateway's chat endpoint cannot run it inline), and ImageSearch
-	// when the injection flag is set. The model decides whether to call them;
+	// Advertise gateway-only server tools (web_search, ImageSearch) and run them
+	// server-side in an agentic loop; the model decides whether to call them and
 	// our tool calls never reach the client.
 	if defs, ok := s.anthropicServerToolDefs(req); ok {
 		req = injectAnthropicServerTools(req, defs)
@@ -890,9 +885,9 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 	}
 	s.applyDefaultModel(&normalized)
 
-	// Opt-in: advertise + server-side execute the gateway's web_search /
-	// ImageSearch tools so an OpenAI client without them can still use them. The
-	// model decides whether to call them; our tool calls never reach the client.
+	// Opt-in: advertise + run the gateway's web_search / ImageSearch tools so an
+	// OpenAI client without them can still use them; our tool calls never reach
+	// the client.
 	if mediaToolsEnabled() {
 		normalized = injectOpenAIServerTools(normalized)
 		emitUsage := req.StreamOptions == nil || req.StreamOptions.IncludeUsage
@@ -1115,8 +1110,7 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 }
 
 // writeAnthropicStreamBody consumes the service stream and emits the Anthropic
-// SSE sequence after message_start (written by the caller). Extracted so the
-// incremental tool_use / thinking / text block state machine is unit-testable.
+// SSE sequence after message_start (written by the caller).
 func writeAnthropicStreamBody(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, req service.ChatRequest, events <-chan service.StreamEvent, done <-chan service.StreamResult) {
 	filter := newToolStreamFilter(len(req.Tools) > 0)
 	eventsCh := events
@@ -1184,9 +1178,8 @@ func writeAnthropicStreamBody(ctx context.Context, w http.ResponseWriter, flushe
 					continue
 				}
 				if !streamedTool {
-					// First tool fragment: flush any buffered text tail into the
-					// text block, then close open thinking/text blocks. Tool blocks
-					// are allocated after them.
+					// First tool fragment: flush the buffered text tail, then close
+					// open thinking/text blocks before allocating tool blocks.
 					for _, delta := range filter.Flush() {
 						if err := emitText(delta); err != nil {
 							return
@@ -1302,10 +1295,9 @@ func writeAnthropicStreamBody(ctx context.Context, w http.ResponseWriter, flushe
 				}
 			default:
 				if streamedTool {
-					// Anthropic blocks are strictly ordered; once a tool block has
-					// opened we must not reopen earlier text/thinking indices.
-					// QoderCN ends the turn at the tool call, so there is no
-					// legitimate trailing text to emit here.
+					// Anthropic blocks are strictly ordered; once a tool block is
+					// open we must not reopen earlier text/thinking indices (QoderCN
+					// ends the turn at the tool call anyway).
 					continue
 				}
 				for _, delta := range filter.Push(event.Delta) {
@@ -1711,9 +1703,8 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 			}
 		}
 	}
-	// Only emit tool calls here if they were NOT already streamed incrementally
-	// (native path streams them live; the emulation path parses them from text
-	// and surfaces them only in final.ToolCalls).
+	// Emit tool calls here only if not already streamed incrementally (the
+	// emulation path surfaces them only in final.ToolCalls).
 	if !streamedTool {
 		for i, tc := range final.ToolCalls {
 			argsJSON, _ := json.Marshal(tc.Arguments)
@@ -1748,10 +1739,8 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 	}); err != nil {
 		return
 	}
-	// Final usage chunk (real upstream tokens) in a trailing choices:[] chunk.
-	// Suppressed only when the client explicitly set stream_options.include_usage
-	// = false (per OpenAI spec); emitted otherwise so usage-reliant clients keep
-	// the real token/cache counts.
+	// Trailing usage chunk (real upstream tokens); suppressed only on an explicit
+	// stream_options.include_usage=false per the OpenAI spec.
 	if emitUsage {
 		_ = writeOpenAIChunk(w, flusher, map[string]any{
 			"id":      chatID,
@@ -2058,9 +2047,8 @@ func formatWebSearchResults(query string, results []remote.SearchResult) string 
 }
 
 func estimateAnthropicInputTokens(req anthropicRequest) int {
-	// Estimate from TEXT only; image base64 must never be counted rune-by-rune
-	// (a single 1MB image would otherwise inflate the estimate by ~460k tokens
-	// and break clients that use count_tokens for context budgeting/compaction).
+	// Estimate from TEXT only; counting image base64 rune-by-rune would wildly
+	// inflate the estimate and break clients that budget context off count_tokens.
 	var b strings.Builder
 	b.WriteString(req.Model)
 	b.WriteByte('\n')
@@ -2439,11 +2427,9 @@ func extractReasoningEffort(reasoning any) string {
 	return stringFromAny(m["effort"])
 }
 
-// resolveAnthropicEffort picks the reasoning effort for a request. Explicit
-// effort strings take precedence over any budget-derived bucket, and they are
-// forwarded VERBATIM (no clamping) so QoderCN-native levels such as xhigh/max
-// reach the gateway. Priority: thinking.effort -> output_config.effort ->
-// top-level effort -> coarse budget_tokens bucket.
+// resolveAnthropicEffort picks the reasoning effort, preferring an explicit
+// string (forwarded verbatim so native levels like xhigh/max reach the gateway)
+// over a budget-derived bucket.
 func resolveAnthropicEffort(req anthropicRequest) string {
 	if e := anthropicThinkingEffortString(req.Thinking); e != "" {
 		return e
@@ -2490,8 +2476,7 @@ func extractAnthropicReasoningEffort(thinking any) string {
 		// treat adaptive as an enabled reasoning request with default effort
 	case "disabled":
 		// Explicitly turn thinking off (maps to enable_thinking:false downstream)
-		// so Anthropic clients can stop a reasoning-default model from consuming
-		// the whole budget on hidden thinking.
+		// so clients can stop a reasoning-default model spending its budget on it.
 		return "none"
 	default:
 		return ""
@@ -2603,10 +2588,9 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	_ = json.NewEncoder(w).Encode(data)
 }
 
-// anthropicInputUsage builds the input side of an Anthropic usage object.
-// Anthropic reports cached prompt tokens separately from input_tokens, so the
-// cached portion is split out into cache_read_input_tokens (letting clients such
-// as Claude Code display cache hits) and removed from input_tokens.
+// anthropicInputUsage builds the input side of an Anthropic usage object,
+// splitting cached prompt tokens out into cache_read_input_tokens (as Anthropic
+// reports them) and subtracting them from input_tokens.
 func anthropicInputUsage(result *service.ChatResult) map[string]any {
 	input := result.InputTokens
 	usage := map[string]any{"output_tokens": 0}
@@ -2634,11 +2618,9 @@ func anthropicFinalUsage(result *service.ChatResult) map[string]any {
 	return usage
 }
 
-// addCreditUsage exposes the gateway's real billing figures inside the usage
-// object so downstream tools (e.g. cc-switch) can meter per request. These are
-// non-standard fields that spec-compliant clients ignore; they are only added
-// when the gateway actually reported a charge, so free/usage-less turns stay
-// clean. Never estimated — sourced from the gateway usage frame.
+// addCreditUsage adds the gateway's real billing figures (non-standard fields
+// clients ignore) so tools like cc-switch can meter per request. Only added when
+// the gateway reported a charge; never estimated.
 func addCreditUsage(usage map[string]any, result *service.ChatResult) {
 	if result.Credits > 0 || result.OriginalCredits > 0 {
 		usage["credits"] = result.Credits
@@ -2647,9 +2629,9 @@ func addCreditUsage(usage map[string]any, result *service.ChatResult) {
 	}
 }
 
-// openAIUsageMap builds an OpenAI-style usage object. Unlike Anthropic, OpenAI
-// keeps prompt_tokens as the full prompt count and reports cached tokens as a
-// subset detail; reasoning tokens are reported under completion_tokens_details.
+// openAIUsageMap builds an OpenAI-style usage object: unlike Anthropic,
+// prompt_tokens stays the full prompt count and cached tokens are a nested
+// subset detail.
 func openAIUsageMap(result *service.ChatResult) map[string]any {
 	total := result.UsedTokens
 	if total <= 0 {
@@ -2713,10 +2695,9 @@ func writeOpenAIError(w http.ResponseWriter, status int, kind string, message st
 	})
 }
 
-// openAIFinishReason resolves the OpenAI finish_reason: tool calls win, then
-// the known non-stop reasons (length/content_filter, from the gateway or the
-// output limiter), else stop. Only whitelisted values pass through so that
-// backend-specific finish strings (e.g. the IPC runtime) never leak.
+// openAIFinishReason resolves the OpenAI finish_reason, whitelisting only
+// tool_calls/length/content_filter/stop so backend-specific finish strings
+// never leak.
 func openAIFinishReason(result *service.ChatResult) string {
 	if len(result.ToolCalls) > 0 {
 		return "tool_calls"
@@ -2742,8 +2723,7 @@ func anthropicStopReason(result *service.ChatResult) (string, any) {
 	case "content_filter":
 		return "refusal", nil
 	case "stop":
-		// StopSequence is only set when the limiter matched a configured stop,
-		// so any non-empty value is a real match — do not TrimSpace it, since
+		// Any non-empty StopSequence is a real match; don't TrimSpace it, since
 		// whitespace-only stops ("\n\n", "\n") are legitimate sequences.
 		if result.StopSequence != "" {
 			return "stop_sequence", result.StopSequence
@@ -3322,9 +3302,8 @@ func truncateRecordedString(value string) string {
 	return value
 }
 
-// SetAuthKeys enables inbound API-key authentication with the given keys. Blank
-// entries are ignored; passing no usable keys leaves authentication disabled
-// (open access). Must be called before ListenAndServe.
+// SetAuthKeys enables inbound API-key authentication (blank entries ignored; no
+// usable keys leaves access open). Must be called before ListenAndServe.
 func (s *Server) SetAuthKeys(keys []string) {
 	set := make(map[string]struct{}, len(keys))
 	for _, k := range keys {
@@ -3339,15 +3318,10 @@ func (s *Server) SetAuthKeys(keys []string) {
 	s.authKeys = set
 }
 
-// withAuth gates requests behind the configured inbound API keys. When no keys
-// are set it is a pass-through (the default open behaviour). OPTIONS preflight
-// is already short-circuited by withCORS, so it never reaches here.
-//
-// An unauthenticated request gets no response at all: we panic with
-// http.ErrAbortHandler, which makes net/http drop the connection silently
-// (no status line, no body, no stack trace logged). The client sees an empty
-// reply / reset connection rather than a 401, so a probe cannot even tell that
-// an auth-gated service is listening here.
+// withAuth gates requests behind the configured API keys (pass-through when
+// none are set). Unauthenticated requests panic with http.ErrAbortHandler so
+// net/http drops the connection silently rather than returning a 401 — a probe
+// cannot tell an auth-gated service is listening here.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(s.authKeys) == 0 || s.authorized(r) {
@@ -3358,9 +3332,8 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
-// authorized reports whether the request carries a configured API key. Every
-// key is compared in constant time so response timing cannot reveal which keys
-// exist or how many characters of a guess were correct.
+// authorized reports whether the request carries a configured API key, comparing
+// every key in constant time so timing cannot leak which keys exist.
 func (s *Server) authorized(r *http.Request) bool {
 	presented := extractRequestKey(r)
 	if presented == "" {
@@ -3546,8 +3519,7 @@ func extractAnthropicAssistantContent(content any) (string, string, []toolemulat
 			}
 		case "thinking":
 			// Preserve reasoning text so multi-turn extended thinking survives the
-			// round-trip; forwarded to the gateway as reasoning_content (no signature,
-			// which is always empty upstream anyway).
+			// round-trip (forwarded to the gateway as reasoning_content).
 			if t := stringFromAny(m["thinking"]); t != "" {
 				reasoningParts = append(reasoningParts, t)
 			}
@@ -3681,10 +3653,8 @@ func parseImageURL(url string) *service.Image {
 		// proxy-side SSRF / unbounded download / hang from arbitrary client URLs.
 		return &service.Image{URL: u}
 	}
-	// Anything else (file://, ~, absolute paths, bare paths) is rejected: the
-	// proxy must never read host-local files on behalf of a request. Reading
-	// a client-supplied local path would let a caller exfiltrate credentials,
-	// keys, or system files by pointing image_url at them.
+	// Reject anything else (file://, ~, local paths): the proxy must never read
+	// host-local files, or a caller could exfiltrate them via image_url.
 	return nil
 }
 

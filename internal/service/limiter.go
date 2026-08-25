@@ -2,14 +2,8 @@ package service
 
 import "strings"
 
-// outputLimiter enforces max_tokens and stop sequences on the *visible* output
-// text, because the remote gateway accepts but ignores these constraints. It is
-// stream-aware: Push feeds incremental text and returns the portion safe to
-// emit (holding back a short tail so a stop sequence split across deltas is
-// still caught); Flush emits the remaining tail at end of stream.
-//
-// max_tokens uses the same heuristic token estimate as the rest of the service,
-// so it is an approximate cap (there is no real tokenizer for the upstream).
+// outputLimiter enforces max_tokens and stop sequences on visible output text,
+// since the remote gateway ignores them. The token cap is approximate (heuristic).
 type outputLimiter struct {
 	limitRunes int // 0 = no max_tokens limit
 	stops      []string

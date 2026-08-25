@@ -12,20 +12,9 @@ import (
 	"lingma-ipc-proxy/internal/toolemulation"
 )
 
-// Server-side tool injection. The proxy advertises gateway-only tools to the
-// model and executes them server-side in an agentic loop, so a client that has
-// no such tools can still use them. Two tools are supported:
-//
-//   - web_search: injected whenever the client declares a hosted web_search
-//     tool (Anthropic) or when LINGMA_INJECT_MEDIA_TOOLS is set (OpenAI). The
-//     model decides whether to call it; the proxy runs the gateway's oneSearch.
-//   - ImageSearch: injected when LINGMA_INJECT_MEDIA_TOOLS is set. Runs the
-//     gateway's imageSearch (returns metadata only, never downloads to disk).
-//
-// The injected tool calls are never surfaced to the client; only the model's
-// answer is. Genuine client tools (Bash, etc.) are passed through untouched and
-// never executed by the proxy. Streaming keeps real token-by-token streaming:
-// thinking and text flow live, only our own tool calls are intercepted.
+// Server-side tool injection: the proxy advertises gateway-only tools and runs
+// them itself in an agentic loop, never surfacing those calls to the client.
+// Genuine client tools (Bash, etc.) pass through untouched.
 
 const maxMediaToolRounds = 4
 
@@ -40,10 +29,8 @@ func isServerTool(name string) bool {
 	return false
 }
 
-// anthropicServerToolDefs decides which server tools to advertise for an
-// Anthropic request and returns their tool definitions. web_search is offered
-// when the client declares a hosted web_search tool; ImageSearch when the
-// injection flag is set.
+// anthropicServerToolDefs returns which server tools to advertise: web_search if
+// the client declares a hosted web_search tool, the rest when injection is on.
 func (s *Server) anthropicServerToolDefs(req anthropicRequest) ([]any, bool) {
 	var defs []any
 	if hasAnthropicHostedWebSearchTool(req.Tools) {
@@ -55,9 +42,8 @@ func (s *Server) anthropicServerToolDefs(req anthropicRequest) ([]any, bool) {
 	return defs, len(defs) > 0
 }
 
-// injectAnthropicServerTools drops the client's hosted web_search def (we
-// advertise our own callable one in its place) and appends the chosen server
-// tool defs, skipping any the client already declares by name.
+// injectAnthropicServerTools replaces the client's hosted web_search def with our
+// callable server-tool defs, skipping any the client already declares by name.
 func injectAnthropicServerTools(req anthropicRequest, defs []any) anthropicRequest {
 	stripped := stripAnthropicHostedWebSearchTool(req.Tools)
 	existing := map[string]bool{}
@@ -110,9 +96,7 @@ func partitionServerToolCalls(calls []toolemulation.ToolCall) (ours, others []to
 	return ours, others
 }
 
-// executeServerTool runs one injected tool call and returns its result as plain
-// text. Both supported tools return text (web search hits / image metadata), so
-// the tool_result content is always a string.
+// executeServerTool runs one injected tool call and returns its result as text.
 func (s *Server) executeServerTool(ctx context.Context, call toolemulation.ToolCall) string {
 	switch call.Name {
 	case webSearchToolName:
@@ -229,11 +213,8 @@ func (u *serverToolUsage) result() *service.ChatResult {
 	return u.applyTo(&service.ChatResult{})
 }
 
-// handleAnthropicServerTools advertises + executes our injected server tools in
-// an agentic loop. Streaming requests keep real token-by-token streaming
-// (thinking and text flow live); only our own tool calls are suppressed and the
-// post-tool continuation is stitched into the same message. Tools must already
-// be injected into req by the caller.
+// handleAnthropicServerTools runs the agentic loop that advertises and executes
+// our injected server tools. Tools must already be injected into req by caller.
 func (s *Server) handleAnthropicServerTools(w http.ResponseWriter, r *http.Request, req anthropicRequest) {
 	if req.Stream {
 		s.streamAnthropicServerTools(w, r, req)
@@ -271,9 +252,8 @@ func (s *Server) handleAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-// appendServerToolTurn records the assistant tool_use turn and the executed
-// tool_result turn onto req, and strips our tools on the last round so the model
-// is forced to answer.
+// appendServerToolTurn appends the assistant tool_use turn and the executed
+// tool_result turn to req, stripping our tools on the last round to force an answer.
 func (s *Server) appendServerToolTurn(ctx context.Context, req anthropicRequest, result *service.ChatResult, ours []toolemulation.ToolCall, lastRound bool) anthropicRequest {
 	assistantContent := make([]any, 0, len(ours)+1)
 	if strings.TrimSpace(result.Text) != "" {
@@ -299,10 +279,8 @@ func (s *Server) appendServerToolTurn(ctx context.Context, req anthropicRequest,
 	return req
 }
 
-// streamAnthropicServerTools streams the agentic loop as a single Anthropic
-// message: thinking/text deltas are forwarded live, our tool calls are executed
-// server-side (never sent to the client), and the post-tool continuation is
-// appended as further content blocks in the same message.
+// streamAnthropicServerTools streams the agentic loop as one Anthropic message:
+// deltas flow live, our tool calls run server-side, continuation stays in-message.
 func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Request, req anthropicRequest) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {

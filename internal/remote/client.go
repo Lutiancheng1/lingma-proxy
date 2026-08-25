@@ -66,9 +66,8 @@ type Model struct {
 	DisplayName string `json:"display_name"`
 	Model       string `json:"model"`
 	Enable      bool   `json:"enable"`
-	// Raw holds the complete upstream model object (max_input_tokens,
-	// context_config, is_vl, is_reasoning, thinking_config, price_factor,
-	// promotion, ...) so downstream can receive every field the gateway sends.
+	// Raw holds the complete upstream model object so downstream can receive
+	// every field the gateway sends.
 	Raw map[string]any `json:"-"`
 }
 
@@ -376,10 +375,8 @@ type SearchResult struct {
 	Hostname      string `json:"hostname"`
 }
 
-// WebSearch runs a web search through the QoderCN gateway's oneSearch endpoint
-// (the same backend the QoderCN CLI uses). Auth reuses the cosy signature; the
-// body is sent plaintext with Encode=0 and the {payload, encodeVersion}
-// envelope the gateway expects.
+// WebSearch runs a web search through the QoderCN gateway's oneSearch endpoint,
+// posting the {payload, encodeVersion} envelope plaintext with Encode=0.
 func (c *Client) WebSearch(ctx context.Context, query string) ([]SearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -445,8 +442,7 @@ type ImageResult struct {
 }
 
 // postEncoded signs and POSTs a plaintext {payload, encodeVersion, ...} body to
-// an Encode=0 gateway endpoint (the shape oneSearch/imageSearch/generateImage
-// share) and returns the raw JSON response.
+// an Encode=0 gateway endpoint and returns the raw JSON response.
 func (c *Client) postEncoded(ctx context.Context, path string, body []byte) ([]byte, error) {
 	cred, err := LoadCredential(c.cfg.AuthFile)
 	if err != nil {
@@ -511,8 +507,7 @@ func (c *Client) ImageSearch(ctx context.Context, query string, count int) ([]Im
 }
 
 // GenerateImage generates an image via the gateway's generateImage endpoint and
-// returns a data URL ("data:image/png;base64,..."). size defaults to 1024x1024,
-// model to a capable default when unset.
+// returns a data URL. size defaults to 1024x1024, model to a default when unset.
 func (c *Client) GenerateImage(ctx context.Context, prompt, size, model string) (string, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
@@ -573,20 +568,16 @@ func (c *Client) GenerateImage(ctx context.Context, prompt, size, model string) 
 	return url, nil
 }
 
-// pngMetadataChunks are ancillary PNG chunk types that carry text / provenance
-// metadata. The gateway stamps an "AIGC" tEXt chunk containing its producer
-// identity (a unified social credit code) and per-image tracking IDs; these are
-// stripped before relaying so the proxy does not leak that information to
-// downstream clients. Image-critical and rendering chunks are kept untouched.
+// pngMetadataChunks are ancillary PNG chunk types carrying text/provenance
+// metadata (e.g. the gateway's "AIGC" tEXt), stripped before relaying.
 var pngMetadataChunks = map[string]bool{
 	"tEXt": true, "zTXt": true, "iTXt": true, "eXIf": true, "tIME": true,
 }
 
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 
-// sanitizeImageDataURL removes metadata from a PNG data URL before returning it
-// to callers. Non-PNG data URLs (and any decode failure) are returned unchanged
-// so image generation never fails over cleanup.
+// sanitizeImageDataURL strips metadata from a PNG data URL. Non-PNG URLs or any
+// decode failure are returned unchanged so generation never fails over cleanup.
 func sanitizeImageDataURL(dataURL string) string {
 	const prefix = "data:image/png;base64,"
 	if !strings.HasPrefix(dataURL, prefix) {
@@ -603,10 +594,8 @@ func sanitizeImageDataURL(dataURL string) string {
 	return prefix + base64.StdEncoding.EncodeToString(cleaned)
 }
 
-// stripPNGMetadata drops metadata-bearing ancillary chunks (see
-// pngMetadataChunks) from a PNG, copying every other chunk verbatim (CRCs are
-// preserved). Returns (cleaned, true) on a well-formed PNG, or (input, false)
-// if the bytes are not a parseable PNG.
+// stripPNGMetadata drops metadata-bearing ancillary chunks (see pngMetadataChunks)
+// from a PNG. Returns (cleaned, true) on success, or (input, false) if unparseable.
 func stripPNGMetadata(png []byte) ([]byte, bool) {
 	if !bytes.HasPrefix(png, pngSignature) {
 		return png, false
@@ -677,8 +666,7 @@ func (c *Client) postSigned(ctx context.Context, path string, body []byte) ([]by
 }
 
 // PolishText cleans up raw text via the gateway's voice/polish endpoint (adds
-// punctuation, fixes casing/spacing, without changing the meaning). The gateway
-// expects the text wrapped as a transcription message. Returns the polished text.
+// punctuation, fixes casing/spacing without changing meaning).
 func (c *Client) PolishText(ctx context.Context, text string) (string, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -1013,10 +1001,8 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 	return string(body), err
 }
 
-// buildGenerationParameters assembles the upstream "parameters" object. The
-// gateway honors temperature and the reasoning_effort/enable_thinking pair;
-// max_tokens is sent for parity with the CLI but the gateway ignores it (the
-// proxy enforces it downstream). top_p/top_k/stop are forwarded best-effort.
+// buildGenerationParameters assembles the upstream "parameters" object. max_tokens
+// is sent for CLI parity but the gateway ignores it (the proxy enforces it downstream).
 func buildGenerationParameters(request ChatRequest) map[string]any {
 	params := map[string]any{}
 	// Only send temperature when the caller set it; otherwise let the gateway
@@ -1024,11 +1010,8 @@ func buildGenerationParameters(request ChatRequest) map[string]any {
 	if request.Temperature != nil {
 		params["temperature"] = *request.Temperature
 	}
-	// Reasoning effort / thinking toggle. Unlike max_tokens (which the gateway
-	// ignores), the QoderCN gateway honors these under parameters. We forward
-	// reasoning_effort verbatim so callers can reach QoderCN-native levels
-	// (none/low/medium/high/xhigh/max) beyond the OpenAI enum; the gateway
-	// validates each value against the target model's thinking_config.
+	// Forward reasoning_effort verbatim so callers can reach QoderCN-native levels
+	// (none/low/medium/high/xhigh/max) beyond the OpenAI enum.
 	switch effort := strings.ToLower(strings.TrimSpace(request.ReasoningEffort)); {
 	case effort == "none" || effort == "off" || effort == "disabled":
 		params["enable_thinking"] = false
@@ -1363,9 +1346,8 @@ type remoteToolCallDelta struct {
 
 func scanSSE(reader io.Reader, onEvent func(sseEvent) error) error {
 	scanner := bufio.NewScanner(reader)
-	// Cap generously: a single double-wrapped SSE frame can carry a large tool-call
-	// argument blob or a whole non-streamed response; too small a cap makes
-	// bufio.Scanner return ErrTooLong and discard the entire buffered response.
+	// Cap generously: a double-wrapped SSE frame can be large, and too small a cap
+	// makes bufio.Scanner return ErrTooLong and discard the whole response.
 	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

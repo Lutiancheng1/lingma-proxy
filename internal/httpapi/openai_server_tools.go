@@ -13,11 +13,8 @@ import (
 )
 
 // OpenAI-side server-tool injection. Mirrors the Anthropic path (media_tools.go)
-// but operates on the normalized service.ChatRequest, since normalizeOpenAIRequest
-// already preserves assistant tool_calls and tool-role results. When the
-// injection flag is set, web_search + ImageSearch are advertised to the model;
-// the model decides whether to call them, the proxy executes them server-side,
-// and our tool calls never reach the client.
+// but operates on the normalized service.ChatRequest, which already preserves
+// assistant tool_calls and tool-role results.
 
 // injectOpenAIServerTools appends the proxy's server tools to a normalized
 // request, skipping any the client already declares by name.
@@ -48,8 +45,7 @@ func stripServerToolDefs(tools []toolemulation.ToolDef) []toolemulation.ToolDef 
 }
 
 // resultWithoutServerToolCalls returns a shallow copy of result whose ToolCalls
-// exclude our injected server tools (so finish_reason/usage and the surfaced
-// tool_calls only reflect genuine client tools).
+// exclude our injected server tools, so only genuine client tools are surfaced.
 func resultWithoutServerToolCalls(result *service.ChatResult) *service.ChatResult {
 	_, others := partitionServerToolCalls(result.ToolCalls)
 	clone := *result
@@ -88,9 +84,8 @@ func (s *Server) handleOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 	}
 }
 
-// appendOpenAIToolTurn records the assistant tool_use turn and the executed
-// tool-role results onto req, stripping our tools on the last round so the model
-// is forced to answer.
+// appendOpenAIToolTurn appends the assistant tool_use turn and the executed
+// tool-role results to req, stripping our tools on the last round to force an answer.
 func (s *Server) appendOpenAIToolTurn(ctx context.Context, req service.ChatRequest, result *service.ChatResult, ours []toolemulation.ToolCall, lastRound bool) service.ChatRequest {
 	req.Messages = append(req.Messages, service.ChatMessage{
 		Role:      "assistant",
@@ -110,10 +105,8 @@ func (s *Server) appendOpenAIToolTurn(ctx context.Context, req service.ChatReque
 	return req
 }
 
-// streamOpenAIServerTools streams the agentic loop as a single chat.completion
-// stream: reasoning/content deltas flow live across rounds, our tool calls are
-// executed server-side (never sent to the client), and only genuine client tool
-// calls are surfaced at the end.
+// streamOpenAIServerTools streams the agentic loop as one chat.completion stream:
+// deltas flow live, our tool calls run server-side, only client tools are surfaced.
 func (s *Server) streamOpenAIServerTools(w http.ResponseWriter, r *http.Request, req service.ChatRequest, emitUsage bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {

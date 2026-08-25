@@ -12,28 +12,12 @@ import (
 	"strings"
 )
 
-// Optional blind-watermark payload disruption for generated images. Enabled via
-// LINGMA_IMAGE_DEWATERMARK. The gateway embeds an invisible, robust pixel
-// watermark in every generated image; a single lossy re-encode does NOT destroy
-// its payload (validated against guofei9987/blind_watermark: JPEG q30 alone left
-// BER 0.00 — the mark fully survived). What works is a persistent GEOMETRIC
-// DESYNC: crop a margin, then resize the remainder back to the original size.
-// Because a crop+resize is not invertible, the watermark ends up at a shifted /
-// rescaled grid that no longer matches the embedding grid, so its decoder reads
-// garbage. A lossy JPEG pass adds DCT quantization damage on top.
-//
-// Ordering matters for stealth AND correctness:
-//   - The lossy JPEG is applied at the CROPPED resolution, then the result is
-//     resized back up and delivered as PNG. So the final file is a PNG with no
-//     8x8 JPEG grid (the grid is rescaled away) and no size/orientation change —
-//     it does not look obviously re-compressed.
-//   - Do NOT rotate-then-rotate-back (or otherwise undo a geometric op): undoing
-//     it re-synchronizes the watermark and restores the payload (measured
-//     BER ~0.03). Only a NON-undone desync destroys the payload.
-//
-// Measured: crop32 + JPEG q30 -> resize back -> PNG gives blind_watermark BER
-// ~0.48 (random = payload destroyed), visually near-lossless. This corrupts the
-// embedded INFORMATION; it does not claim to remove watermark detectability.
+// Optional blind-watermark payload disruption for generated images, enabled via
+// LINGMA_IMAGE_DEWATERMARK. A single lossy re-encode leaves the mark intact; a
+// non-invertible geometric desync (crop a margin, then resize back to the original
+// size) destroys it because the decoder reads off a shifted grid, and a lossy JPEG
+// pass adds damage. The op must NOT be undone (rotate-back re-syncs it); the result
+// is delivered as a same-size PNG. Corrupts the payload, not detectability.
 const (
 	dewmCropPx      = 32
 	dewmJPEGQuality = 30
@@ -47,9 +31,8 @@ func dewatermarkEnabled() bool {
 	return false
 }
 
-// dewatermarkDataURL applies the desync + JPEG pass to a PNG data URL and returns
-// a fresh PNG data URL. Non-PNG inputs or any decode/encode failure are returned
-// unchanged (image delivery must never fail over this).
+// dewatermarkDataURL applies the desync+JPEG pass to a PNG data URL, returning a
+// fresh PNG. Non-PNG input or any failure is returned unchanged (delivery must not fail).
 func dewatermarkDataURL(dataURL string) string {
 	const prefix = "data:image/png;base64,"
 	if !strings.HasPrefix(dataURL, prefix) {
@@ -70,9 +53,8 @@ func dewatermarkDataURL(dataURL string) string {
 	return prefix + base64.StdEncoding.EncodeToString(out)
 }
 
-// desyncRecompress: crop a margin -> JPEG-compress the crop (lossy damage at the
-// cropped resolution) -> bilinear-resize back up to the original size (the
-// persistent, non-invertible desync) -> PNG-encode.
+// desyncRecompress crops a margin, JPEG-recompresses, then resizes back to the
+// original size (the non-invertible desync) and PNG-encodes.
 func desyncRecompress(src image.Image) ([]byte, error) {
 	b := src.Bounds()
 	W, H := b.Dx(), b.Dy()

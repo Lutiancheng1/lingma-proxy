@@ -460,9 +460,8 @@ func defsContainTool(defs []any, name string) bool {
 	return false
 }
 
-// defsContainCallableTool reports whether defs has a tool that the model can
-// call: it has an input_schema and is not a hosted (server-executed by the
-// upstream) tool type.
+// defsContainCallableTool reports whether defs has a model-callable tool:
+// one with an input_schema and no hosted (server-executed) tool type.
 func defsContainCallableTool(defs []any, name string) bool {
 	for _, d := range defs {
 		m, ok := d.(map[string]any)
