@@ -28,6 +28,19 @@ const textPolishToolDescription = `Polish raw or unpunctuated text: add correct 
 Ideal for cleaning up speech-to-text transcriptions, rough dictation, or messy pasted text before using it.
 Returns only the cleaned text. It does NOT rewrite, summarize, translate, or answer the content.`
 
+// serverToolSuffix namespaces the proxy's server-tool names so they can never
+// collide with a client-declared function tool of the same base name. Clients
+// never declare tools carrying this suffix, so the name-based partitioning in
+// media_tools.go (isServerTool / executeServerTool) is collision-proof: a client
+// tool literally named "web_search" is no longer mistaken for ours.
+const serverToolSuffix = "__lmproxy"
+
+const (
+	webSearchToolName   = "web_search" + serverToolSuffix
+	imageSearchToolName = "ImageSearch" + serverToolSuffix
+	textPolishToolName  = "TextPolish" + serverToolSuffix
+)
+
 // serverToolSpec is the canonical definition of a proxy-executed "server tool":
 // a gateway-only capability the proxy advertises to the model and runs
 // server-side. One spec generates both the Anthropic tool def (a raw map with
@@ -40,7 +53,7 @@ type serverToolSpec struct {
 }
 
 var webSearchSpec = serverToolSpec{
-	name:        "web_search",
+	name:        webSearchToolName,
 	description: webSearchToolDescription,
 	schema: map[string]any{
 		"type": "object",
@@ -52,7 +65,7 @@ var webSearchSpec = serverToolSpec{
 }
 
 var imageSearchSpec = serverToolSpec{
-	name:        "ImageSearch",
+	name:        imageSearchToolName,
 	description: imageSearchToolDescription,
 	schema: map[string]any{
 		"type": "object",
@@ -65,7 +78,7 @@ var imageSearchSpec = serverToolSpec{
 }
 
 var textPolishSpec = serverToolSpec{
-	name:        "TextPolish",
+	name:        textPolishToolName,
 	description: textPolishToolDescription,
 	schema: map[string]any{
 		"type": "object",

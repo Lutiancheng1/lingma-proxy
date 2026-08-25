@@ -34,7 +34,7 @@ func mediaToolsEnabled() bool { return truthyEnv("LINGMA_INJECT_MEDIA_TOOLS") }
 // isServerTool reports whether a tool name is one the proxy executes itself.
 func isServerTool(name string) bool {
 	switch strings.TrimSpace(name) {
-	case "web_search", "ImageSearch", "TextPolish":
+	case webSearchToolName, imageSearchToolName, textPolishToolName:
 		return true
 	}
 	return false
@@ -115,7 +115,7 @@ func partitionServerToolCalls(calls []toolemulation.ToolCall) (ours, others []to
 // the tool_result content is always a string.
 func (s *Server) executeServerTool(ctx context.Context, call toolemulation.ToolCall) string {
 	switch call.Name {
-	case "web_search":
+	case webSearchToolName:
 		query := strings.TrimSpace(stringFromAny(call.Arguments["query"]))
 		if query == "" {
 			return "Web search failed: empty query"
@@ -128,7 +128,7 @@ func (s *Server) executeServerTool(ctx context.Context, call toolemulation.ToolC
 			return fmt.Sprintf("No web search results for %q.", query)
 		}
 		return formatWebSearchResults(query, results)
-	case "ImageSearch":
+	case imageSearchToolName:
 		query := strings.TrimSpace(stringFromAny(call.Arguments["query"]))
 		count := 0
 		if v, ok := call.Arguments["count"].(float64); ok {
@@ -144,7 +144,7 @@ func (s *Server) executeServerTool(ctx context.Context, call toolemulation.ToolC
 			fmt.Fprintf(&b, "[%d] %s — %s (%dx%d)\n", i+1, strings.TrimSpace(r.Title), strings.TrimSpace(r.ImageURL), r.Width, r.Height)
 		}
 		return b.String()
-	case "TextPolish":
+	case textPolishToolName:
 		text := strings.TrimSpace(stringFromAny(call.Arguments["text"]))
 		if text == "" {
 			return "Text polish failed: empty text"
