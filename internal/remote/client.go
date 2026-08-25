@@ -978,7 +978,7 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 			"model":            "",
 			"format":           "openai",
 			"is_vl":            hasImages,
-			"is_reasoning":     remoteReasoningEnabled(request),
+			"is_reasoning":     remoteThinkingOn(request),
 			"api_key":          "",
 			"url":              "",
 			"source":           "system",
@@ -1030,7 +1030,7 @@ func buildGenerationParameters(request ChatRequest) map[string]any {
 		// the switch matched case-insensitively, so "High" must reach the gateway
 		// as "high" to satisfy its lower-case effort enum.
 		params["reasoning_effort"] = effort
-	case remoteReasoningEnabled(request):
+	case remoteThinkingOn(request):
 		// Model implies reasoning (e.g. a *-thinking variant) with no explicit
 		// level; enable thinking and let the gateway pick its default effort.
 		params["enable_thinking"] = true
@@ -1050,12 +1050,25 @@ func buildGenerationParameters(request ChatRequest) map[string]any {
 	return params
 }
 
-func remoteReasoningEnabled(request ChatRequest) bool {
-	if strings.TrimSpace(request.ReasoningEffort) != "" {
+// remoteThinkingOn is the single source of truth for whether a request runs in
+// reasoning mode. It drives BOTH model_config.is_reasoning and
+// parameters.enable_thinking so the two never disagree.
+//
+// This matches the QoderCN CLI's observed behavior: for a toggleable model the
+// CLI sends is_reasoning=false when reasoning is explicitly disabled
+// (effort none/off/disabled) and true for a real effort level; with no explicit
+// level a reasoning-capable model (name implies thinking) defaults on. (Note:
+// an "always-on" reasoning model whose name does not contain "thinking" is
+// under-detected here without the per-model catalog capability flag.)
+func remoteThinkingOn(request ChatRequest) bool {
+	switch strings.ToLower(strings.TrimSpace(request.ReasoningEffort)) {
+	case "none", "off", "disabled":
+		return false
+	case "":
+		return strings.Contains(strings.ToLower(strings.TrimSpace(request.Model)), "thinking")
+	default:
 		return true
 	}
-	model := strings.ToLower(strings.TrimSpace(request.Model))
-	return strings.Contains(model, "thinking")
 }
 
 func nullableSlice[T any](items []T) any {
