@@ -615,16 +615,20 @@ func stripPNGMetadata(png []byte) ([]byte, bool) {
 	out = append(out, pngSignature...)
 	p := len(pngSignature)
 	for p+12 <= len(png) { // 4 length + 4 type + data + 4 CRC
-		n := int(binary.BigEndian.Uint32(png[p : p+4]))
-		chunkEnd := p + 12 + n
-		if n < 0 || chunkEnd > len(png) {
-			return png, false // malformed chunk length
+		// int64 arithmetic: a uint32 length near 2^31 would overflow a 32-bit int
+		// and wrap chunkEnd negative, slipping past the bounds check and panicking
+		// on the slice. uint32 -> int64 is always >= 0, so the old n<0 branch is
+		// unnecessary.
+		n := int64(binary.BigEndian.Uint32(png[p : p+4]))
+		chunkEnd := int64(p) + 12 + n
+		if chunkEnd > int64(len(png)) {
+			return png, false // malformed / truncated chunk length
 		}
 		typ := string(png[p+4 : p+8])
 		if !pngMetadataChunks[typ] {
-			out = append(out, png[p:chunkEnd]...)
+			out = append(out, png[p:int(chunkEnd)]...)
 		}
-		p = chunkEnd
+		p = int(chunkEnd)
 		if typ == "IEND" {
 			break
 		}

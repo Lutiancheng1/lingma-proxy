@@ -79,10 +79,7 @@ func desyncRecompress(src image.Image) ([]byte, error) {
 	rgba := image.NewRGBA(image.Rect(0, 0, W, H)) // flatten for fast/consistent access
 	draw.Draw(rgba, rgba.Bounds(), src, b.Min, draw.Src)
 
-	crop := dewmCropPx
-	if W <= 2*crop+16 || H <= 2*crop+16 {
-		crop = 0 // too small to crop meaningfully
-	}
+	crop := dewmCropFor(W, H)
 
 	// 1) lossy JPEG at the cropped resolution (destructive step)
 	sub := rgba.SubImage(image.Rect(crop, crop, W-crop, H-crop))
@@ -107,6 +104,23 @@ func desyncRecompress(src image.Image) ([]byte, error) {
 		return nil, err
 	}
 	return pb.Bytes(), nil
+}
+
+// dewmCropFor picks the crop margin. Normal images use the fixed dewmCropPx
+// margin; for a small image (where a 32px margin would leave little or nothing)
+// the crop scales down proportionally so the geometric desync still happens — a
+// 0 crop would make the later resize an identity op and leave the watermark
+// payload intact. Images too tiny for any meaningful crop (min side < 3) fall
+// back to 0 (the feature is a no-op there).
+func dewmCropFor(W, H int) int {
+	crop := dewmCropPx
+	if m := min(W, H); 2*crop+16 >= m {
+		crop = m / 8
+		if crop < 1 && m >= 3 {
+			crop = 1
+		}
+	}
+	return crop
 }
 
 // bilinearResizeRGBA scales src to dstW x dstH using bilinear interpolation.

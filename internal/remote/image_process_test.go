@@ -45,6 +45,36 @@ func TestDewatermarkDataURLKeepsPNGSameSize(t *testing.T) {
 	}
 }
 
+func TestDewmCropForSmallImagesStillDesyncs(t *testing.T) {
+	if got := dewmCropFor(1024, 1024); got != dewmCropPx {
+		t.Fatalf("dewmCropFor(1024,1024)=%d, want %d", got, dewmCropPx)
+	}
+	// A small image must still get a non-zero crop, otherwise the resize is an
+	// identity op and the watermark payload survives (B12).
+	for _, sz := range []int{80, 64, 16, 8} {
+		if got := dewmCropFor(sz, sz); got < 1 {
+			t.Fatalf("dewmCropFor(%d,%d)=%d, want >=1 so the geometric desync still runs", sz, sz, got)
+		}
+	}
+}
+
+func TestDewatermarkSmallImageIsTransformed(t *testing.T) {
+	in := makePNGDataURL(64, 64)
+	out := dewatermarkDataURL(in)
+	if out == in {
+		t.Fatal("small image should still be desynced, not passed through")
+	}
+	const pp = "data:image/png;base64,"
+	raw, _ := base64.StdEncoding.DecodeString(out[len(pp):])
+	img, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("decode png: %v", err)
+	}
+	if img.Bounds().Dx() != 64 || img.Bounds().Dy() != 64 {
+		t.Fatalf("dims changed: %v", img.Bounds())
+	}
+}
+
 func TestDewatermarkPassthroughNonPNG(t *testing.T) {
 	if got := dewatermarkDataURL("https://example.com/y.png"); got != "https://example.com/y.png" {
 		t.Fatal("plain URL should pass through unchanged")
