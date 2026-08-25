@@ -614,6 +614,7 @@ func stripPNGMetadata(png []byte) ([]byte, bool) {
 	out := make([]byte, 0, len(png))
 	out = append(out, pngSignature...)
 	p := len(pngSignature)
+	sawIEND := false
 	for p+12 <= len(png) { // 4 length + 4 type + data + 4 CRC
 		// int64 arithmetic: a uint32 length near 2^31 would overflow a 32-bit int
 		// and wrap chunkEnd negative, slipping past the bounds check and panicking
@@ -630,8 +631,15 @@ func stripPNGMetadata(png []byte) ([]byte, bool) {
 		}
 		p = int(chunkEnd)
 		if typ == "IEND" {
+			sawIEND = true
 			break
 		}
+	}
+	if !sawIEND {
+		// Ran out of chunks without an IEND: the input is truncated / not a
+		// complete PNG. Report not-parseable so the caller passes the original
+		// through rather than substituting a still-IEND-less "cleaned" copy.
+		return png, false
 	}
 	return out, true
 }

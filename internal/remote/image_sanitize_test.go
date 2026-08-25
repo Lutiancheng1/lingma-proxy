@@ -58,6 +58,19 @@ func TestStripPNGMetadataRejectsOversizedChunkLength(t *testing.T) {
 	}
 }
 
+func TestStripPNGMetadataRejectsMissingIEND(t *testing.T) {
+	// A PNG whose chunks tile to the end with no IEND is not a complete PNG; the
+	// stripper must report false so the caller passes the original through rather
+	// than substituting a still-IEND-less copy. (B14)
+	png := append([]byte(nil), pngSignature...)
+	png = append(png, pngChunk("IHDR", make([]byte, 13))...)
+	png = append(png, pngChunk("IDAT", []byte("pixel-data"))...)
+	// deliberately no IEND chunk
+	if _, ok := stripPNGMetadata(png); ok {
+		t.Fatal("expected stripPNGMetadata to reject a PNG with no IEND chunk")
+	}
+}
+
 func TestSanitizeImageDataURL(t *testing.T) {
 	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buildTestPNG())
 	got := sanitizeImageDataURL(dataURL)
