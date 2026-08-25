@@ -185,10 +185,8 @@ func NewServer(addr string, svc *service.Service) *Server {
 
 	s.http = &http.Server{
 		Addr: addr,
-		// Auth is the outermost gate (after CORS preflight): an unauthenticated
-		// request is dropped by withAuth before withRecorder reads and JSON-parses
-		// its body, so the silent drop stays cheap and there is no pre-auth
-		// body-read / memory-amplification vector for unauthenticated clients.
+		// Auth outside the recorder: unauthenticated requests are dropped before
+		// their body is read/parsed (keeps the silent drop cheap).
 		Handler:           withCORS(s.withAuth(s.withRecorder(mux))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -1194,10 +1192,8 @@ func writeAnthropicStreamBody(ctx context.Context, w http.ResponseWriter, flushe
 							return
 						}
 					}
-					// Allocate tool blocks after whatever was actually emitted. A
-					// tool-only response (no thinking/text block) must start at index
-					// 0, not 1 — a hole at index 0 breaks strict Anthropic SDK
-					// accumulators that index content[] by the streamed block index.
+					// Start tool blocks after whatever was emitted; a tool-only
+					// response must start at index 0, not leave a hole there.
 					nextToolBlockIndex = 0
 					if thinkingOpen {
 						nextToolBlockIndex = 1
@@ -1484,8 +1480,7 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 			"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant"}, "finish_reason": nil}},
 		})
 		if strings.TrimSpace(result.ThoughtText) != "" {
-			// Surface reasoning like the incremental path and writeOpenAIChatCompletion;
-			// the aggregate branch previously dropped it.
+			// Surface reasoning (the aggregate branch previously dropped it).
 			_ = writeOpenAIChunk(w, flusher, map[string]any{
 				"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
 				"choices": []map[string]any{{"index": 0, "delta": map[string]any{"reasoning_content": result.ThoughtText}, "finish_reason": nil}},
@@ -1577,9 +1572,8 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 					continue
 				}
 				if !streamedTool {
-					// Flush buffered assistant text (any preamble) before the first
-					// tool-call delta: the end-of-stream flush is skipped when the
-					// turn ends in a native tool call, so this text would be lost.
+					// Flush buffered preamble text before the first tool-call delta;
+					// the end-of-stream flush is skipped on tool-call turns.
 					for _, delta := range filter.Flush() {
 						if delta == "" {
 							continue

@@ -368,9 +368,7 @@ func TestBuildBodyEnablesRemoteReasoningWhenRequested(t *testing.T) {
 }
 
 func TestBuildBodyDisablesReasoningWhenEffortNone(t *testing.T) {
-	// Matches the QoderCN CLI: a toggleable model with reasoning explicitly
-	// disabled reports is_reasoning=false and enable_thinking=false — the two
-	// must agree (no is_reasoning=true + enable_thinking=false contradiction).
+	// effort=none must give is_reasoning=false AND enable_thinking=false (agree).
 	client := New(Config{})
 	body, err := client.buildBody("req-1", ChatRequest{Model: "qmodel_38max", ReasoningEffort: "none"})
 	if err != nil {

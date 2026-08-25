@@ -46,9 +46,7 @@ func TestStripPNGMetadata(t *testing.T) {
 }
 
 func TestStripPNGMetadataRejectsOversizedChunkLength(t *testing.T) {
-	// PNG signature + a chunk whose declared length far exceeds the buffer. The
-	// bounds check must reject it (int64 arithmetic; on a 32-bit build a length
-	// near 2^31 would otherwise overflow chunkEnd negative and slip through). (B13)
+	// A chunk length far exceeding the buffer must be rejected by the bounds check.
 	buf := append([]byte(nil), pngSignature...)
 	buf = append(buf, 0x7F, 0xFF, 0xFF, 0xFF) // declared length ~2^31
 	buf = append(buf, []byte("tEXt")...)
@@ -59,9 +57,7 @@ func TestStripPNGMetadataRejectsOversizedChunkLength(t *testing.T) {
 }
 
 func TestStripPNGMetadataRejectsMissingIEND(t *testing.T) {
-	// A PNG whose chunks tile to the end with no IEND is not a complete PNG; the
-	// stripper must report false so the caller passes the original through rather
-	// than substituting a still-IEND-less copy. (B14)
+	// A PNG with no IEND is incomplete; the stripper must report false.
 	png := append([]byte(nil), pngSignature...)
 	png = append(png, pngChunk("IHDR", make([]byte, 13))...)
 	png = append(png, pngChunk("IDAT", []byte("pixel-data"))...)

@@ -78,9 +78,7 @@ func (s *Server) handleOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
 			if len(ours) > 0 {
-				// Hand-off with server tools still pending: fold their results into
-				// the assistant text (resultWithoutServerToolCalls drops ours from
-				// the surfaced tool_calls), so only client tool calls are surfaced.
+				// Fold pending server-tool results into the text; surface only client tools.
 				result.Text = appendText(result.Text, s.foldServerToolResults(ctx, ours))
 			}
 			writeOpenAIChatCompletion(w, usageAcc.applyTo(resultWithoutServerToolCalls(result)))
@@ -203,9 +201,7 @@ func (s *Server) streamOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
-			// Fold any pending server-tool results into the visible content (we
-			// cannot surface our undeclared tools to the client), then surface the
-			// genuine client tool calls.
+			// Fold pending server-tool results into the content; surface only client tools.
 			if len(ours) > 0 {
 				if folded := s.foldServerToolResults(ctx, ours); folded != "" {
 					emitContent(folded)

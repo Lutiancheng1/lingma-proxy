@@ -616,10 +616,8 @@ func stripPNGMetadata(png []byte) ([]byte, bool) {
 	p := len(pngSignature)
 	sawIEND := false
 	for p+12 <= len(png) { // 4 length + 4 type + data + 4 CRC
-		// int64 arithmetic: a uint32 length near 2^31 would overflow a 32-bit int
-		// and wrap chunkEnd negative, slipping past the bounds check and panicking
-		// on the slice. uint32 -> int64 is always >= 0, so the old n<0 branch is
-		// unnecessary.
+		// int64 arithmetic so a uint32 length near 2^31 can't overflow chunkEnd
+		// negative and slip past the bounds check (would panic on a 32-bit build).
 		n := int64(binary.BigEndian.Uint32(png[p : p+4]))
 		chunkEnd := int64(p) + 12 + n
 		if chunkEnd > int64(len(png)) {
@@ -636,9 +634,8 @@ func stripPNGMetadata(png []byte) ([]byte, bool) {
 		}
 	}
 	if !sawIEND {
-		// Ran out of chunks without an IEND: the input is truncated / not a
-		// complete PNG. Report not-parseable so the caller passes the original
-		// through rather than substituting a still-IEND-less "cleaned" copy.
+		// No IEND: truncated/incomplete PNG — report unparseable so the caller
+		// passes the original through.
 		return png, false
 	}
 	return out, true
@@ -1038,9 +1035,7 @@ func buildGenerationParameters(request ChatRequest) map[string]any {
 		params["reasoning_effort"] = "none"
 	case effort != "":
 		params["enable_thinking"] = true
-		// Forward the normalized (lower-cased) token, not the raw request casing:
-		// the switch matched case-insensitively, so "High" must reach the gateway
-		// as "high" to satisfy its lower-case effort enum.
+		// Forward the lower-cased token (gateway expects a lower-case enum).
 		params["reasoning_effort"] = effort
 	case remoteThinkingOn(request):
 		// Model implies reasoning (e.g. a *-thinking variant) with no explicit
@@ -1062,16 +1057,8 @@ func buildGenerationParameters(request ChatRequest) map[string]any {
 	return params
 }
 
-// remoteThinkingOn is the single source of truth for whether a request runs in
-// reasoning mode. It drives BOTH model_config.is_reasoning and
-// parameters.enable_thinking so the two never disagree.
-//
-// This matches the QoderCN CLI's observed behavior: for a toggleable model the
-// CLI sends is_reasoning=false when reasoning is explicitly disabled
-// (effort none/off/disabled) and true for a real effort level; with no explicit
-// level a reasoning-capable model (name implies thinking) defaults on. (Note:
-// an "always-on" reasoning model whose name does not contain "thinking" is
-// under-detected here without the per-model catalog capability flag.)
+// remoteThinkingOn drives both is_reasoning and enable_thinking so they agree:
+// none/off/disabled -> false; an explicit level -> true; else name implies it.
 func remoteThinkingOn(request ChatRequest) bool {
 	switch strings.ToLower(strings.TrimSpace(request.ReasoningEffort)) {
 	case "none", "off", "disabled":

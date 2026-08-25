@@ -28,11 +28,8 @@ const textPolishToolDescription = `Polish raw or unpunctuated text: add correct 
 Ideal for cleaning up speech-to-text transcriptions, rough dictation, or messy pasted text before using it.
 Returns only the cleaned text. It does NOT rewrite, summarize, translate, or answer the content.`
 
-// serverToolSuffix namespaces the proxy's server-tool names so they can never
-// collide with a client-declared function tool of the same base name. Clients
-// never declare tools carrying this suffix, so the name-based partitioning in
-// media_tools.go (isServerTool / executeServerTool) is collision-proof: a client
-// tool literally named "web_search" is no longer mistaken for ours.
+// serverToolSuffix namespaces our server-tool names so a client tool with the
+// same base name (e.g. "web_search") can never collide with ours.
 const serverToolSuffix = "__lmproxy"
 
 const (

@@ -158,12 +158,8 @@ func (s *Server) executeServerTool(ctx context.Context, call toolemulation.ToolC
 	return "unknown tool"
 }
 
-// foldServerToolResults executes our server tools and formats their results as a
-// text block. Used at hand-off — when a genuine client tool call is present in
-// the same turn we cannot run the hidden tool_result loop, and we cannot surface
-// our undeclared tools to the client. Folding the results into the assistant's
-// visible text lets the client echo them back, so the model sees them on its
-// next turn while the client's own tool call is surfaced immediately.
+// foldServerToolResults runs our server tools and formats their results as text
+// to fold into the assistant message at hand-off (the client echoes it back).
 func (s *Server) foldServerToolResults(ctx context.Context, ours []toolemulation.ToolCall) string {
 	var b strings.Builder
 	for _, c := range ours {
@@ -177,8 +173,7 @@ func (s *Server) foldServerToolResults(ctx context.Context, ours []toolemulation
 	return b.String()
 }
 
-// appendText joins a base and an extra text block with a blank line, tolerating
-// either being empty.
+// appendText joins base and extra with a blank line, tolerating empty inputs.
 func appendText(base, extra string) string {
 	if strings.TrimSpace(extra) == "" {
 		return base
@@ -189,10 +184,8 @@ func appendText(base, extra string) string {
 	return base + "\n\n" + extra
 }
 
-// serverToolUsage accumulates usage across the agentic loop's rounds. Every
-// round is a separate billed gateway call, so tokens and credits must be summed:
-// reporting only the last round under-counts a multi-round turn for metering
-// clients (e.g. cc-switch), which see N+1 real charges reported as one.
+// serverToolUsage sums usage across the agentic loop's rounds; each round is a
+// separate billed call, so reporting only the last round under-counts credits.
 type serverToolUsage struct {
 	input, output, cached, cacheCreate, reasoning, total int
 	credits, originalCredits                             float64
@@ -216,8 +209,7 @@ func (u *serverToolUsage) add(r *service.ChatResult) {
 	}
 }
 
-// applyTo returns a copy of content with its usage fields replaced by the
-// accumulated totals, so the existing usage mappers render the whole turn.
+// applyTo copies content with its usage fields replaced by the accumulated totals.
 func (u *serverToolUsage) applyTo(content *service.ChatResult) *service.ChatResult {
 	c := *content
 	c.InputTokens = u.input
@@ -232,8 +224,7 @@ func (u *serverToolUsage) applyTo(content *service.ChatResult) *service.ChatResu
 	return &c
 }
 
-// result projects the accumulated totals onto an otherwise-empty ChatResult, for
-// the streaming paths that emit a usage-only frame.
+// result projects the totals onto an empty ChatResult for usage-only frames.
 func (u *serverToolUsage) result() *service.ChatResult {
 	return u.applyTo(&service.ChatResult{})
 }
@@ -269,10 +260,7 @@ func (s *Server) handleAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
 			if len(ours) > 0 {
-				// Hand-off with server tools still pending (a client tool call is
-				// present, or the round cap was hit): fold their results into the
-				// assistant text instead of dropping them, and surface only the
-				// client tool calls.
+				// Fold pending server-tool results into the text; surface only client tools.
 				result.Text = appendText(result.Text, s.foldServerToolResults(ctx, ours))
 				result.ToolCalls = others
 			}
@@ -431,9 +419,7 @@ func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
-			// Finalize: fold any pending server-tool results into a text block (we
-			// cannot surface our undeclared tools to the client), then forward the
-			// genuine client tool calls, then close the message.
+			// Finalize: fold pending server-tool results into text, then surface client tools.
 			if len(ours) > 0 {
 				if folded := s.foldServerToolResults(ctx, ours); folded != "" {
 					blockStart(map[string]any{"type": "text", "text": ""})

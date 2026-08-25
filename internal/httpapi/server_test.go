@@ -575,9 +575,7 @@ func TestServerToolUsageAccumulatesAcrossRounds(t *testing.T) {
 }
 
 func TestInjectOpenAIServerToolsSuffixedNoCollision(t *testing.T) {
-	// A client tool literally named "web_search" must NOT be mistaken for our
-	// server tool: our tools carry serverToolSuffix, so the client's own tool is
-	// preserved untouched and all three suffixed server tools are added.
+	// A client tool named "web_search" must not collide with our suffixed one.
 	req := service.ChatRequest{Tools: []toolemulation.ToolDef{{Name: "web_search"}}}
 	out := injectOpenAIServerTools(req)
 	var clientWeb, web, img, polish int
