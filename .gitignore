@@ -18,6 +18,7 @@ coverage.*
 .idea/
 .vscode/
 .playwright-mcp/
+.venv/
 nul
 LINUXDO_POST.md
 lingma-ipc-proxy.macos.json

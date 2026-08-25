@@ -564,7 +564,13 @@ func (c *Client) GenerateImage(ctx context.Context, prompt, size, model string) 
 	}
 	// Strip the gateway's embedded metadata (the AIGC label carries the
 	// provider's producer identity and per-image tracking IDs) before relaying.
-	return sanitizeImageDataURL(parsed.Data[0].URL), nil
+	url := sanitizeImageDataURL(parsed.Data[0].URL)
+	// Optionally corrupt the invisible blind-watermark payload (geometric desync
+	// + JPEG re-encode). Off unless LINGMA_IMAGE_DEWATERMARK is set.
+	if dewatermarkEnabled() {
+		url = dewatermarkDataURL(url)
+	}
+	return url, nil
 }
 
 // pngMetadataChunks are ancillary PNG chunk types that carry text / provenance
