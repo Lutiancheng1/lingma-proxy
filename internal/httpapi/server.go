@@ -1483,6 +1483,14 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 			"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
 			"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant"}, "finish_reason": nil}},
 		})
+		if strings.TrimSpace(result.ThoughtText) != "" {
+			// Surface reasoning like the incremental path and writeOpenAIChatCompletion;
+			// the aggregate branch previously dropped it.
+			_ = writeOpenAIChunk(w, flusher, map[string]any{
+				"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
+				"choices": []map[string]any{{"index": 0, "delta": map[string]any{"reasoning_content": result.ThoughtText}, "finish_reason": nil}},
+			})
+		}
 		if result.Text != "" {
 			_ = writeOpenAIChunk(w, flusher, map[string]any{
 				"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
@@ -1567,6 +1575,22 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 				// OpenAI delta.tool_calls (near-identity with the upstream).
 				if event.ToolCall == nil {
 					continue
+				}
+				if !streamedTool {
+					// Flush buffered assistant text (any preamble) before the first
+					// tool-call delta: the end-of-stream flush is skipped when the
+					// turn ends in a native tool call, so this text would be lost.
+					for _, delta := range filter.Flush() {
+						if delta == "" {
+							continue
+						}
+						if err := writeOpenAIChunk(w, flusher, map[string]any{
+							"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
+							"choices": []map[string]any{{"index": 0, "delta": map[string]any{"content": delta}, "finish_reason": nil}},
+						}); err != nil {
+							return
+						}
+					}
 				}
 				streamedTool = true
 				fn := map[string]any{}

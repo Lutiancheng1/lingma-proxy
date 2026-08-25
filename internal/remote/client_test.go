@@ -376,6 +376,7 @@ func TestBuildGenerationParametersForwardsReasoningEffort(t *testing.T) {
 	}{
 		{"explicit level passthrough", ChatRequest{Model: "gm51model", ReasoningEffort: "max"}, true, "max"},
 		{"non-openai level passthrough", ChatRequest{Model: "gm51model", ReasoningEffort: "xhigh"}, true, "xhigh"},
+		{"mixed-case level normalized", ChatRequest{Model: "gm51model", ReasoningEffort: "High"}, true, "high"},
 		{"none disables thinking", ChatRequest{Model: "gm51model", ReasoningEffort: "none"}, false, "none"},
 		{"empty on plain model omits keys", ChatRequest{Model: "gm51model"}, nil, ""},
 		{"thinking model implies enable, no level", ChatRequest{Model: "qwen3-thinking"}, true, ""},

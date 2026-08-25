@@ -1026,7 +1026,10 @@ func buildGenerationParameters(request ChatRequest) map[string]any {
 		params["reasoning_effort"] = "none"
 	case effort != "":
 		params["enable_thinking"] = true
-		params["reasoning_effort"] = strings.TrimSpace(request.ReasoningEffort)
+		// Forward the normalized (lower-cased) token, not the raw request casing:
+		// the switch matched case-insensitively, so "High" must reach the gateway
+		// as "high" to satisfy its lower-case effort enum.
+		params["reasoning_effort"] = effort
 	case remoteReasoningEnabled(request):
 		// Model implies reasoning (e.g. a *-thinking variant) with no explicit
 		// level; enable thinking and let the gateway pick its default effort.
