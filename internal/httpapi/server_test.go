@@ -919,6 +919,9 @@ func TestWriteAnthropicStreamBodyIncrementalToolUse(t *testing.T) {
 	if starts != 1 {
 		t.Fatalf("tool_use content_block_start count = %d, want 1 (no duplicate aggregated block)", starts)
 	}
+	if startIdx != 0 {
+		t.Fatalf("first tool_use block index = %d, want 0 (no hole at index 0 for a tool-only response)", startIdx)
+	}
 	if gotID != "call_1" || gotName != "read_file" {
 		t.Fatalf("tool id/name = %q/%q, want call_1/read_file", gotID, gotName)
 	}

@@ -184,8 +184,12 @@ func NewServer(addr string, svc *service.Service) *Server {
 	mux.HandleFunc("/api/v1/responses", s.handleOpenAIResponses)
 
 	s.http = &http.Server{
-		Addr:              addr,
-		Handler:           s.withRecorder(withCORS(s.withAuth(mux))),
+		Addr: addr,
+		// Auth is the outermost gate (after CORS preflight): an unauthenticated
+		// request is dropped by withAuth before withRecorder reads and JSON-parses
+		// its body, so the silent drop stays cheap and there is no pre-auth
+		// body-read / memory-amplification vector for unauthenticated clients.
+		Handler:           withCORS(s.withAuth(s.withRecorder(mux))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return s
@@ -621,6 +625,11 @@ func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
+	if !s.acquire(r.Context()) {
+		writeJSON(w, http.StatusRequestTimeout, map[string]any{"error": "request was cancelled while waiting for a proxy execution slot"})
+		return
+	}
+	defer s.release()
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	quota, err := s.svc.Quota(ctx)
@@ -668,6 +677,11 @@ func (s *Server) handleImageSearch(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "query is required")
 		return
 	}
+	if !s.acquire(r.Context()) {
+		writeOpenAIError(w, http.StatusRequestTimeout, "timeout_error", "request was cancelled while waiting for a proxy execution slot")
+		return
+	}
+	defer s.release()
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	results, err := s.svc.ImageSearch(ctx, query, count)
@@ -707,6 +721,11 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "prompt is required")
 		return
 	}
+	if !s.acquire(r.Context()) {
+		writeOpenAIError(w, http.StatusRequestTimeout, "timeout_error", "request was cancelled while waiting for a proxy execution slot")
+		return
+	}
+	defer s.release()
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	dataURL, err := s.svc.GenerateImage(ctx, body.Prompt, body.Size, body.Model)
@@ -1175,7 +1194,14 @@ func writeAnthropicStreamBody(ctx context.Context, w http.ResponseWriter, flushe
 							return
 						}
 					}
-					nextToolBlockIndex = 1
+					// Allocate tool blocks after whatever was actually emitted. A
+					// tool-only response (no thinking/text block) must start at index
+					// 0, not 1 — a hole at index 0 breaks strict Anthropic SDK
+					// accumulators that index content[] by the streamed block index.
+					nextToolBlockIndex = 0
+					if thinkingOpen {
+						nextToolBlockIndex = 1
+					}
 					if textOpen {
 						nextToolBlockIndex = textIndex + 1
 					}
