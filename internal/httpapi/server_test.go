@@ -547,6 +547,33 @@ func TestInjectAnthropicServerToolsReplacesHostedWebSearch(t *testing.T) {
 	}
 }
 
+func TestServerToolUsageAccumulatesAcrossRounds(t *testing.T) {
+	var u serverToolUsage
+	u.add(&service.ChatResult{InputTokens: 100, OutputTokens: 10, CachedInputTokens: 20, ReasoningTokens: 5, UsedTokens: 110, Credits: 1.5, OriginalCredits: 2.0, Billable: true})
+	u.add(&service.ChatResult{InputTokens: 150, OutputTokens: 30, UsedTokens: 180, Credits: 2.5, OriginalCredits: 3.0})
+	u.add(nil) // tolerated
+	got := u.result()
+	if got.InputTokens != 250 || got.OutputTokens != 40 || got.UsedTokens != 290 {
+		t.Fatalf("token sums wrong: in=%d out=%d total=%d", got.InputTokens, got.OutputTokens, got.UsedTokens)
+	}
+	if got.CachedInputTokens != 20 || got.ReasoningTokens != 5 {
+		t.Fatalf("cached/reasoning sums wrong: cached=%d reasoning=%d", got.CachedInputTokens, got.ReasoningTokens)
+	}
+	if got.Credits != 4.0 || got.OriginalCredits != 5.0 || !got.Billable {
+		t.Fatalf("credit sums wrong: credits=%v orig=%v billable=%v", got.Credits, got.OriginalCredits, got.Billable)
+	}
+	// The usage map must reflect the whole turn, not just the last round.
+	um := openAIUsageMap(got)
+	if um["prompt_tokens"] != 250 || um["completion_tokens"] != 40 || um["total_tokens"] != 290 || um["credits"] != 4.0 {
+		t.Fatalf("openAIUsageMap did not aggregate: %#v", um)
+	}
+	// applyTo keeps the content result while replacing only the usage fields.
+	merged := u.applyTo(&service.ChatResult{Text: "hi", FinishReason: "tool_calls"})
+	if merged.Text != "hi" || merged.FinishReason != "tool_calls" || merged.InputTokens != 250 {
+		t.Fatalf("applyTo should keep content and set aggregated usage: %#v", merged)
+	}
+}
+
 func TestInjectOpenAIServerToolsSuffixedNoCollision(t *testing.T) {
 	// A client tool literally named "web_search" must NOT be mistaken for our
 	// server tool: our tools carry serverToolSuffix, so the client's own tool is

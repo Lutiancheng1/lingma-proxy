@@ -64,6 +64,7 @@ func (s *Server) handleOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	ctx := r.Context()
+	var usageAcc serverToolUsage
 	for round := 0; ; round++ {
 		if ctx.Err() != nil {
 			return // client disconnected; stop issuing more rounds / gateway calls
@@ -73,6 +74,7 @@ func (s *Server) handleOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 			writeOpenAIError(w, http.StatusInternalServerError, "api_error", err.Error())
 			return
 		}
+		usageAcc.add(result)
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
 			if len(ours) > 0 {
@@ -81,7 +83,7 @@ func (s *Server) handleOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 				// the surfaced tool_calls), so only client tool calls are surfaced.
 				result.Text = appendText(result.Text, s.foldServerToolResults(ctx, ours))
 			}
-			writeOpenAIChatCompletion(w, resultWithoutServerToolCalls(result))
+			writeOpenAIChatCompletion(w, usageAcc.applyTo(resultWithoutServerToolCalls(result)))
 			return
 		}
 		req = s.appendOpenAIToolTurn(ctx, req, result, ours, round+1 >= maxMediaToolRounds)
@@ -134,7 +136,7 @@ func (s *Server) streamOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 		"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant"}, "finish_reason": nil}},
 	})
 
-	totalOutput := 0
+	var usageAcc serverToolUsage
 	emitError := func(msg string) {
 		_ = writeOpenAIChunk(w, flusher, map[string]any{"error": map[string]any{"message": msg, "type": "api_error", "code": nil, "param": nil}})
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
@@ -197,7 +199,7 @@ func (s *Server) streamOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		result := res.Result
-		totalOutput += result.OutputTokens
+		usageAcc.add(result)
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
@@ -229,12 +231,10 @@ func (s *Server) streamOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 				"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": openAIFinishReason(final)}},
 			})
 			if emitUsage {
-				usageResult := *final
-				usageResult.OutputTokens = totalOutput
 				_ = writeOpenAIChunk(w, flusher, map[string]any{
 					"id": chatID, "object": "chat.completion.chunk", "created": created, "model": model,
 					"choices": []map[string]any{},
-					"usage":   openAIUsageMap(&usageResult),
+					"usage":   openAIUsageMap(usageAcc.result()),
 				})
 			}
 			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")

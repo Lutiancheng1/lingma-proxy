@@ -189,6 +189,55 @@ func appendText(base, extra string) string {
 	return base + "\n\n" + extra
 }
 
+// serverToolUsage accumulates usage across the agentic loop's rounds. Every
+// round is a separate billed gateway call, so tokens and credits must be summed:
+// reporting only the last round under-counts a multi-round turn for metering
+// clients (e.g. cc-switch), which see N+1 real charges reported as one.
+type serverToolUsage struct {
+	input, output, cached, cacheCreate, reasoning, total int
+	credits, originalCredits                             float64
+	billable                                             bool
+}
+
+func (u *serverToolUsage) add(r *service.ChatResult) {
+	if r == nil {
+		return
+	}
+	u.input += r.InputTokens
+	u.output += r.OutputTokens
+	u.cached += r.CachedInputTokens
+	u.cacheCreate += r.CacheCreationInputTokens
+	u.reasoning += r.ReasoningTokens
+	u.total += r.UsedTokens
+	u.credits += r.Credits
+	u.originalCredits += r.OriginalCredits
+	if r.Billable {
+		u.billable = true
+	}
+}
+
+// applyTo returns a copy of content with its usage fields replaced by the
+// accumulated totals, so the existing usage mappers render the whole turn.
+func (u *serverToolUsage) applyTo(content *service.ChatResult) *service.ChatResult {
+	c := *content
+	c.InputTokens = u.input
+	c.OutputTokens = u.output
+	c.CachedInputTokens = u.cached
+	c.CacheCreationInputTokens = u.cacheCreate
+	c.ReasoningTokens = u.reasoning
+	c.UsedTokens = u.total
+	c.Credits = u.credits
+	c.OriginalCredits = u.originalCredits
+	c.Billable = u.billable
+	return &c
+}
+
+// result projects the accumulated totals onto an otherwise-empty ChatResult, for
+// the streaming paths that emit a usage-only frame.
+func (u *serverToolUsage) result() *service.ChatResult {
+	return u.applyTo(&service.ChatResult{})
+}
+
 // handleAnthropicServerTools advertises + executes our injected server tools in
 // an agentic loop. Streaming requests keep real token-by-token streaming
 // (thinking and text flow live); only our own tool calls are suppressed and the
@@ -200,6 +249,7 @@ func (s *Server) handleAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	ctx := r.Context()
+	var usageAcc serverToolUsage
 	for round := 0; ; round++ {
 		if ctx.Err() != nil {
 			return // client disconnected; stop issuing more rounds / gateway calls
@@ -215,6 +265,7 @@ func (s *Server) handleAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 			writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
 			return
 		}
+		usageAcc.add(result)
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
 			if len(ours) > 0 {
@@ -225,7 +276,7 @@ func (s *Server) handleAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 				result.Text = appendText(result.Text, s.foldServerToolResults(ctx, ours))
 				result.ToolCalls = others
 			}
-			s.emitAnthropicResultJSON(w, normalized, result)
+			s.emitAnthropicResultJSON(w, normalized, usageAcc.applyTo(result))
 			return
 		}
 		req = s.appendServerToolTurn(ctx, req, result, ours, round+1 >= maxMediaToolRounds)
@@ -286,7 +337,7 @@ func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 	})
 
 	index := 0
-	totalOutput := 0
+	var usageAcc serverToolUsage
 	blockStart := func(block map[string]any) {
 		_ = writeSSEEvent(w, flusher, "content_block_start", map[string]any{"type": "content_block_start", "index": index, "content_block": block})
 	}
@@ -304,7 +355,7 @@ func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 		}
 		normalized, err := normalizeAnthropicRequest(req)
 		if err != nil {
-			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]any{"output_tokens": totalOutput}})
+			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": anthropicFinalUsage(usageAcc.result())})
 			_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 			return
 		}
@@ -313,7 +364,7 @@ func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 
 		events, done, err := s.svc.GenerateStream(ctx, normalized)
 		if err != nil {
-			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]any{"output_tokens": totalOutput}})
+			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": anthropicFinalUsage(usageAcc.result())})
 			_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 			return
 		}
@@ -371,12 +422,12 @@ func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 
 		res := <-done
 		if res.Err != nil || res.Result == nil {
-			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]any{"output_tokens": totalOutput}})
+			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": anthropicFinalUsage(usageAcc.result())})
 			_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 			return
 		}
 		result := res.Result
-		totalOutput += result.OutputTokens
+		usageAcc.add(result)
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
@@ -398,7 +449,7 @@ func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 				blockStop()
 			}
 			stopReason, stopSequence := anthropicStopReason(result)
-			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": stopSequence}, "usage": map[string]any{"output_tokens": totalOutput}})
+			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": stopSequence}, "usage": anthropicFinalUsage(usageAcc.result())})
 			_ = writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 			return
 		}
