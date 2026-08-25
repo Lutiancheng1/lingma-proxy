@@ -1,16 +1,19 @@
 package httpapi
 
+import "lingma-ipc-proxy/internal/toolemulation"
+
 // Embedded tool descriptions extracted verbatim from the QoderCN CLI
 // (qoderclicn) tool registry. These back gateway-only capabilities that clients
-// like Claude Code do not have natively (image search / image generation). The
-// text is the model-facing description the CLI ships, reused so an advertised
-// tool behaves the same way the CLI's does.
+// like Claude Code / OpenAI clients do not have natively (web search / image
+// search). The text is the model-facing description the CLI ships, reused so an
+// advertised tool behaves the same way the CLI's does. The proxy advertises
+// these as "server tools": the model decides whether to call them, and the
+// proxy executes them server-side (see media_tools.go / openai_server_tools.go).
 
 const webSearchToolDescription = `- Allows the model to search the web and use the results to inform responses
 - Provides up-to-date information for current events and recent data
 - Returns search result information formatted as search result blocks, including links as markdown hyperlinks
 - Use this tool for accessing information beyond the model's knowledge cutoff
-- Searches are performed automatically within a single API call
 CRITICAL REQUIREMENT - You MUST follow this:
   - After answering the user's question, you MUST include a "Sources:" section at the end of your response
   - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
@@ -19,45 +22,60 @@ IMPORTANT - Use the correct year in search queries:
 
 const imageSearchToolDescription = `Search the web for images and return structured metadata for candidate results. The tool DOES NOT download originals into the workspace; it returns result metadata such as title, imageUrl, and dimensions.
 Use this for visual research and real-world asset sourcing, such as brand references, product imagery, places, events, or other existing/factual visuals.
-After picking the result(s) you want, download the original image yourself with Bash curl or another suitable tool before using it as a local asset.
-Use ImageGen only when the user needs a newly generated image rather than existing web imagery.`
+After picking the result(s) you want, download the original image yourself with Bash curl or another suitable tool before using it as a local asset.`
 
-const imageGenToolDescription = `Use this tool when you need to generate a high-fidelity image based on the prompt. The image is returned as a base64 data URL.
-Provide a detailed English description of the image to generate. Available sizes (aspect ratio): 1024x1024 (1:1), 1536x1024 (3:2), 1024x1536 (2:3), 768x1024 (3:4), 1024x768 (4:3), 1024x1280 (4:5), 1280x1024 (5:4), 1024x1792 (9:16), 1792x1024 (16:9), 2560x1080 (21:9). Default is 1024x1024.`
-
-// imageGenSizes is the set of sizes the gateway's generateImage accepts.
-var imageGenSizes = []string{
-	"1024x1024", "1536x1024", "1024x1536", "768x1024", "1024x768",
-	"1024x1280", "1280x1024", "1024x1792", "1792x1024", "2560x1080",
+// serverToolSpec is the canonical definition of a proxy-executed "server tool":
+// a gateway-only capability the proxy advertises to the model and runs
+// server-side. One spec generates both the Anthropic tool def (a raw map with
+// input_schema) and the OpenAI/service ToolDef, so the two API surfaces stay in
+// sync from a single source.
+type serverToolSpec struct {
+	name        string
+	description string
+	schema      map[string]any
 }
 
-// embeddedAnthropicTools returns the Anthropic tool definitions for the
-// gateway-only capabilities, ready to advertise to the model.
-func embeddedAnthropicTools() []any {
-	return []any{
-		map[string]any{
-			"name":        "ImageSearch",
-			"description": imageSearchToolDescription,
-			"input_schema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": map[string]any{"type": "string", "description": "The image search query."},
-					"count": map[string]any{"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of image results (1-10, default 5)."},
-				},
-				"required": []any{"query"},
-			},
+var webSearchSpec = serverToolSpec{
+	name:        "web_search",
+	description: webSearchToolDescription,
+	schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string", "description": "The web search query."},
 		},
-		map[string]any{
-			"name":        "ImageGen",
-			"description": imageGenToolDescription,
-			"input_schema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"prompt": map[string]any{"type": "string", "description": "Detailed description of the image to generate."},
-					"size":   map[string]any{"type": "string", "enum": imageGenSizes, "description": "Image size (aspect ratio). Default 1024x1024."},
-				},
-				"required": []any{"prompt"},
-			},
+		"required": []any{"query"},
+	},
+}
+
+var imageSearchSpec = serverToolSpec{
+	name:        "ImageSearch",
+	description: imageSearchToolDescription,
+	schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string", "description": "The image search query."},
+			"count": map[string]any{"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of image results (1-10, default 5)."},
 		},
+		"required": []any{"query"},
+	},
+}
+
+// anthropicDef renders the spec as an Anthropic tool definition (name +
+// description + input_schema), ready to append to a request's tools list.
+func (t serverToolSpec) anthropicDef() map[string]any {
+	return map[string]any{
+		"name":         t.name,
+		"description":  t.description,
+		"input_schema": t.schema,
+	}
+}
+
+// toolDef renders the spec as a service-layer ToolDef, used on the OpenAI path
+// where the agentic loop operates on the normalized service.ChatRequest.
+func (t serverToolSpec) toolDef() toolemulation.ToolDef {
+	return toolemulation.ToolDef{
+		Name:        t.name,
+		Description: t.description,
+		InputSchema: t.schema,
 	}
 }

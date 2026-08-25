@@ -784,18 +784,14 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Claude Code's hosted web_search is a server-side tool the gateway's chat
-	// endpoint cannot run inline. Service it with the gateway's own oneSearch:
-	// fetch results, inject them into the conversation, strip the hosted tool,
-	// then fall through to normal handling so the model answers using them.
-	if hosted, query := anthropicHostedWebSearchInvocation(req); hosted {
-		req = s.applyHostedWebSearch(r.Context(), req, query)
-	}
-
-	// Opt-in: advertise + server-side execute the gateway's ImageSearch/ImageGen
-	// tools so a client without them can still search/generate images.
-	if mediaToolsEnabled() {
-		s.handleAnthropicMediaTools(w, r, req)
+	// Advertise gateway-only "server tools" and execute them server-side in an
+	// agentic loop: web_search whenever the client declares a hosted web_search
+	// tool (the gateway's chat endpoint cannot run it inline), and ImageSearch
+	// when the injection flag is set. The model decides whether to call them;
+	// our tool calls never reach the client.
+	if defs, ok := s.anthropicServerToolDefs(req); ok {
+		req = injectAnthropicServerTools(req, defs)
+		s.handleAnthropicServerTools(w, r, req)
 		return
 	}
 
@@ -876,6 +872,16 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.applyDefaultModel(&normalized)
+
+	// Opt-in: advertise + server-side execute the gateway's web_search /
+	// ImageSearch tools so an OpenAI client without them can still use them. The
+	// model decides whether to call them; our tool calls never reach the client.
+	if mediaToolsEnabled() {
+		normalized = injectOpenAIServerTools(normalized)
+		emitUsage := req.StreamOptions == nil || req.StreamOptions.IncludeUsage
+		s.handleOpenAIServerTools(w, r, normalized, req.Stream, emitUsage)
+		return
+	}
 
 	if req.Stream {
 		emitUsage := req.StreamOptions == nil || req.StreamOptions.IncludeUsage
@@ -1960,39 +1966,6 @@ func truthyEnv(name string) bool {
 	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
-func anthropicHostedWebSearchInvocation(req anthropicRequest) (bool, string) {
-	if !hasAnthropicHostedWebSearchTool(req.Tools) {
-		return false, ""
-	}
-	// A follow-up turn already carrying tool results: don't search again.
-	if hasAnthropicToolResult(req.Messages) {
-		return false, ""
-	}
-	if !anthropicHostedWebSearchRequested(req.Tools, req.ToolChoice) {
-		return false, ""
-	}
-	query := anthropicHostedWebSearchQuery(req.Messages)
-	if query == "" {
-		return false, ""
-	}
-	return true, query
-}
-
-// applyHostedWebSearch runs the gateway's oneSearch for the query, strips the
-// hosted web_search tool from the request, and appends the results to the
-// conversation so the model answers using them. On any search failure it still
-// strips the tool and proceeds (model answers unaided) so the request never
-// stalls waiting on a tool the client cannot execute.
-func (s *Server) applyHostedWebSearch(ctx context.Context, req anthropicRequest, query string) anthropicRequest {
-	req.Tools = stripAnthropicHostedWebSearchTool(req.Tools)
-	results, err := s.svc.WebSearch(ctx, query)
-	if err != nil || len(results) == 0 {
-		return req
-	}
-	req.Messages = append(req.Messages, rawMessage{Role: "user", Content: formatWebSearchResults(query, results)})
-	return req
-}
-
 // stripAnthropicHostedWebSearchTool removes hosted web_search tool definitions
 // from the raw tools list, leaving client (function) tools intact.
 func stripAnthropicHostedWebSearchTool(raw any) any {
@@ -2040,22 +2013,6 @@ func formatWebSearchResults(query string, results []remote.SearchResult) string 
 	return b.String()
 }
 
-func hasAnthropicToolResult(messages []rawMessage) bool {
-	for _, message := range messages {
-		items, ok := message.Content.([]any)
-		if !ok {
-			continue
-		}
-		for _, item := range items {
-			m, ok := item.(map[string]any)
-			if ok && stringFromAny(m["type"]) == "tool_result" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func estimateAnthropicInputTokens(req anthropicRequest) int {
 	// Estimate from TEXT only; image base64 must never be counted rune-by-rune
 	// (a single 1MB image would otherwise inflate the estimate by ~460k tokens
@@ -2097,58 +2054,6 @@ func hasAnthropicHostedWebSearchTool(raw any) bool {
 		}
 	}
 	return false
-}
-
-func anthropicHostedWebSearchRequested(tools any, choice any) bool {
-	if m, ok := choice.(map[string]any); ok {
-		if strings.TrimSpace(stringFromAny(m["name"])) == "web_search" {
-			return true
-		}
-	}
-
-	items, ok := tools.([]any)
-	if !ok || len(items) != 1 {
-		return false
-	}
-	m, ok := items[0].(map[string]any)
-	if !ok {
-		return false
-	}
-	return strings.TrimSpace(stringFromAny(m["name"])) == "web_search" &&
-		toolemulation.IsAnthropicHostedToolType(stringFromAny(m["type"]))
-}
-
-func anthropicHostedWebSearchQuery(messages []rawMessage) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if strings.ToLower(strings.TrimSpace(messages[i].Role)) != "user" {
-			continue
-		}
-		text := strings.TrimSpace(extractText(messages[i].Content))
-		if text == "" {
-			continue
-		}
-		return cleanHostedWebSearchQuery(text)
-	}
-	return ""
-}
-
-func cleanHostedWebSearchQuery(text string) string {
-	text = strings.TrimSpace(text)
-	prefixes := []string{
-		"Perform a web search for the query:",
-		"Search the web for:",
-		"Web search query:",
-	}
-	lower := strings.ToLower(text)
-	for _, prefix := range prefixes {
-		idx := strings.Index(lower, strings.ToLower(prefix))
-		if idx >= 0 {
-			text = strings.TrimSpace(text[idx+len(prefix):])
-			break
-		}
-	}
-	text = strings.Trim(text, " \t\r\n\"'`")
-	return text
 }
 
 func normalizeAnthropicRequest(req anthropicRequest) (service.ChatRequest, error) {

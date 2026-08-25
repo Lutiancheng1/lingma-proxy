@@ -451,86 +451,116 @@ func TestNormalizeAnthropicRequestRejectsEmptyMessages(t *testing.T) {
 	}
 }
 
-func TestAnthropicHostedWebSearchCall(t *testing.T) {
-	req := anthropicRequest{
-		Model: "Kimi-K2.6",
-		Tools: []any{
-			map[string]any{
-				"name": "web_search",
-				"type": "web_search_20250305",
-			},
-		},
-		ToolChoice: map[string]any{
-			"type": "tool",
-			"name": "web_search",
-		},
-		Messages: []rawMessage{{
-			Role: "user",
-			Content: []any{
-				map[string]any{
-					"type": "text",
-					"text": "Perform a web search for the query: Hermes agent web UI documentation",
-				},
-			},
-		}},
+func defsContainTool(defs []any, name string) bool {
+	for _, d := range defs {
+		if m, ok := d.(map[string]any); ok && stringFromAny(m["name"]) == name {
+			return true
+		}
 	}
+	return false
+}
 
-	hosted, query := anthropicHostedWebSearchInvocation(req)
-	if !hosted {
-		t.Fatal("expected hosted web_search invocation")
+// defsContainCallableTool reports whether defs has a tool that the model can
+// call: it has an input_schema and is not a hosted (server-executed by the
+// upstream) tool type.
+func defsContainCallableTool(defs []any, name string) bool {
+	for _, d := range defs {
+		m, ok := d.(map[string]any)
+		if !ok || stringFromAny(m["name"]) != name {
+			continue
+		}
+		if _, hasSchema := m["input_schema"]; hasSchema && stringFromAny(m["type"]) == "" {
+			return true
+		}
 	}
-	if query != "Hermes agent web UI documentation" {
-		t.Fatalf("query = %q", query)
+	return false
+}
+
+func TestAnthropicServerToolDefsWebSearch(t *testing.T) {
+	req := anthropicRequest{
+		Tools: []any{
+			map[string]any{"name": "web_search", "type": "web_search_20250305"},
+			map[string]any{"name": "Bash", "input_schema": map[string]any{"type": "object"}},
+		},
+	}
+	defs, ok := (&Server{}).anthropicServerToolDefs(req)
+	if !ok {
+		t.Fatal("expected server tools to be offered for a hosted web_search request")
+	}
+	if !defsContainCallableTool(defs, "web_search") {
+		t.Fatalf("expected a callable web_search def, got %#v", defs)
+	}
+	if defsContainTool(defs, "ImageSearch") {
+		t.Fatal("ImageSearch should not be offered without the injection flag")
 	}
 }
 
-func TestAnthropicHostedWebSearchCallIgnoresRegularClientWebSearch(t *testing.T) {
-	req := anthropicRequest{
-		Tools: []any{
-			map[string]any{
-				"name": "web_search",
-				"input_schema": map[string]any{
-					"type": "object",
-				},
-			},
-		},
-		Messages: []rawMessage{{
-			Role:    "user",
-			Content: "Perform a web search for the query: Lingma",
-		}},
+func TestAnthropicServerToolDefsImageSearchFlag(t *testing.T) {
+	t.Setenv("LINGMA_INJECT_MEDIA_TOOLS", "1")
+	defs, ok := (&Server{}).anthropicServerToolDefs(anthropicRequest{})
+	if !ok || !defsContainTool(defs, "ImageSearch") {
+		t.Fatalf("expected ImageSearch when the flag is set: ok=%v defs=%#v", ok, defs)
 	}
-
-	if hosted, _ := anthropicHostedWebSearchInvocation(req); hosted {
-		t.Fatal("regular client web_search should stay in prompt tool emulation")
+	if defsContainTool(defs, "web_search") {
+		t.Fatal("web_search should not be offered unless the client declares it")
 	}
 }
 
-func TestAnthropicHostedWebSearchCallIgnoresToolResultFollowup(t *testing.T) {
-	req := anthropicRequest{
-		Tools: []any{
-			map[string]any{
-				"name": "web_search",
-				"type": "web_search_20250305",
-			},
-		},
-		ToolChoice: map[string]any{
-			"type": "tool",
-			"name": "web_search",
-		},
-		Messages: []rawMessage{{
-			Role: "user",
-			Content: []any{
-				map[string]any{
-					"type":        "tool_result",
-					"tool_use_id": "toolu_123",
-					"content":     "result",
-				},
-			},
-		}},
+func TestAnthropicServerToolDefsNone(t *testing.T) {
+	req := anthropicRequest{Tools: []any{
+		map[string]any{"name": "Bash", "input_schema": map[string]any{"type": "object"}},
+	}}
+	if _, ok := (&Server{}).anthropicServerToolDefs(req); ok {
+		t.Fatal("no server tools should be offered without a hosted web_search or the flag")
 	}
+}
 
-	if hosted, _ := anthropicHostedWebSearchInvocation(req); hosted {
-		t.Fatal("hosted web_search should not short-circuit after a tool_result")
+func TestInjectAnthropicServerToolsReplacesHostedWebSearch(t *testing.T) {
+	req := anthropicRequest{Tools: []any{
+		map[string]any{"name": "web_search", "type": "web_search_20250305"},
+		map[string]any{"name": "Bash", "input_schema": map[string]any{"type": "object"}},
+	}}
+	defs, _ := (&Server{}).anthropicServerToolDefs(req)
+	out := injectAnthropicServerTools(req, defs)
+	tools, ok := out.Tools.([]any)
+	if !ok {
+		t.Fatalf("tools = %#v", out.Tools)
+	}
+	var hosted, callable, bash int
+	for _, it := range tools {
+		m, _ := it.(map[string]any)
+		name := stringFromAny(m["name"])
+		switch {
+		case name == "web_search" && toolemulation.IsAnthropicHostedToolType(stringFromAny(m["type"])):
+			hosted++
+		case name == "web_search":
+			callable++
+		case name == "Bash":
+			bash++
+		}
+	}
+	if hosted != 0 || callable != 1 || bash != 1 {
+		t.Fatalf("hosted=%d callable=%d bash=%d tools=%#v", hosted, callable, bash, tools)
+	}
+	if !isServerTool("web_search") || !isServerTool("ImageSearch") || isServerTool("Bash") {
+		t.Fatal("isServerTool classification wrong")
+	}
+}
+
+func TestInjectOpenAIServerToolsDeduplicates(t *testing.T) {
+	req := service.ChatRequest{Tools: []toolemulation.ToolDef{{Name: "web_search"}}}
+	out := injectOpenAIServerTools(req)
+	var web, img int
+	for _, tool := range out.Tools {
+		switch tool.Name {
+		case "web_search":
+			web++
+		case "ImageSearch":
+			img++
+		}
+	}
+	if web != 1 || img != 1 {
+		t.Fatalf("expected web_search kept once + ImageSearch added: web=%d img=%d", web, img)
 	}
 }
 
