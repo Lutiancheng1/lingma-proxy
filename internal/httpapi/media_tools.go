@@ -201,6 +201,9 @@ func (s *Server) handleAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 	}
 	ctx := r.Context()
 	for round := 0; ; round++ {
+		if ctx.Err() != nil {
+			return // client disconnected; stop issuing more rounds / gateway calls
+		}
 		normalized, err := normalizeAnthropicRequest(req)
 		if err != nil {
 			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -296,6 +299,9 @@ func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 	}
 
 	for round := 0; ; round++ {
+		if ctx.Err() != nil {
+			return // client disconnected; stop issuing more rounds / gateway calls
+		}
 		normalized, err := normalizeAnthropicRequest(req)
 		if err != nil {
 			_ = writeSSEEvent(w, flusher, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]any{"output_tokens": totalOutput}})

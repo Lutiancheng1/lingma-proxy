@@ -65,6 +65,9 @@ func (s *Server) handleOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 	}
 	ctx := r.Context()
 	for round := 0; ; round++ {
+		if ctx.Err() != nil {
+			return // client disconnected; stop issuing more rounds / gateway calls
+		}
 		result, err := s.svc.Generate(ctx, req)
 		if err != nil {
 			writeOpenAIError(w, http.StatusInternalServerError, "api_error", err.Error())
@@ -139,6 +142,9 @@ func (s *Server) streamOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 	}
 
 	for round := 0; ; round++ {
+		if ctx.Err() != nil {
+			return // client disconnected; stop issuing more rounds / gateway calls
+		}
 		events, done, err := s.svc.GenerateStream(ctx, req)
 		if err != nil {
 			emitError(err.Error())
