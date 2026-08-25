@@ -158,6 +158,37 @@ func (s *Server) executeServerTool(ctx context.Context, call toolemulation.ToolC
 	return "unknown tool"
 }
 
+// foldServerToolResults executes our server tools and formats their results as a
+// text block. Used at hand-off — when a genuine client tool call is present in
+// the same turn we cannot run the hidden tool_result loop, and we cannot surface
+// our undeclared tools to the client. Folding the results into the assistant's
+// visible text lets the client echo them back, so the model sees them on its
+// next turn while the client's own tool call is surfaced immediately.
+func (s *Server) foldServerToolResults(ctx context.Context, ours []toolemulation.ToolCall) string {
+	var b strings.Builder
+	for _, c := range ours {
+		label := strings.TrimSuffix(c.Name, serverToolSuffix)
+		out := s.executeServerTool(ctx, c)
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "[%s results]\n%s", label, out)
+	}
+	return b.String()
+}
+
+// appendText joins a base and an extra text block with a blank line, tolerating
+// either being empty.
+func appendText(base, extra string) string {
+	if strings.TrimSpace(extra) == "" {
+		return base
+	}
+	if strings.TrimSpace(base) == "" {
+		return extra
+	}
+	return base + "\n\n" + extra
+}
+
 // handleAnthropicServerTools advertises + executes our injected server tools in
 // an agentic loop. Streaming requests keep real token-by-token streaming
 // (thinking and text flow live); only our own tool calls are suppressed and the
@@ -183,6 +214,14 @@ func (s *Server) handleAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 		}
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
+			if len(ours) > 0 {
+				// Hand-off with server tools still pending (a client tool call is
+				// present, or the round cap was hit): fold their results into the
+				// assistant text instead of dropping them, and surface only the
+				// client tool calls.
+				result.Text = appendText(result.Text, s.foldServerToolResults(ctx, ours))
+				result.ToolCalls = others
+			}
 			s.emitAnthropicResultJSON(w, normalized, result)
 			return
 		}
@@ -335,7 +374,17 @@ func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 		ours, others := partitionServerToolCalls(result.ToolCalls)
 
 		if len(ours) == 0 || len(others) > 0 || round >= maxMediaToolRounds {
-			// Finalize: forward any genuine client tool calls, then close the message.
+			// Finalize: fold any pending server-tool results into a text block (we
+			// cannot surface our undeclared tools to the client), then forward the
+			// genuine client tool calls, then close the message.
+			if len(ours) > 0 {
+				if folded := s.foldServerToolResults(ctx, ours); folded != "" {
+					blockStart(map[string]any{"type": "text", "text": ""})
+					blockDelta(map[string]any{"type": "text_delta", "text": folded})
+					blockStop()
+				}
+				result.ToolCalls = others
+			}
 			for _, tc := range others {
 				argsJSON, _ := json.Marshal(tc.Arguments)
 				blockStart(map[string]any{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": map[string]any{}})
