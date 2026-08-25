@@ -2,9 +2,11 @@ package remote
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -559,7 +561,68 @@ func (c *Client) GenerateImage(ctx context.Context, prompt, size, model string) 
 	if len(parsed.Data) == 0 || strings.TrimSpace(parsed.Data[0].URL) == "" {
 		return "", fmt.Errorf("image generation returned no image")
 	}
-	return parsed.Data[0].URL, nil
+	// Strip the gateway's embedded metadata (the AIGC label carries the
+	// provider's producer identity and per-image tracking IDs) before relaying.
+	return sanitizeImageDataURL(parsed.Data[0].URL), nil
+}
+
+// pngMetadataChunks are ancillary PNG chunk types that carry text / provenance
+// metadata. The gateway stamps an "AIGC" tEXt chunk containing its producer
+// identity (a unified social credit code) and per-image tracking IDs; these are
+// stripped before relaying so the proxy does not leak that information to
+// downstream clients. Image-critical and rendering chunks are kept untouched.
+var pngMetadataChunks = map[string]bool{
+	"tEXt": true, "zTXt": true, "iTXt": true, "eXIf": true, "tIME": true,
+}
+
+var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+
+// sanitizeImageDataURL removes metadata from a PNG data URL before returning it
+// to callers. Non-PNG data URLs (and any decode failure) are returned unchanged
+// so image generation never fails over cleanup.
+func sanitizeImageDataURL(dataURL string) string {
+	const prefix = "data:image/png;base64,"
+	if !strings.HasPrefix(dataURL, prefix) {
+		return dataURL
+	}
+	png, err := base64.StdEncoding.DecodeString(dataURL[len(prefix):])
+	if err != nil {
+		return dataURL
+	}
+	cleaned, ok := stripPNGMetadata(png)
+	if !ok {
+		return dataURL
+	}
+	return prefix + base64.StdEncoding.EncodeToString(cleaned)
+}
+
+// stripPNGMetadata drops metadata-bearing ancillary chunks (see
+// pngMetadataChunks) from a PNG, copying every other chunk verbatim (CRCs are
+// preserved). Returns (cleaned, true) on a well-formed PNG, or (input, false)
+// if the bytes are not a parseable PNG.
+func stripPNGMetadata(png []byte) ([]byte, bool) {
+	if !bytes.HasPrefix(png, pngSignature) {
+		return png, false
+	}
+	out := make([]byte, 0, len(png))
+	out = append(out, pngSignature...)
+	p := len(pngSignature)
+	for p+12 <= len(png) { // 4 length + 4 type + data + 4 CRC
+		n := int(binary.BigEndian.Uint32(png[p : p+4]))
+		chunkEnd := p + 12 + n
+		if n < 0 || chunkEnd > len(png) {
+			return png, false // malformed chunk length
+		}
+		typ := string(png[p+4 : p+8])
+		if !pngMetadataChunks[typ] {
+			out = append(out, png[p:chunkEnd]...)
+		}
+		p = chunkEnd
+		if typ == "IEND" {
+			break
+		}
+	}
+	return out, true
 }
 
 // openAPIBaseURL derives the openapi host (quota / user APIs) from the chat base
