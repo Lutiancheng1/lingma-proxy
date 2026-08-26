@@ -322,13 +322,10 @@ func TestBuildBodyProjectsRemoteImages(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		t.Fatal(err)
 	}
-	images, ok := payload["image_urls"].([]any)
-	if !ok || len(images) != 1 {
-		t.Fatalf("image_urls = %#v", payload["image_urls"])
-	}
-	image, ok := images[0].(string)
-	if !ok || !strings.HasPrefix(image, "data:image/png;base64,") {
-		t.Fatalf("unexpected image projection: %#v", images[0])
+	// Images ride in the message content parts, not the top-level image_urls
+	// field (matching the QoderCN CLI); image_urls stays null.
+	if payload["image_urls"] != nil {
+		t.Fatalf("image_urls = %#v, want null", payload["image_urls"])
 	}
 	modelConfig := payload["model_config"].(map[string]any)
 	if modelConfig["is_vl"] != true {
@@ -337,8 +334,16 @@ func TestBuildBodyProjectsRemoteImages(t *testing.T) {
 	messages := payload["messages"].([]any)
 	message := messages[0].(map[string]any)
 	content := message["content"].([]any)
-	if content[0].(map[string]any)["type"] != "text" || content[1].(map[string]any)["type"] != "image_url" {
-		t.Fatalf("unexpected message content: %#v", content)
+	if content[0].(map[string]any)["type"] != "text" {
+		t.Fatalf("unexpected first content part: %#v", content[0])
+	}
+	imagePart := content[1].(map[string]any)
+	if imagePart["type"] != "image_url" {
+		t.Fatalf("unexpected image content part: %#v", imagePart)
+	}
+	url, _ := imagePart["image_url"].(map[string]any)["url"].(string)
+	if !strings.HasPrefix(url, "data:image/png;base64,") {
+		t.Fatalf("unexpected image url: %q", url)
 	}
 }
 
@@ -359,6 +364,53 @@ func TestBuildBodyEnablesRemoteReasoningWhenRequested(t *testing.T) {
 	modelConfig := payload["model_config"].(map[string]any)
 	if modelConfig["is_reasoning"] != true {
 		t.Fatalf("model_config.is_reasoning = %#v, want true", modelConfig["is_reasoning"])
+	}
+}
+
+func TestBuildBodyDisablesReasoningWhenEffortNone(t *testing.T) {
+	// effort=none must give is_reasoning=false AND enable_thinking=false (agree).
+	client := New(Config{})
+	body, err := client.buildBody("req-1", ChatRequest{Model: "qmodel_38max", ReasoningEffort: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if mc := payload["model_config"].(map[string]any); mc["is_reasoning"] != false {
+		t.Fatalf("model_config.is_reasoning = %#v, want false when effort=none", mc["is_reasoning"])
+	}
+	if params := payload["parameters"].(map[string]any); params["enable_thinking"] != false {
+		t.Fatalf("parameters.enable_thinking = %#v, want false when effort=none", params["enable_thinking"])
+	}
+}
+
+func TestBuildGenerationParametersForwardsReasoningEffort(t *testing.T) {
+	cases := []struct {
+		name        string
+		req         ChatRequest
+		wantEnable  any    // true, false, or nil (key absent)
+		wantEffort  string // "" means key absent
+	}{
+		{"explicit level passthrough", ChatRequest{Model: "gm51model", ReasoningEffort: "max"}, true, "max"},
+		{"non-openai level passthrough", ChatRequest{Model: "gm51model", ReasoningEffort: "xhigh"}, true, "xhigh"},
+		{"mixed-case level normalized", ChatRequest{Model: "gm51model", ReasoningEffort: "High"}, true, "high"},
+		{"none disables thinking", ChatRequest{Model: "gm51model", ReasoningEffort: "none"}, false, "none"},
+		{"empty on plain model omits keys", ChatRequest{Model: "gm51model"}, nil, ""},
+		{"thinking model implies enable, no level", ChatRequest{Model: "qwen3-thinking"}, true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params := buildGenerationParameters(tc.req)
+			if got := params["enable_thinking"]; got != tc.wantEnable {
+				t.Fatalf("enable_thinking = %#v, want %#v", got, tc.wantEnable)
+			}
+			got, _ := params["reasoning_effort"].(string)
+			if got != tc.wantEffort {
+				t.Fatalf("reasoning_effort = %q, want %q", got, tc.wantEffort)
+			}
+		})
 	}
 }
 
@@ -625,5 +677,129 @@ func TestLoadMachineIDReadsQoderCLIAuthIDFallback(t *testing.T) {
 	}
 	if got != "qoder-machine-id-1234567890" {
 		t.Fatalf("machine id = %q", got)
+	}
+}
+
+func sseFrame(t *testing.T, inner map[string]any) string {
+	t.Helper()
+	body, err := json.Marshal(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer, err := json.Marshal(map[string]any{
+		"body":            string(body),
+		"statusCodeValue": 200,
+		"statusCode":      "OK",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(outer)
+}
+
+func TestParseSSEPayloadReasoningDelta(t *testing.T) {
+	ev, ok, err := parseSSEPayload(sseFrame(t, map[string]any{
+		"object":  "chat.completion.chunk",
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"reasoning_content": "The user"}}},
+	}))
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if ev.Reasoning != "The user" || ev.Content != "" {
+		t.Fatalf("reasoning=%q content=%q", ev.Reasoning, ev.Content)
+	}
+}
+
+func TestParseSSEPayloadToolCallWithFinish(t *testing.T) {
+	ev, ok, err := parseSSEPayload(sseFrame(t, map[string]any{
+		"choices": []any{map[string]any{
+			"index":         0,
+			"finish_reason": "tool_calls",
+			"delta": map[string]any{"tool_calls": []any{map[string]any{
+				"index":    0,
+				"id":       "call_abc",
+				"type":     "function",
+				"function": map[string]any{"name": "Bash", "arguments": `{"command":"echo hi"}`},
+			}}},
+		}},
+	}))
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if ev.FinishReason != "tool_calls" {
+		t.Fatalf("finish=%q", ev.FinishReason)
+	}
+	if len(ev.ToolCalls) != 1 || ev.ToolCalls[0].Name != "Bash" || ev.ToolCalls[0].ID != "call_abc" {
+		t.Fatalf("toolcalls=%+v", ev.ToolCalls)
+	}
+}
+
+func TestParseSSEPayloadUsage(t *testing.T) {
+	ev, ok, err := parseSSEPayload(sseFrame(t, map[string]any{
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": ""}, "finish_reason": "stop"}},
+		"usage": map[string]any{
+			"prompt_tokens":             20095,
+			"completion_tokens":         28,
+			"total_tokens":              20123,
+			"credits":                   0.5841,
+			"original_credits":          0.5841,
+			"billable":                  true,
+			"prompt_tokens_details":     map[string]any{"cached_tokens": 20009},
+			"completion_tokens_details": map[string]any{"reasoning_tokens": 11},
+		},
+	}))
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if ev.Usage == nil {
+		t.Fatal("usage nil")
+	}
+	if ev.Usage.PromptTokens != 20095 || ev.Usage.CompletionTokens != 28 || ev.Usage.TotalTokens != 20123 {
+		t.Fatalf("tokens=%+v", ev.Usage)
+	}
+	if ev.Usage.PromptTokensDetails.CachedTokens != 20009 {
+		t.Fatalf("cached=%d", ev.Usage.PromptTokensDetails.CachedTokens)
+	}
+	if ev.Usage.CompletionTokensDetails.ReasoningTokens != 11 {
+		t.Fatalf("reasoning=%d", ev.Usage.CompletionTokensDetails.ReasoningTokens)
+	}
+	if ev.FinishReason != "stop" {
+		t.Fatalf("finish=%q", ev.FinishReason)
+	}
+}
+
+func TestProjectMessagesEmitsReasoningContent(t *testing.T) {
+	req := ChatRequest{Messages: []Message{
+		{Role: "assistant", Content: "final answer", ReasoningText: "because reasons"},
+	}}
+	out := projectMessages(req)
+	if len(out) != 1 {
+		t.Fatalf("message count = %d", len(out))
+	}
+	if out[0]["reasoning_content"] != "because reasons" {
+		t.Fatalf("reasoning_content = %#v, want %q", out[0]["reasoning_content"], "because reasons")
+	}
+	if out[0]["reasoning_content_signature"] != "" {
+		t.Fatalf("reasoning_content_signature = %#v, want empty (never synthesized)", out[0]["reasoning_content_signature"])
+	}
+}
+
+func TestProjectMessagesOmitsReasoningForUser(t *testing.T) {
+	req := ChatRequest{Messages: []Message{
+		{Role: "user", Content: "hi", ReasoningText: "should be ignored"},
+	}}
+	out := projectMessages(req)
+	if _, ok := out[0]["reasoning_content"]; ok {
+		t.Fatalf("user message should not carry reasoning_content: %#v", out[0])
+	}
+}
+
+func TestBuildGenerationParametersOmitsTemperatureWhenUnset(t *testing.T) {
+	if _, ok := buildGenerationParameters(ChatRequest{})["temperature"]; ok {
+		t.Fatal("temperature should be omitted when caller did not set it")
+	}
+	temp := 0.9
+	if v := buildGenerationParameters(ChatRequest{Temperature: &temp})["temperature"]; v != 0.9 {
+		t.Fatalf("temperature = %v, want 0.9", v)
 	}
 }

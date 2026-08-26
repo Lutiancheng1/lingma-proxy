@@ -1,0 +1,109 @@
+package httpapi
+
+import "lingma-ipc-proxy/internal/toolemulation"
+
+// Model-facing tool descriptions taken verbatim from the QoderCN CLI so the
+// proxy's advertised "server tools" behave the way that CLI's do.
+
+const webSearchToolDescription = `- Allows the model to search the web and use the results to inform responses
+- Provides up-to-date information for current events and recent data
+- Returns search result information formatted as search result blocks, including links as markdown hyperlinks
+- Use this tool for accessing information beyond the model's knowledge cutoff
+CRITICAL REQUIREMENT - You MUST follow this:
+  - After answering the user's question, you MUST include a "Sources:" section at the end of your response
+  - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
+IMPORTANT - Use the correct year in search queries:
+  - You MUST use the current year when searching for recent information, documentation, or current events.
+- For time-sensitive queries, set timeRange (OneDay/OneWeek/OneMonth/OneYear) to restrict results by recency; leave it NoLimit otherwise.
+- summary is on by default. Set mainText for deep reading of the full page text; these enlarge the result, so use them only when needed.`
+
+const imageSearchToolDescription = `Search the web for images and return structured metadata for candidate results. The tool DOES NOT download originals into the workspace; it returns result metadata such as title, imageUrl, and dimensions.
+Use this for visual research and real-world asset sourcing, such as brand references, product imagery, places, events, or other existing/factual visuals.
+After picking the result(s) you want, download the original image yourself with Bash curl or another suitable tool before using it as a local asset.`
+
+const textPolishToolDescription = `Polish raw or unpunctuated text: add correct punctuation, fix capitalization and spacing, and clean up spoken-language artifacts, WITHOUT changing the wording, meaning, or language.
+Ideal for cleaning up speech-to-text transcriptions, rough dictation, or messy pasted text before using it.
+Returns only the cleaned text. It does NOT rewrite, summarize, translate, or answer the content.`
+
+// serverToolSuffix namespaces our server-tool names so a client tool with the
+// same base name (e.g. "web_search") can never collide with ours.
+const serverToolSuffix = "__lmproxy"
+
+const (
+	webSearchToolName   = "web_search" + serverToolSuffix
+	imageSearchToolName = "ImageSearch" + serverToolSuffix
+	textPolishToolName  = "TextPolish" + serverToolSuffix
+)
+
+// serverToolSpec is the canonical definition of a proxy-executed server tool;
+// one spec feeds both the Anthropic tool def and the OpenAI ToolDef.
+type serverToolSpec struct {
+	name        string
+	description string
+	schema      map[string]any
+}
+
+var webSearchSpec = serverToolSpec{
+	name:        webSearchToolName,
+	description: webSearchToolDescription,
+	schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string", "description": "The web search query."},
+			"timeRange": map[string]any{
+				"type":        "string",
+				"enum":        []any{"NoLimit", "OneDay", "OneWeek", "OneMonth", "OneYear"},
+				"description": "Recency filter: NoLimit (default), OneDay, OneWeek, OneMonth, or OneYear.",
+			},
+			"summary":      map[string]any{"type": "boolean", "description": "Include an AI-generated summary per result (default true; richer than the snippet)."},
+			"mainText":     map[string]any{"type": "boolean", "description": "Include the full extracted page text per result (default false; large — deep reading only)."},
+			"markdownText": map[string]any{"type": "boolean", "description": "Include the page text as markdown per result (default false; best-effort)."},
+		},
+		"required": []any{"query"},
+	},
+}
+
+var imageSearchSpec = serverToolSpec{
+	name:        imageSearchToolName,
+	description: imageSearchToolDescription,
+	schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string", "description": "The image search query."},
+			"count": map[string]any{"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of image results (1-10, default 5)."},
+		},
+		"required": []any{"query"},
+	},
+}
+
+var textPolishSpec = serverToolSpec{
+	name:        textPolishToolName,
+	description: textPolishToolDescription,
+	schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"text": map[string]any{"type": "string", "description": "The raw text to polish (add punctuation, fix casing/spacing)."},
+		},
+		"required": []any{"text"},
+	},
+}
+
+// anthropicDef renders the spec as an Anthropic tool definition (name +
+// description + input_schema), ready to append to a request's tools list.
+func (t serverToolSpec) anthropicDef() map[string]any {
+	return map[string]any{
+		"name":         t.name,
+		"description":  t.description,
+		"input_schema": t.schema,
+	}
+}
+
+// toolDef renders the spec as a service-layer ToolDef, used on the OpenAI path
+// where the agentic loop operates on the normalized service.ChatRequest.
+func (t serverToolSpec) toolDef() toolemulation.ToolDef {
+	return toolemulation.ToolDef{
+		Name:        t.name,
+		Description: t.description,
+		InputSchema: t.schema,
+	}
+}

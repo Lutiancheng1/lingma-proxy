@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"lingma-ipc-proxy/internal/remote"
 	"lingma-ipc-proxy/internal/toolemulation"
 )
 
@@ -61,31 +62,6 @@ func TestRemoteFallbackModelsNormalizeAndDedupe(t *testing.T) {
 	want := []string{"kmodel", "mmodel"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("fallback models = %v, want %v", got, want)
-	}
-}
-
-func TestShouldProbeRemoteModelForListOnlyKnownMissingAliases(t *testing.T) {
-	if !shouldProbeRemoteModelForList("Kimi-K2.6") {
-		t.Fatal("expected Kimi alias to be probed")
-	}
-	if !shouldProbeRemoteModelForList("MiniMax-M2.7") {
-		t.Fatal("expected MiniMax alias to be probed")
-	}
-	if shouldProbeRemoteModelForList("dashscope_qwen3_coder") {
-		t.Fatal("unexpected probe for normal list model")
-	}
-}
-
-func TestRemoteModelDisplayNameForVerifiedFallbackAliases(t *testing.T) {
-	cases := map[string]string{
-		"kmodel":                "Kimi-K2.6",
-		"mmodel":                "MiniMax-M2.7",
-		"some-enterprise-model": "some-enterprise-model",
-	}
-	for input, want := range cases {
-		if got := remoteModelDisplayName(input); got != want {
-			t.Fatalf("remoteModelDisplayName(%q) = %q, want %q", input, got, want)
-		}
 	}
 }
 
@@ -250,70 +226,6 @@ func TestRemoteImagesFromRequest(t *testing.T) {
 	}
 }
 
-func TestRequestHasImages(t *testing.T) {
-	if requestHasImages(ChatRequest{Messages: []ChatMessage{{Role: "user", Text: "plain"}}}) {
-		t.Fatal("plain request should not have images")
-	}
-	if !requestHasImages(ChatRequest{Messages: []ChatMessage{{Role: "user", Images: []Image{{URL: "file:///tmp/a.png"}}}}}) {
-		t.Fatal("image URL request should have images")
-	}
-}
-
-func TestRequestForImageContextUsesLatestImageTurnOnly(t *testing.T) {
-	req := ChatRequest{
-		System: "old system",
-		Messages: []ChatMessage{
-			{Role: "user", Text: "旧问题"},
-			{Role: "assistant", Text: "旧回答"},
-			{Role: "user", Text: "[Image #1] 这个图片是什么?", Images: []Image{{MediaType: "image/png", Data: "AAAA"}}},
-		},
-		Tools: []toolemulation.ToolDef{{
-			Name: "Bash",
-			InputSchema: map[string]any{
-				"required": []any{"command"},
-			},
-		}},
-		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
-	}
-
-	out := requestForImageContext(req)
-	if out.System != "" {
-		t.Fatalf("system = %q, want empty", out.System)
-	}
-	if len(out.Tools) != 0 || out.ToolChoice.Mode != "none" {
-		t.Fatalf("tools should be disabled: tools=%#v choice=%#v", out.Tools, out.ToolChoice)
-	}
-	if len(out.Messages) != 1 {
-		t.Fatalf("messages = %#v, want one compact image turn", out.Messages)
-	}
-	message := out.Messages[0]
-	if message.Role != "user" || len(message.Images) != 1 || message.Images[0].Data != "AAAA" {
-		t.Fatalf("unexpected image message = %#v", message)
-	}
-	if strings.Contains(message.Text, "旧问题") || !strings.Contains(message.Text, "忽略更早的对话历史") {
-		t.Fatalf("unexpected compact prompt = %q", message.Text)
-	}
-}
-
-func TestRequestForImageContextUsesShortSystemPromptForImageOnlyUser(t *testing.T) {
-	req := ChatRequest{
-		System:   "这张图片是什么？只用两句话回答。",
-		Messages: []ChatMessage{{Role: "user", Images: []Image{{MediaType: "image/jpeg", Data: "AAAA"}}}},
-	}
-
-	out := requestForImageContext(req)
-	if len(out.Messages) != 1 {
-		t.Fatalf("messages = %#v, want one compact image turn", out.Messages)
-	}
-	message := out.Messages[0]
-	if message.Role != "user" || len(message.Images) != 1 {
-		t.Fatalf("unexpected image message = %#v", message)
-	}
-	if !strings.Contains(message.Text, "这张图片是什么") {
-		t.Fatalf("compact prompt should include short system prompt, got %q", message.Text)
-	}
-}
-
 func TestBuildLingmaPromptUsesImageFallbackForImageOnlyUser(t *testing.T) {
 	req := ChatRequest{
 		System:   "这张图片是什么？只用两句话回答。",
@@ -340,51 +252,98 @@ func TestExtractLastUserImagesFindsPreviousImageTurn(t *testing.T) {
 	}
 }
 
-func TestRequestWithImageContextRemovesImagesAndAppendsContext(t *testing.T) {
-	req := ChatRequest{
-		Messages: []ChatMessage{
-			{Role: "user", Text: "看图", Images: []Image{{URL: "file:///tmp/a.png"}}},
-			{Role: "assistant", Text: "好的"},
-			{Role: "user", Text: "继续分析"},
-		},
+func TestRemoteMessagesFromRequestMapsReasoningText(t *testing.T) {
+	req := ChatRequest{Messages: []ChatMessage{
+		{Role: "assistant", Text: "answer", ReasoningText: "prior thinking"},
+	}}
+	out := remoteMessagesFromRequest(req)
+	if len(out) != 1 {
+		t.Fatalf("message count = %d", len(out))
 	}
-	out := requestWithImageContext(req, "海边礁石和海浪")
-	for _, message := range out.Messages {
-		if len(message.Images) > 0 {
-			t.Fatalf("images should be removed: %#v", out.Messages)
-		}
-	}
-	if !strings.Contains(out.Messages[2].Text, "[图片上下文]") || !strings.Contains(out.Messages[2].Text, "海边礁石和海浪") {
-		t.Fatalf("latest user message missing image context: %#v", out.Messages[2])
+	if out[0].ReasoningText != "prior thinking" {
+		t.Fatalf("ReasoningText = %q, want %q", out[0].ReasoningText, "prior thinking")
 	}
 }
 
-func TestBuildLingmaPromptInjectsToolingForImageContextRemoteFallback(t *testing.T) {
-	req := ChatRequest{
-		Messages: []ChatMessage{
-			{Role: "user", Text: "这张图是什么", Images: []Image{{URL: "file:///tmp/a.png"}}},
-		},
-		Tools: []toolemulation.ToolDef{{
-			Name: "exec_command",
-			InputSchema: map[string]any{
-				"properties": map[string]any{
-					"cmd": map[string]any{"type": "string"},
-				},
-				"required": []any{"cmd"},
-			},
-		}},
-		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
+func TestRemoteMessagesFromRequestKeepsReasoningOnlyTurn(t *testing.T) {
+	req := ChatRequest{Messages: []ChatMessage{
+		{Role: "assistant", ReasoningText: "only thinking"},
+	}}
+	out := remoteMessagesFromRequest(req)
+	if len(out) != 1 || out[0].ReasoningText != "only thinking" {
+		t.Fatalf("reasoning-only turn dropped or wrong: %#v", out)
 	}
+}
 
-	withContext := requestWithImageContext(req, "黑色礁石与海浪")
-	prompt, err := buildLingmaPrompt(withContext, SessionModeFresh, true)
-	if err != nil {
-		t.Fatalf("buildLingmaPrompt returned error: %v", err)
+func TestRemoteToolEmulationDisabledByDefault(t *testing.T) {
+	if remoteToolEmulationEnabled() {
+		t.Fatal("tool emulation should be OFF by default (native tools)")
 	}
-	if !strings.Contains(prompt, "[图片上下文]") {
-		t.Fatalf("prompt should include image context, got %q", prompt)
+	for _, v := range []string{"1", "true", "yes", "YES"} {
+		t.Setenv("LINGMA_REMOTE_EMULATE_TOOLS", v)
+		if !remoteToolEmulationEnabled() {
+			t.Fatalf("LINGMA_REMOTE_EMULATE_TOOLS=%q should enable emulation", v)
+		}
 	}
-	if !strings.Contains(prompt, "DIRECT tool access") || !strings.Contains(prompt, "```json action") {
-		t.Fatalf("image-context remote fallback prompt should include tool emulation, got %q", prompt)
+	t.Setenv("LINGMA_REMOTE_EMULATE_TOOLS", "off")
+	if remoteToolEmulationEnabled() {
+		t.Fatal("LINGMA_REMOTE_EMULATE_TOOLS=off should keep emulation disabled")
+	}
+}
+
+func TestRemoteMessagesForChatNativePreservesToolTurnsAndImages(t *testing.T) {
+	req := ChatRequest{
+		Tools:      []toolemulation.ToolDef{{Name: "get_image"}},
+		ToolChoice: toolemulation.ToolChoice{Mode: "auto"},
+		Messages: []ChatMessage{
+			{Role: "user", Text: "look at this"},
+			{Role: "assistant", ToolCalls: []toolemulation.ToolCall{{ID: "c1", Name: "get_image"}}},
+			{Role: "tool", ToolCallID: "c1", Text: "here", Images: []Image{{MediaType: "image/png", Data: "abc"}}},
+		},
+	}
+	// Native (emulateTools=false): full structured multi-message, tool turn + image preserved.
+	native := remoteMessagesForChat(req, "FLATTENED PROMPT", false)
+	if len(native) < 3 {
+		t.Fatalf("native path should keep structured messages, got %d", len(native))
+	}
+	foundTool := false
+	for _, m := range native {
+		if m.Role == "tool" {
+			foundTool = true
+			if m.ToolCallID != "c1" || len(m.Images) == 0 {
+				t.Fatalf("tool message lost id/images: %#v", m)
+			}
+		}
+	}
+	if !foundTool {
+		t.Fatal("native path dropped the tool-role message")
+	}
+	// Emulation fallback (emulateTools=true): flattened to a single user prompt.
+	flat := remoteMessagesForChat(req, "FLATTENED PROMPT", true)
+	if len(flat) != 1 || flat[0].Role != "user" || flat[0].Content != "FLATTENED PROMPT" {
+		t.Fatalf("emulation fallback should flatten to one user message, got %#v", flat)
+	}
+}
+
+func TestResolveRemoteModelUsesCachedUpstreamList(t *testing.T) {
+	svc := New(Config{Backend: BackendRemote, Timeout: time.Second})
+	svc.remoteModelsMu.Lock()
+	svc.remoteModels = []remote.Model{
+		{Key: "gm51model", DisplayName: "GLM-5.2"},
+		{Key: "qmodel_38max", DisplayName: "Qwen3.8-Max"},
+	}
+	svc.remoteModelsAt = time.Now()
+	svc.remoteModelsMu.Unlock()
+	ctx := context.Background()
+	cases := map[string]string{
+		"gm51model":          "gm51model",   // exact key
+		"GLM-5.2":            "gm51model",   // display name
+		"qwen3.8-max":        "qmodel_38max", // case-insensitive display name
+		"totally-unknown-xyz": "totally-unknown-xyz", // unknown -> passthrough (client's problem)
+	}
+	for in, want := range cases {
+		if got := svc.resolveRemoteModel(ctx, in); got != want {
+			t.Fatalf("resolveRemoteModel(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

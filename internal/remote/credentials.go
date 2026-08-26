@@ -22,6 +22,7 @@ type Credential struct {
 	EncryptUserInfo string
 	UserID          string
 	MachineID       string
+	AccessToken     string // OAuth-style token for the openapi host (quota, user info)
 	Source          string
 	TokenExpireTime int64
 }
@@ -55,6 +56,7 @@ type storedCredentialFile struct {
 		EncryptUserInfo string `json:"encrypt_user_info"`
 		UserID          string `json:"user_id"`
 		MachineID       string `json:"machine_id"`
+		AccessToken     string `json:"access_token,omitempty"`
 	} `json:"auth"`
 }
 
@@ -108,6 +110,7 @@ func SaveCredentialFile(cred Credential, path string) error {
 	stored.Auth.EncryptUserInfo = cred.EncryptUserInfo
 	stored.Auth.UserID = cred.UserID
 	stored.Auth.MachineID = cred.MachineID
+	stored.Auth.AccessToken = cred.AccessToken
 
 	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {
@@ -130,7 +133,10 @@ func SaveCredentialFile(cred Credential, path string) error {
 func InspectCredentialCandidates() []CredentialInspection {
 	inspections := make([]CredentialInspection, 0)
 	for _, cacheDir := range candidateLingmaCacheDirs() {
-		userPath := filepath.Join(cacheDir, "cache", "user")
+		userPath, ok := firstExistingCredentialUserFile(cacheDir)
+		if !ok {
+			continue
+		}
 		userInfo, statErr := os.Stat(userPath)
 		if statErr != nil {
 			continue
@@ -176,6 +182,7 @@ func loadCredentialFile(path string) (Credential, error) {
 		EncryptUserInfo: stored.Auth.EncryptUserInfo,
 		UserID:          stored.Auth.UserID,
 		MachineID:       stored.Auth.MachineID,
+		AccessToken:     stored.Auth.AccessToken,
 		Source:          valueOr(stored.Source, path),
 		TokenExpireTime: parseExpire(stored.TokenExpireTime),
 	}
@@ -203,7 +210,10 @@ type credentialCandidate struct {
 }
 
 func loadCredentialCandidate(cacheDir string) (credentialCandidate, error) {
-	userPath := filepath.Join(cacheDir, "cache", "user")
+	userPath, ok := firstExistingCredentialUserFile(cacheDir)
+	if !ok {
+		return credentialCandidate{}, os.ErrNotExist
+	}
 	info, err := os.Stat(userPath)
 	if err != nil {
 		return credentialCandidate{}, err
@@ -213,6 +223,24 @@ func loadCredentialCandidate(cacheDir string) (credentialCandidate, error) {
 		return credentialCandidate{}, err
 	}
 	return credentialCandidate{Cred: cred, UserModified: info.ModTime()}, nil
+}
+
+// candidateCredentialUserFiles lists the encrypted credential blob locations we
+// support: the legacy IDE cache (cache/user) and the QoderCN CLI login (.auth/user).
+func candidateCredentialUserFiles(lingmaDir string) []string {
+	return uniquePathStrings([]string{
+		filepath.Join(lingmaDir, "cache", "user"),
+		filepath.Join(lingmaDir, ".auth", "user"),
+	})
+}
+
+func firstExistingCredentialUserFile(lingmaDir string) (string, bool) {
+	for _, path := range candidateCredentialUserFiles(lingmaDir) {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 func betterCredentialCandidate(candidate, best credentialCandidate, policy CredentialPickPolicy) bool {
@@ -227,7 +255,10 @@ func betterCredentialCandidate(candidate, best credentialCandidate, policy Crede
 }
 
 func importLingmaCacheCredentialFromDir(lingmaDir string) (Credential, error) {
-	userPath := filepath.Join(lingmaDir, "cache", "user")
+	userPath, ok := firstExistingCredentialUserFile(lingmaDir)
+	if !ok {
+		userPath = filepath.Join(lingmaDir, "cache", "user")
+	}
 	encrypted, err := os.ReadFile(userPath)
 	if err != nil {
 		return Credential{}, fmt.Errorf("read %s: %w", userPath, err)
@@ -248,6 +279,7 @@ func importLingmaCacheCredentialFromDir(lingmaDir string) (Credential, error) {
 		Key             string `json:"key"`
 		EncryptUserInfo string `json:"encrypt_user_info"`
 		UserID          string `json:"uid"`
+		AccessToken     string `json:"access_token"`
 		ExpireTime      any    `json:"expire_time"`
 	}
 	if err := json.Unmarshal(plaintext, &payload); err != nil {
@@ -258,6 +290,7 @@ func importLingmaCacheCredentialFromDir(lingmaDir string) (Credential, error) {
 		EncryptUserInfo: payload.EncryptUserInfo,
 		UserID:          payload.UserID,
 		MachineID:       machineID,
+		AccessToken:     payload.AccessToken,
 		Source:          userPath,
 		TokenExpireTime: parseExpireAny(payload.ExpireTime),
 	}
@@ -422,6 +455,8 @@ func loadMachineID(lingmaDir string) (string, error) {
 func candidateMachineIDFiles(lingmaDir string) []string {
 	return uniquePathStrings([]string{
 		filepath.Join(lingmaDir, "cache", "id"),
+		filepath.Join(lingmaDir, ".auth", "machine_id"),
+		filepath.Join(lingmaDir, ".auth", "id"),
 		filepath.Join(lingmaDir, "cli", ".auth", "id"),
 	})
 }
@@ -660,4 +695,64 @@ func uniquePathStrings(values []string) []string {
 		out = append(out, cleaned)
 	}
 	return out
+}
+
+// detectCLICosyVersion reads the installed QoderCN CLI's version and returns it
+// as the cosy version, matching what the real client sends (its Cosy-Version /
+// authPayload.cosyVersion is its own package version). Empty if not found.
+func detectCLICosyVersion() string {
+	for _, p := range candidateCLIVersionFiles() {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if v := sanitizeCLIVersion(string(data)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// candidateCLIVersionFiles lists likely paths of the CLI's version.txt across
+// install roots (e.g. ~/.qoder-cn/bin/qoderclicn/version.txt).
+func candidateCLIVersionFiles() []string {
+	var roots []string
+	if explicit := strings.TrimSpace(os.Getenv("LINGMA_CLI_DIR")); explicit != "" {
+		roots = append(roots, expandHome(explicit))
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		roots = append(roots,
+			filepath.Join(home, ".qoder-cn"),
+			filepath.Join(home, ".qodercn"),
+			filepath.Join(home, ".lingma"),
+		)
+	}
+	var files []string
+	for _, root := range roots {
+		for _, cli := range []string{"qoderclicn", "qodercli", "lingmacli"} {
+			files = append(files, filepath.Join(root, "bin", cli, "version.txt"))
+		}
+	}
+	return uniquePathStrings(files)
+}
+
+// sanitizeCLIVersion validates a version.txt payload: first line, version-ish
+// characters only, bounded length. Returns "" if it doesn't look like a version.
+func sanitizeCLIVersion(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	if s == "" || len(s) > 32 {
+		return ""
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r == '.', r == '-', r == '_',
+			r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		default:
+			return ""
+		}
+	}
+	return s
 }

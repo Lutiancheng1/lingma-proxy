@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -57,6 +58,9 @@ type Config struct {
 	WarmupTimeout         time.Duration
 	RemoteFallbackEnabled bool
 	RemoteFallbackModels  []string
+	// AuthKeysFile points at an inbound API-key allowlist (one key per line).
+	// Empty disables inbound authentication (open access, the default).
+	AuthKeysFile string
 }
 
 type Image struct {
@@ -71,6 +75,9 @@ type ChatMessage struct {
 	Images     []Image
 	ToolCallID string
 	ToolCalls  []toolemulation.ToolCall
+	// ReasoningText carries an assistant turn's prior thinking so extended
+	// thinking survives multi-turn round-trips (forwarded as reasoning_content).
+	ReasoningText string
 }
 
 type ChatRequest struct {
@@ -97,28 +104,47 @@ type ChatRequest struct {
 }
 
 type ChatResult struct {
-	Text             string
-	ThoughtText      string
-	Model            string
-	InputTokens      int
-	OutputTokens     int
-	SessionID        string
-	RequestID        string
-	FinishReason     string
-	StopReason       string
-	UsedTokens       int
-	LimitTokens      int
-	ThinkingDuration int64
-	PipePath         string
-	Endpoint         string
-	Transport        string
-	EffectiveSession SessionMode
-	ToolCalls        []toolemulation.ToolCall
+	Text              string
+	ThoughtText       string
+	Model             string
+	InputTokens       int
+	OutputTokens      int
+	SessionID         string
+	RequestID         string
+	FinishReason      string
+	StopSequence      string
+	UsedTokens        int
+	LimitTokens       int
+	CachedInputTokens int
+	// CacheCreationInputTokens is the Anthropic cache-write count. QoderCN never
+	// reports it (stays 0); kept for protocol completeness and future backends.
+	CacheCreationInputTokens int
+	ReasoningTokens          int
+	// Credits is the QoderCN gateway's real per-request charge; OriginalCredits is
+	// the pre-discount charge and Billable whether the call was metered.
+	Credits         float64
+	OriginalCredits float64
+	Billable        bool
+	ThinkingDuration  int64
+	PipePath          string
+	Endpoint          string
+	Transport         string
+	EffectiveSession  SessionMode
+	ToolCalls         []toolemulation.ToolCall
 }
 
 type StreamEvent struct {
-	Type  string
-	Delta string
+	Type     string
+	Delta    string
+	ToolCall *StreamToolCall
+}
+
+// StreamToolCall carries one incremental native tool-call fragment.
+type StreamToolCall struct {
+	Index        int
+	ID           string
+	Name         string
+	ArgsFragment string
 }
 
 type StreamResult struct {
@@ -131,6 +157,9 @@ type Model struct {
 	Name       string `json:"name"`
 	Scene      string `json:"scene,omitempty"`
 	InternalID string `json:"-"`
+	// Raw is the full upstream model object (remote backend only), forwarded
+	// verbatim to downstream so no gateway-provided field is dropped.
+	Raw map[string]any `json:"-"`
 }
 
 type State struct {
@@ -153,7 +182,51 @@ type Service struct {
 	stickyModelID    string
 	modelMap         map[string]string // official name -> internal id
 	remoteClient     *remote.Client
-	remoteProbeCache map[string]remoteModelProbeEntry
+	remoteModelsMu   sync.Mutex
+	remoteModels     []remote.Model
+	remoteModelsAt   time.Time
+}
+
+// cachedRemoteModels returns the gateway's model list, refetched at most every
+// few minutes; on error it returns the last good snapshot (or nil).
+func (s *Service) cachedRemoteModels(ctx context.Context) []remote.Model {
+	s.remoteModelsMu.Lock()
+	cached := s.remoteModels
+	fresh := cached != nil && time.Since(s.remoteModelsAt) < 5*time.Minute
+	s.remoteModelsMu.Unlock()
+	if fresh {
+		return cached
+	}
+	models, err := s.remoteClientLocked().ListModels(ctx)
+	if err != nil || len(models) == 0 {
+		return cached
+	}
+	s.remoteModelsMu.Lock()
+	s.remoteModels = models
+	s.remoteModelsAt = time.Now()
+	s.remoteModelsMu.Unlock()
+	return models
+}
+
+// resolveRemoteModel maps the requested model to a gateway key via the cached
+// model list (key or display-name match), falling back to the static alias map.
+func (s *Service) resolveRemoteModel(ctx context.Context, model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ""
+	}
+	models := s.cachedRemoteModels(ctx)
+	for _, m := range models {
+		if strings.EqualFold(model, strings.TrimSpace(m.Key)) {
+			return strings.TrimSpace(m.Key)
+		}
+	}
+	for _, m := range models {
+		if strings.EqualFold(model, strings.TrimSpace(m.DisplayName)) {
+			return strings.TrimSpace(m.Key)
+		}
+	}
+	return normalizeModelForBackend(BackendRemote, model)
 }
 
 type promptRunResult struct {
@@ -169,12 +242,9 @@ type promptRunResult struct {
 const (
 	StreamEventText     = "text"
 	StreamEventThinking = "thinking"
+	StreamEventToolCall = "tool_call"
 )
 
-type remoteModelProbeEntry struct {
-	Available bool
-	ExpiresAt time.Time
-}
 
 func New(cfg Config) *Service {
 	if strings.TrimSpace(cfg.Cwd) == "" {
@@ -292,18 +362,21 @@ func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
 		out := make([]Model, 0, len(models))
 		seen := map[string]bool{}
 		for _, model := range models {
-			id := strings.TrimSpace(model.Key)
-			if id == "" || seen[id] {
+			key := strings.TrimSpace(model.Key)
+			if key == "" || seen[key] {
 				continue
 			}
-			seen[id] = true
+			seen[key] = true
 			name := strings.TrimSpace(model.DisplayName)
 			if name == "" {
-				name = id
+				name = key
 			}
-			out = append(out, Model{ID: id, Name: name})
+			// Expose the display name as the id (so downstream sees "GLM-5.2" not
+			// the opaque key "gm51model"); the key is kept in InternalID for resolution.
+			out = append(out, Model{ID: name, Name: name, InternalID: key, Raw: model.Raw})
 		}
-		out = append(out, s.verifiedRemoteFallbackModels(ctx, seen)...)
+		// Trust the gateway's list as authoritative; no hardcoded fallback probing
+		// (which spent credits on a real chat per candidate).
 		return out, nil
 	}
 
@@ -334,11 +407,75 @@ func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
 	return models, nil
 }
 
-func (s *Service) Generate(ctx context.Context, req ChatRequest) (*ChatResult, error) {
-	if s.backend() == BackendRemote {
-		return s.generateRemote(ctx, req, nil)
+// Quota returns the account credit/usage snapshot (remote backend only).
+func (s *Service) Quota(ctx context.Context) (*remote.Quota, error) {
+	if s.backend() != BackendRemote {
+		return nil, errors.New("quota is only available in remote backend mode")
 	}
-	return s.generateWithReconnect(ctx, req, nil)
+	return s.remoteClientLocked().FetchQuota(ctx)
+}
+
+// WebSearch runs a web search via the gateway's oneSearch endpoint (remote
+// backend only), servicing Claude Code's hosted web_search tool.
+func (s *Service) WebSearch(ctx context.Context, query string, opts remote.WebSearchOptions) ([]remote.SearchResult, error) {
+	if s.backend() != BackendRemote {
+		return nil, errors.New("web search is only available in remote backend mode")
+	}
+	return s.remoteClientLocked().WebSearch(ctx, query, opts)
+}
+
+// ImageSearch runs an image search via the gateway (remote backend only).
+func (s *Service) ImageSearch(ctx context.Context, query string, count int) ([]remote.ImageResult, error) {
+	if s.backend() != BackendRemote {
+		return nil, errors.New("image search is only available in remote backend mode")
+	}
+	return s.remoteClientLocked().ImageSearch(ctx, query, count)
+}
+
+// GenerateImage generates an image via the gateway (remote backend only),
+// returning a data URL.
+func (s *Service) GenerateImage(ctx context.Context, prompt, size, model string) (string, error) {
+	if s.backend() != BackendRemote {
+		return "", errors.New("image generation is only available in remote backend mode")
+	}
+	return s.remoteClientLocked().GenerateImage(ctx, prompt, size, model)
+}
+
+// PolishText cleans up raw text via the gateway (remote backend only): adds
+// punctuation and fixes casing/spacing without changing the meaning.
+func (s *Service) PolishText(ctx context.Context, text string) (string, error) {
+	if s.backend() != BackendRemote {
+		return "", errors.New("text polish is only available in remote backend mode")
+	}
+	return s.remoteClientLocked().PolishText(ctx, text)
+}
+
+func (s *Service) Generate(ctx context.Context, req ChatRequest) (*ChatResult, error) {
+	var result *ChatResult
+	var err error
+	if s.backend() == BackendRemote {
+		result, err = s.generateRemote(ctx, req, nil)
+	} else {
+		result, err = s.generateWithReconnect(ctx, req, nil)
+	}
+	if err == nil && result != nil {
+		// The gateway ignores max_tokens/stop, so enforce them on the output here.
+		if lim := newOutputLimiter(req.MaxTokens, req.Stop); lim.enabled() {
+			truncated := lim.apply(result.Text)
+			if lim.triggered() {
+				result.Text = truncated
+				applyLimiterFinish(result, lim)
+			}
+		}
+	}
+	return result, err
+}
+
+// applyLimiterFinish records the proxy-enforced finish reason (canonical
+// OpenAI-style "length"/"stop"; Anthropic stop_reason is derived downstream).
+func applyLimiterFinish(result *ChatResult, lim *outputLimiter) {
+	result.FinishReason = lim.openAIFinish()
+	result.StopSequence = lim.stopSeq
 }
 
 func (s *Service) GenerateStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, <-chan StreamResult, error) {
@@ -350,15 +487,45 @@ func (s *Service) GenerateStream(ctx context.Context, req ChatRequest) (<-chan S
 		if s.backend() == BackendRemote {
 			generate = s.generateRemote
 		}
-		result, err := generate(ctx, req, func(event StreamEvent) {
-			if event.Delta == "" {
-				return
-			}
+		lim := newOutputLimiter(req.MaxTokens, req.Stop)
+		send := func(ev StreamEvent) {
 			select {
-			case events <- event:
+			case events <- ev:
 			case <-ctx.Done():
 			}
+		}
+		result, err := generate(ctx, req, func(event StreamEvent) {
+			if event.Type == StreamEventText {
+				if !lim.enabled() {
+					if event.Delta != "" {
+						send(event)
+					}
+					return
+				}
+				if lim.triggered() {
+					return // output limit already reached; drop further text
+				}
+				if emit := lim.Push(event.Delta); emit != "" {
+					send(StreamEvent{Type: StreamEventText, Delta: emit})
+				}
+				return
+			}
+			if event.Delta == "" && event.ToolCall == nil {
+				return
+			}
+			send(event)
 		})
+		// Emit any held-back tail if the stream ended without hitting a limit.
+		if lim.enabled() && !lim.triggered() {
+			if tail := lim.Flush(); tail != "" {
+				send(StreamEvent{Type: StreamEventText, Delta: tail})
+			}
+		}
+		// Reflect proxy-side truncation on the final result.
+		if err == nil && result != nil && lim.triggered() {
+			result.Text = lim.text()
+			applyLimiterFinish(result, lim)
+		}
 
 		close(events)
 		done <- StreamResult{Result: result, Err: err}
@@ -396,17 +563,15 @@ func (s *Service) generateRemoteInternal(
 	onDelta func(StreamEvent),
 	emulateTools bool,
 ) (*ChatResult, error) {
-	emulateTools = emulateTools || shouldEmulateRemoteTools(req)
-	if requestHasImages(req) {
-		if len(req.Tools) > 0 && req.ToolChoice.Mode != "none" {
-			return s.generateRemoteWithImageContext(ctx, req, onDelta)
-		}
-		return s.generateWithReconnect(ctx, req, onDelta)
-	}
+	// Default to native structured tool messages; text-emulation flattening is an
+	// opt-in fallback via LINGMA_REMOTE_EMULATE_TOOLS for models that regress.
+	emulateTools = emulateTools || (shouldEmulateRemoteTools(req) && remoteToolEmulationEnabled())
+	// Images are sent natively as base64 content parts; the gateway accepts inline
+	// base64 for vision models, so no IPC round-trip is required.
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = s.DefaultModel()
 	}
-	req.Model = normalizeModelForBackend(BackendRemote, req.Model)
+	req.Model = s.resolveRemoteModel(ctx, req.Model)
 	prompt, err := buildLingmaPrompt(req, SessionModeFresh, emulateTools)
 	if err != nil {
 		return nil, err
@@ -433,20 +598,6 @@ func (s *Service) generateRemoteInternal(
 	return nil, lastErr
 }
 
-func (s *Service) generateRemoteWithImageContext(
-	ctx context.Context,
-	req ChatRequest,
-	onDelta func(StreamEvent),
-) (*ChatResult, error) {
-	imageReq := requestForImageContext(req)
-	imageResult, err := s.generateWithReconnect(ctx, imageReq, nil)
-	if err != nil {
-		return nil, fmt.Errorf("image context extraction through IPC failed: %w", err)
-	}
-	remoteReq := requestWithImageContext(req, imageResult.Text)
-	return s.generateRemoteInternal(ctx, remoteReq, onDelta, true)
-}
-
 func (s *Service) generateRemoteWithModel(
 	ctx context.Context,
 	client *remote.Client,
@@ -457,12 +608,34 @@ func (s *Service) generateRemoteWithModel(
 	emulateTools bool,
 ) (*ChatResult, bool, error) {
 	emitted := false
-	delta := func(text string) {
-		if text != "" {
+	delta := func(ev remote.StreamEvent) {
+		// Any forwarded delta (text, reasoning, or tool call) means we can no
+		// longer safely fall back to a different model mid-stream.
+		if ev.Kind == remote.StreamKindToolCall {
+			if ev.ToolCall == nil {
+				return
+			}
 			emitted = true
+			if onDelta != nil {
+				onDelta(StreamEvent{Type: StreamEventToolCall, ToolCall: &StreamToolCall{
+					Index:        ev.ToolCall.Index,
+					ID:           ev.ToolCall.ID,
+					Name:         ev.ToolCall.Name,
+					ArgsFragment: ev.ToolCall.ArgsFragment,
+				}})
+			}
+			return
+		}
+		if ev.Delta == "" {
+			return
+		}
+		emitted = true
+		eventType := StreamEventText
+		if ev.Kind == remote.StreamKindReasoning {
+			eventType = StreamEventThinking
 		}
 		if onDelta != nil {
-			onDelta(StreamEvent{Type: StreamEventText, Delta: text})
+			onDelta(StreamEvent{Type: eventType, Delta: ev.Delta})
 		}
 	}
 	remoteResult, err := client.Chat(ctx, remote.ChatRequest{
@@ -472,6 +645,10 @@ func (s *Service) generateRemoteWithModel(
 		Images:          remoteImagesFromRequest(req),
 		Stream:          onDelta != nil,
 		Temperature:     req.Temperature,
+		TopP:            req.TopP,
+		TopK:            req.TopK,
+		Stop:            req.Stop,
+		MaxTokens:       req.MaxTokens,
 		ReasoningEffort: req.ReasoningEffort,
 		Tools:           req.Tools,
 		ToolChoice:      req.ToolChoice,
@@ -487,6 +664,10 @@ func (s *Service) generateRemoteWithModel(
 			Images:          remoteImagesFromRequest(req),
 			Stream:          false,
 			Temperature:     req.Temperature,
+			TopP:            req.TopP,
+			TopK:            req.TopK,
+			Stop:            req.Stop,
+			MaxTokens:       req.MaxTokens,
 			ReasoningEffort: req.ReasoningEffort,
 			Tools:           req.Tools,
 			ToolChoice:      toolemulation.ToolChoice{Mode: "any"},
@@ -497,19 +678,32 @@ func (s *Service) generateRemoteWithModel(
 		}
 	}
 
+	if remoteResult.TotalTokens > 0 || remoteResult.Credits > 0 {
+		log.Printf("remote usage model=%s in=%d out=%d cached=%d reasoning=%d total=%d credits=%.4f",
+			model, remoteResult.InputTokens, remoteResult.OutputTokens,
+			remoteResult.CachedInputTokens, remoteResult.ReasoningTokens,
+			remoteResult.TotalTokens, remoteResult.Credits)
+	}
+	finishReason := valueOr(strings.TrimSpace(remoteResult.FinishReason), "stop")
 	result := &ChatResult{
-		Text:             remoteResult.Text,
-		Model:            valueOr(strings.TrimSpace(model), "lingma"),
-		InputTokens:      remoteResult.InputTokens,
-		OutputTokens:     remoteResult.OutputTokens,
-		SessionID:        "",
-		RequestID:        remoteResult.RequestID,
-		FinishReason:     "stop",
-		StopReason:       "stop",
-		Endpoint:         remote.ResolveBaseURL(s.cfg.RemoteBaseURL),
-		Transport:        "remote",
-		EffectiveSession: SessionModeFresh,
-		ToolCalls:        remoteResult.ToolCalls,
+		Text:              remoteResult.Text,
+		ThoughtText:       remoteResult.ReasoningText,
+		Model:             valueOr(strings.TrimSpace(model), "lingma"),
+		InputTokens:       remoteResult.InputTokens,
+		OutputTokens:      remoteResult.OutputTokens,
+		CachedInputTokens: remoteResult.CachedInputTokens,
+		ReasoningTokens:   remoteResult.ReasoningTokens,
+		UsedTokens:        remoteResult.TotalTokens,
+		Credits:           remoteResult.Credits,
+		OriginalCredits:   remoteResult.OriginalCredits,
+		Billable:          remoteResult.Billable,
+		SessionID:         "",
+		RequestID:         remoteResult.RequestID,
+		FinishReason:      finishReason,
+		Endpoint:          remote.ResolveBaseURL(s.cfg.RemoteBaseURL),
+		Transport:         "remote",
+		EffectiveSession:  SessionModeFresh,
+		ToolCalls:         remoteResult.ToolCalls,
 	}
 	if emulateTools {
 		s.applyToolEmulation(ctx, req, prompt, result, onDelta, func(hintPrompt string) (string, int, error) {
@@ -520,6 +714,10 @@ func (s *Service) generateRemoteWithModel(
 				Images:          remoteImagesFromRequest(req),
 				Stream:          false,
 				Temperature:     req.Temperature,
+				TopP:            req.TopP,
+				TopK:            req.TopK,
+				Stop:            req.Stop,
+				MaxTokens:       req.MaxTokens,
 				ReasoningEffort: req.ReasoningEffort,
 				Tools:           req.Tools,
 				ToolChoice:      req.ToolChoice,
@@ -543,6 +741,31 @@ func shouldEmulateRemoteTools(req ChatRequest) bool {
 	return len(req.Tools) > 0 && req.ToolChoice.Mode != "none"
 }
 
+// remoteToolEmulationEnabled opts back into the legacy text-emulation tool path
+// instead of native structured tool messages — an escape hatch for regressions.
+func remoteToolEmulationEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LINGMA_REMOTE_EMULATE_TOOLS"))) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
+// EmulatesTextTools reports whether tool calls will surface as text action
+// blocks (the prompt-injection path) rather than native structured tool_calls
+// for this request. The stream filter that strips action-block markers is only
+// meaningful when this is true; on the native remote path it would strip
+// nothing and just add buffering latency, so callers leave it disabled there.
+func (s *Service) EmulatesTextTools(req ChatRequest) bool {
+	if !shouldEmulateRemoteTools(req) {
+		return false
+	}
+	if s.backend() == BackendRemote {
+		return remoteToolEmulationEnabled()
+	}
+	return true // the IPC/local Lingma backend always emulates via prompt injection
+}
+
 func remoteMessagesForChat(req ChatRequest, prompt string, emulateTools bool) []remote.Message {
 	if emulateTools && shouldEmulateRemoteTools(req) {
 		if prompt = strings.TrimSpace(prompt); prompt != "" {
@@ -563,15 +786,17 @@ func remoteMessagesFromRequest(req ChatRequest) []remote.Message {
 			continue
 		}
 		content := strings.TrimSpace(message.Text)
-		if content == "" && len(message.Images) == 0 && len(message.ToolCalls) == 0 {
+		reasoning := strings.TrimSpace(message.ReasoningText)
+		if content == "" && reasoning == "" && len(message.Images) == 0 && len(message.ToolCalls) == 0 {
 			continue
 		}
 		out = append(out, remote.Message{
-			Role:       role,
-			Content:    content,
-			Images:     remoteImagesFromChatMessage(message),
-			ToolCallID: strings.TrimSpace(message.ToolCallID),
-			ToolCalls:  message.ToolCalls,
+			Role:          role,
+			Content:       content,
+			Images:        remoteImagesFromChatMessage(message),
+			ToolCallID:    strings.TrimSpace(message.ToolCallID),
+			ToolCalls:     message.ToolCalls,
+			ReasoningText: reasoning,
 		})
 	}
 	return out
@@ -612,48 +837,6 @@ func remoteImagesFromRequest(req ChatRequest) []remote.Image {
 	return images
 }
 
-func requestHasImages(req ChatRequest) bool {
-	for _, message := range req.Messages {
-		if len(remoteImagesFromChatMessage(message)) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func requestForImageContext(req ChatRequest) ChatRequest {
-	out := req
-	out.System = ""
-	out.Messages = nil
-	out.Tools = nil
-	out.ToolChoice = toolemulation.ToolChoice{Mode: "none"}
-	out.ParallelToolCalls = nil
-
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		message := req.Messages[i]
-		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
-			continue
-		}
-		if len(remoteImagesFromChatMessage(message)) == 0 {
-			continue
-		}
-		text := strings.TrimSpace(message.Text)
-		if text == "" {
-			text = imagePromptFallback(req, i)
-		} else {
-			text = "请只根据图片内容回答用户这条问题，忽略更早的对话历史：" + text
-		}
-		out.Messages = []ChatMessage{{
-			Role:   "user",
-			Text:   text,
-			Images: message.Images,
-		}}
-		return out
-	}
-
-	return out
-}
-
 func imagePromptFallback(req ChatRequest, imageMessageIndex int) string {
 	for i := imageMessageIndex - 1; i >= 0; i-- {
 		message := req.Messages[i]
@@ -668,28 +851,6 @@ func imagePromptFallback(req ChatRequest, imageMessageIndex int) string {
 		return "请只根据图片内容回答这条要求：" + system
 	}
 	return "请描述这张图片的主要内容。"
-}
-
-func requestWithImageContext(req ChatRequest, imageContext string) ChatRequest {
-	out := req
-	out.Messages = make([]ChatMessage, len(req.Messages))
-	copy(out.Messages, req.Messages)
-	for i := range out.Messages {
-		out.Messages[i].Images = nil
-	}
-	contextText := strings.TrimSpace(imageContext)
-	if contextText == "" {
-		return out
-	}
-	addition := "\n\n[图片上下文]\n" + contextText
-	for i := len(out.Messages) - 1; i >= 0; i-- {
-		if strings.EqualFold(strings.TrimSpace(out.Messages[i].Role), "user") {
-			out.Messages[i].Text = strings.TrimSpace(out.Messages[i].Text + addition)
-			return out
-		}
-	}
-	out.Messages = append(out.Messages, ChatMessage{Role: "user", Text: strings.TrimSpace("[图片上下文]\n" + contextText)})
-	return out
 }
 
 func shouldRetryRemoteNativeTool(req ChatRequest, text string) bool {
@@ -724,7 +885,7 @@ func shouldRetryRemoteNativeTool(req ChatRequest, text string) bool {
 }
 
 func (s *Service) remoteAttemptModels(ctx context.Context, primary string) []string {
-	primary = normalizeModelForBackend(BackendRemote, primary)
+	primary = s.resolveRemoteModel(ctx, primary)
 	models := []string{primary}
 	if !s.cfg.RemoteFallbackEnabled {
 		return models
@@ -775,67 +936,6 @@ func (s *Service) remoteFallbackModels() []string {
 		out = append(out, model)
 	}
 	return out
-}
-
-func (s *Service) verifiedRemoteFallbackModels(ctx context.Context, seen map[string]bool) []Model {
-	out := make([]Model, 0, 2)
-	for _, model := range s.remoteFallbackModels() {
-		if seen[model] || !shouldProbeRemoteModelForList(model) {
-			continue
-		}
-		if !s.probeRemoteModel(ctx, model) {
-			continue
-		}
-		seen[model] = true
-		out = append(out, Model{ID: model, Name: remoteModelDisplayName(model)})
-	}
-	return out
-}
-
-func shouldProbeRemoteModelForList(model string) bool {
-	switch normalizeModelForBackend(BackendRemote, model) {
-	case "kmodel", "mmodel":
-		return true
-	default:
-		return false
-	}
-}
-
-func (s *Service) probeRemoteModel(ctx context.Context, model string) bool {
-	model = normalizeModelForBackend(BackendRemote, model)
-	if model == "" {
-		return false
-	}
-	now := time.Now()
-	s.mu.Lock()
-	if entry, ok := s.remoteProbeCache[model]; ok && now.Before(entry.ExpiresAt) {
-		s.mu.Unlock()
-		return entry.Available
-	}
-	s.mu.Unlock()
-
-	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	temperature := 0.0
-	_, err := s.remoteClientLocked().Chat(probeCtx, remote.ChatRequest{
-		Model:       model,
-		Prompt:      "Reply with OK only.",
-		Messages:    []remote.Message{{Role: "user", Content: "Reply with OK only."}},
-		Temperature: &temperature,
-	}, nil)
-	available := err == nil
-	ttl := 5 * time.Minute
-	if available {
-		ttl = 30 * time.Minute
-	}
-
-	s.mu.Lock()
-	if s.remoteProbeCache == nil {
-		s.remoteProbeCache = make(map[string]remoteModelProbeEntry)
-	}
-	s.remoteProbeCache[model] = remoteModelProbeEntry{Available: available, ExpiresAt: now.Add(ttl)}
-	s.mu.Unlock()
-	return available
 }
 
 func isRemoteFallbackError(err error) bool {
@@ -1093,7 +1193,6 @@ func (s *Service) buildChatResult(
 		SessionID:        sessionID,
 		RequestID:        requestID,
 		FinishReason:     nestedString(runResult.FinishData, "reason"),
-		StopReason:       nestedString(runResult.PromptResult, "stopReason"),
 		UsedTokens:       int(nestedInt64(runResult.ContextUsage, "usedTokens")),
 		LimitTokens:      int(nestedInt64(runResult.ContextUsage, "limitTokens")),
 		ThinkingDuration: runResult.ThinkingDuration,
@@ -1735,13 +1834,3 @@ func normalizeModelForBackend(backend BackendMode, model string) string {
 	}
 }
 
-func remoteModelDisplayName(model string) string {
-	switch normalizeModelForBackend(BackendRemote, model) {
-	case "kmodel":
-		return "Kimi-K2.6"
-	case "mmodel":
-		return "MiniMax-M2.7"
-	default:
-		return model
-	}
-}

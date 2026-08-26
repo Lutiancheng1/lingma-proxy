@@ -2,6 +2,7 @@ param(
   [string]$ServiceName = "LingmaProxy",
   [string]$BinaryPath = "",
   [string]$Arguments = "--host 127.0.0.1 --port 8095 --session-mode auto",
+  [string]$AuthKeysFile = "",
   [string]$WorkingDirectory = "",
   [string]$WinSWExePath = "",
   [string]$TemplatePath = ""
@@ -34,6 +35,15 @@ if (!(Test-Path $TemplatePath)) {
   throw "WinSW template not found: $TemplatePath"
 }
 
+# Optional inbound API-key auth. Empty = disabled (open, relies on the 127.0.0.1
+# bind). When set, the proxy fails closed at startup if the file has no keys.
+if (-not [string]::IsNullOrWhiteSpace($AuthKeysFile)) {
+  if (!(Test-Path $AuthKeysFile)) {
+    Write-Warning "Auth keys file not found: $AuthKeysFile (the service will refuse to start until it exists with >=1 key)"
+  }
+  $Arguments = "$Arguments --auth-keys-file `"$AuthKeysFile`""
+}
+
 $serviceExePath = Join-Path $repoRoot "$ServiceName.exe"
 $serviceXmlPath = Join-Path $repoRoot "$ServiceName.xml"
 
@@ -57,3 +67,7 @@ Write-Host "Install with:"
 Write-Host "  & `"$serviceExePath`" install"
 Write-Host "Start with:"
 Write-Host "  & `"$serviceExePath`" start"
+Write-Host ""
+Write-Host "To require an inbound API key (e.g. when exposing via a tunnel), re-run with:"
+Write-Host "  .\install-winsw-service.ps1 -AuthKeysFile C:\path\to\auth-keys.txt"
+Write-Host "  (one key per line, '#' comments; edit the file then restart the service to rotate)"

@@ -18,9 +18,15 @@ coverage.*
 .idea/
 .vscode/
 .playwright-mcp/
+.venv/
 nul
 LINUXDO_POST.md
 lingma-ipc-proxy.macos.json
 
 # Local iteration doc (not for git)
 ITERATION.md
+
+# Local-only tests (kept on disk, not tracked)
+internal/remote/image_process_test.go
+internal/remote/image_sanitize_test.go
+internal/service/limiter_test.go

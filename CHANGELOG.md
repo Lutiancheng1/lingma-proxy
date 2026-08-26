@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased (target: v1.6.12)
+## Unreleased (target: v1.6.12-morpheus.1)
+
+## v1.6.12-morpheus.1 - 2026-08-24
+
+- Fork release. Security: removed request-driven local file reads (LFI) and server-side URL fetch (SSRF) from `image_url` handling; `image_url` now accepts only `data:` and `http(s)` (fetched by the gateway, not the proxy host).
+- Added optional inbound API-key auth (`--auth-keys-file`, `LINGMA_AUTH_KEYS_FILE`, config `auth_keys_file`; Windows installers gain `-AuthKeysFile`). Invalid/missing keys get no response (silent connection drop); empty key file fails closed.
+- Surfaced the gateway's real `credits` / `original_credits` / `billable` in the response `usage` object for per-request billing (e.g. cc-switch).
+- Added `scripts/cc-switch-usage.js` (cc-switch custom usage script that reads account quota via `/quota`).
+- 分叉版本。安全:移除 `image_url` 处理中由请求驱动的本地文件读取(LFI)与服务端 URL 抓取(SSRF);`image_url` 只接受 `data:` 与 `http(s)`(由网关抓取,非代理主机)。
+- 新增可选入站 API key 鉴权(`--auth-keys-file` / 环境变量 / 配置项;Windows 安装脚本新增 `-AuthKeysFile`)。无效/缺失 key 不返回任何内容(静默断连);空 key 文件启动即拒绝。
+- 在响应 `usage` 中透传网关真实的 `credits` / `original_credits` / `billable`,供按次计费(如 cc-switch)。
+- 新增 `scripts/cc-switch-usage.js`(cc-switch 用量脚本,经 `/quota` 读取账号额度)。
 
 ## v1.6.12 - 2026-06-10
 

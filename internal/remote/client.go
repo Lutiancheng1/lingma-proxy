@@ -2,9 +2,11 @@ package remote
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,7 +27,15 @@ const (
 	DefaultBaseURL = "https://lingma.alibabacloud.com"
 	chatPath       = "/algo/api/v2/service/pro/sse/agent_chat_generation"
 	chatQuery      = "?FetchKeys=llm_model_result&AgentId=agent_common"
-	modelListPath  = "/algo/api/v2/model/list"
+	modelListPath     = "/algo/api/v2/model/list"
+	oneSearchPath     = "/algo/api/v1/webSearch/oneSearch"
+	imageSearchPath   = "/algo/api/v2/service/pro/imageSearch"
+	generateImagePath = "/algo/api/v2/service/pro/generateImage"
+	voicePolishPath   = "/algo/api/v2/service/voice/polish"
+	quotaPath         = "/api/v2/quota/usage"
+	// fallbackCosyVersion is used only when neither an explicit version nor the
+	// installed CLI's version.txt is available (matches the observed CLI value).
+	fallbackCosyVersion = "1.1.28"
 )
 
 var remoteBaseURLPattern = regexp.MustCompile(`https?://[^\s"'<>),\]}]+`)
@@ -59,6 +69,9 @@ type Model struct {
 	DisplayName string `json:"display_name"`
 	Model       string `json:"model"`
 	Enable      bool   `json:"enable"`
+	// Raw holds the complete upstream model object so downstream can receive
+	// every field the gateway sends.
+	Raw map[string]any `json:"-"`
 }
 
 type ChatRequest struct {
@@ -68,6 +81,10 @@ type ChatRequest struct {
 	Images          []Image
 	Stream          bool
 	Temperature     *float64
+	TopP            *float64
+	TopK            int
+	Stop            []string
+	MaxTokens       int
 	ReasoningEffort string
 	Tools           []toolemulation.ToolDef
 	ToolChoice      toolemulation.ToolChoice
@@ -80,26 +97,52 @@ type Image struct {
 }
 
 type Message struct {
-	Role       string
-	Content    string
-	Images     []Image
-	Name       string
-	ToolCallID string
-	ToolCalls  []toolemulation.ToolCall
+	Role          string
+	Content       string
+	Images        []Image
+	Name          string
+	ToolCallID    string
+	ToolCalls     []toolemulation.ToolCall
+	ReasoningText string
 }
 
 type ChatResult struct {
-	Text          string
-	InputTokens   int
-	OutputTokens  int
-	RequestID     string
-	CredentialSrc string
-	ToolCalls     []toolemulation.ToolCall
+	Text              string
+	ReasoningText     string
+	InputTokens       int
+	OutputTokens      int
+	CachedInputTokens int
+	ReasoningTokens   int
+	TotalTokens       int
+	Credits           float64
+	OriginalCredits   float64
+	Billable          bool
+	FinishReason      string
+	RequestID         string
+	CredentialSrc     string
+	ToolCalls         []toolemulation.ToolCall
 }
 
+// StreamEvent is a single streamed delta from the remote chat endpoint.
 type StreamEvent struct {
-	Delta string
+	Kind     string // StreamKindText, StreamKindReasoning, or StreamKindToolCall
+	Delta    string
+	ToolCall *ToolCallDelta
 }
+
+// ToolCallDelta carries one incremental native tool-call fragment as it streams.
+type ToolCallDelta struct {
+	Index        int
+	ID           string
+	Name         string
+	ArgsFragment string
+}
+
+const (
+	StreamKindText      = "text"
+	StreamKindReasoning = "reasoning"
+	StreamKindToolCall  = "tool_call"
+)
 
 func New(cfg Config) *Client {
 	autoBaseURL := strings.TrimSpace(cfg.BaseURL) == "" && strings.TrimSpace(os.Getenv("LINGMA_REMOTE_BASE_URL")) == ""
@@ -107,7 +150,13 @@ func New(cfg Config) *Client {
 		cfg.BaseURL = ResolveBaseURL("")
 	}
 	if cfg.CosyVersion == "" {
-		cfg.CosyVersion = "2.11.2"
+		// Match the installed CLI: its cosy version is its own package version
+		// (read from version.txt). Fall back to a known-good value if not found.
+		if v := detectCLICosyVersion(); v != "" {
+			cfg.CosyVersion = v
+		} else {
+			cfg.CosyVersion = fallbackCosyVersion
+		}
 	}
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	client := &http.Client{Timeout: cfg.Timeout}
@@ -250,6 +299,462 @@ func baseURLCachePath() (string, error) {
 	return filepath.Join(home, ".config", "lingma-ipc-proxy", "remote-base-url.json"), nil
 }
 
+// Quota is the account credit/usage snapshot from the openapi host.
+type Quota struct {
+	UserType   string  `json:"user_type,omitempty"`
+	Unit       string  `json:"unit,omitempty"`
+	Total      float64 `json:"total"`
+	Used       float64 `json:"used"`
+	Remaining  float64 `json:"remaining"`
+	Percentage float64 `json:"percentage"`
+	IsExceeded bool    `json:"is_exceeded"`
+	ResetAtMS  int64   `json:"reset_at_ms,omitempty"`
+	Source     string  `json:"source,omitempty"`
+}
+
+// FetchQuota reads account credit/usage from the QoderCN openapi host. It only
+// needs the access token (Bearer); no cosy signature or machine headers.
+func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
+	cred, err := LoadCredential(c.cfg.AuthFile)
+	if err != nil {
+		return nil, err
+	}
+	token := strings.TrimSpace(cred.AccessToken)
+	if token == "" {
+		return nil, fmt.Errorf("no access token in credentials; re-login QoderCN/Lingma to enable quota lookup")
+	}
+	base, err := openAPIBaseURL(c.cfg.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+quotaPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("read quota response: %w", readErr)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("remote quota status %d: %s", resp.StatusCode, truncate(string(body), 300))
+	}
+	var parsed struct {
+		UserType        string `json:"userType"`
+		IsQuotaExceeded bool   `json:"isQuotaExceeded"`
+		ExpiresAt       int64  `json:"expiresAt"`
+		UserQuota       struct {
+			Total      float64 `json:"total"`
+			Used       float64 `json:"used"`
+			Remaining  float64 `json:"remaining"`
+			Percentage float64 `json:"percentage"`
+			Unit       string  `json:"unit"`
+		} `json:"userQuota"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("parse quota response: %w", err)
+	}
+	return &Quota{
+		UserType:   parsed.UserType,
+		Unit:       parsed.UserQuota.Unit,
+		Total:      parsed.UserQuota.Total,
+		Used:       parsed.UserQuota.Used,
+		Remaining:  parsed.UserQuota.Remaining,
+		Percentage: parsed.UserQuota.Percentage,
+		IsExceeded: parsed.IsQuotaExceeded,
+		ResetAtMS:  parsed.ExpiresAt,
+		Source:     base + quotaPath,
+	}, nil
+}
+
+// SearchResult is one web-search hit from the gateway's oneSearch endpoint.
+// Summary is populated only when the richer contents are requested.
+type SearchResult struct {
+	Title         string `json:"title"`
+	Link          string `json:"link"`
+	Snippet       string `json:"snippet"`
+	Summary       string `json:"summary"`
+	MainText      string `json:"mainText"`
+	MarkdownText  string `json:"markdownText"`
+	PublishedTime string `json:"publishedTime"`
+	Hostname      string `json:"hostname"`
+}
+
+// WebSearchOptions controls the oneSearch request. TimeRange filters by recency
+// (NoLimit / OneDay / OneWeek / OneMonth / OneYear — other values are ignored by
+// the gateway). The contents flags unlock richer per-result fields: Summary is an
+// AI summary, MainText the full page text, MarkdownText the page text as markdown.
+type WebSearchOptions struct {
+	TimeRange    string
+	MainText     bool
+	MarkdownText bool
+	Summary      bool
+}
+
+var webSearchTimeRanges = map[string]bool{
+	"NoLimit": true, "OneDay": true, "OneWeek": true, "OneMonth": true, "OneYear": true,
+}
+
+// WebSearch runs a web search through the QoderCN gateway's oneSearch endpoint,
+// posting the {payload, encodeVersion} envelope plaintext with Encode=0.
+func (c *Client) WebSearch(ctx context.Context, query string, opts WebSearchOptions) ([]SearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("web search query is empty")
+	}
+	timeRange := strings.TrimSpace(opts.TimeRange)
+	if !webSearchTimeRanges[timeRange] {
+		timeRange = "NoLimit" // gateway silently ignores unknown values; normalize
+	}
+	cred, err := LoadCredential(c.cfg.AuthFile)
+	if err != nil {
+		return nil, err
+	}
+	inner, err := json.Marshal(map[string]any{
+		"query":     query,
+		"timeRange": timeRange,
+		"contents": map[string]any{
+			"mainText":     opts.MainText,
+			"markdownText": opts.MarkdownText,
+			"summary":      opts.Summary,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(map[string]any{"payload": string(inner), "encodeVersion": "1"})
+	if err != nil {
+		return nil, err
+	}
+	headers, err := c.headers(cred, oneSearchPath, string(body))
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+oneSearchPath+"?Encode=0", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read web search response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("web search status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	var parsed struct {
+		PageItems []SearchResult `json:"pageItems"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("parse web search response: %w", err)
+	}
+	return parsed.PageItems, nil
+}
+
+// ImageResult is one image hit from the gateway's imageSearch endpoint.
+type ImageResult struct {
+	Title    string `json:"title"`
+	ImageURL string `json:"imageUrl"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+// postEncoded signs and POSTs a plaintext {payload, encodeVersion, ...} body to
+// an Encode=0 gateway endpoint and returns the raw JSON response.
+func (c *Client) postEncoded(ctx context.Context, path string, body []byte) ([]byte, error) {
+	cred, err := LoadCredential(c.cfg.AuthFile)
+	if err != nil {
+		return nil, err
+	}
+	headers, err := c.headers(cred, path, string(body))
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+path+"?Encode=0", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	return raw, nil
+}
+
+// ImageSearch runs an image search via the gateway's imageSearch endpoint.
+// count is clamped to 1..10 (default 5).
+func (c *Client) ImageSearch(ctx context.Context, query string, count int) ([]ImageResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("image search query is empty")
+	}
+	if count <= 0 || count > 10 {
+		count = 5
+	}
+	inner, err := json.Marshal(map[string]any{"query": query, "count": count})
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(map[string]any{"payload": string(inner), "encodeVersion": "1"})
+	if err != nil {
+		return nil, err
+	}
+	raw, err := c.postEncoded(ctx, imageSearchPath, body)
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Results []ImageResult `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("parse image search response: %w", err)
+	}
+	return parsed.Results, nil
+}
+
+// GenerateImage generates an image via the gateway's generateImage endpoint and
+// returns a data URL. size defaults to 1024x1024, model to a default when unset.
+func (c *Client) GenerateImage(ctx context.Context, prompt, size, model string) (string, error) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return "", fmt.Errorf("image generation prompt is empty")
+	}
+	if strings.TrimSpace(size) == "" {
+		size = "1024x1024"
+	}
+	if strings.TrimSpace(model) == "" {
+		model = "qmodel_38max"
+	}
+	version := c.cfg.CosyVersion
+	if strings.TrimSpace(version) == "" {
+		version = "1.1.28"
+	}
+	inner, err := json.Marshal(map[string]any{
+		"model":  model,
+		"prompt": prompt,
+		"size":   size,
+		"metadata": map[string]any{"business": map[string]any{
+			"product": "cli", "version": version, "type": "text2img",
+			"id": newUUID(), "begin_at": time.Now().UnixMilli(), "stage": "start",
+		}},
+	})
+	if err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(map[string]any{
+		"payload": string(inner), "encodeVersion": "1",
+		"sessionId": newUUID(), "requestId": newUUID(),
+	})
+	if err != nil {
+		return "", err
+	}
+	raw, err := c.postEncoded(ctx, generateImagePath, body)
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		Data []struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse generate image response: %w", err)
+	}
+	if len(parsed.Data) == 0 || strings.TrimSpace(parsed.Data[0].URL) == "" {
+		return "", fmt.Errorf("image generation returned no image")
+	}
+	// Strip the gateway's embedded metadata (the AIGC label carries the
+	// provider's producer identity and per-image tracking IDs) before relaying.
+	url := sanitizeImageDataURL(parsed.Data[0].URL)
+	// Optionally corrupt the invisible blind-watermark payload (geometric desync
+	// + JPEG re-encode). Off unless LINGMA_IMAGE_DEWATERMARK is set.
+	if dewatermarkEnabled() {
+		url = dewatermarkDataURL(url)
+	}
+	return url, nil
+}
+
+// pngMetadataChunks are ancillary PNG chunk types carrying text/provenance
+// metadata (e.g. the gateway's "AIGC" tEXt), stripped before relaying.
+var pngMetadataChunks = map[string]bool{
+	"tEXt": true, "zTXt": true, "iTXt": true, "eXIf": true, "tIME": true,
+}
+
+var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+
+// sanitizeImageDataURL strips metadata from a PNG data URL. Non-PNG URLs or any
+// decode failure are returned unchanged so generation never fails over cleanup.
+func sanitizeImageDataURL(dataURL string) string {
+	const prefix = "data:image/png;base64,"
+	if !strings.HasPrefix(dataURL, prefix) {
+		return dataURL
+	}
+	png, err := base64.StdEncoding.DecodeString(dataURL[len(prefix):])
+	if err != nil {
+		return dataURL
+	}
+	cleaned, ok := stripPNGMetadata(png)
+	if !ok {
+		return dataURL
+	}
+	return prefix + base64.StdEncoding.EncodeToString(cleaned)
+}
+
+// stripPNGMetadata drops metadata-bearing ancillary chunks (see pngMetadataChunks)
+// from a PNG. Returns (cleaned, true) on success, or (input, false) if unparseable.
+func stripPNGMetadata(png []byte) ([]byte, bool) {
+	if !bytes.HasPrefix(png, pngSignature) {
+		return png, false
+	}
+	out := make([]byte, 0, len(png))
+	out = append(out, pngSignature...)
+	p := len(pngSignature)
+	sawIEND := false
+	for p+12 <= len(png) { // 4 length + 4 type + data + 4 CRC
+		// int64 arithmetic so a uint32 length near 2^31 can't overflow chunkEnd
+		// negative and slip past the bounds check (would panic on a 32-bit build).
+		n := int64(binary.BigEndian.Uint32(png[p : p+4]))
+		chunkEnd := int64(p) + 12 + n
+		if chunkEnd > int64(len(png)) {
+			return png, false // malformed / truncated chunk length
+		}
+		typ := string(png[p+4 : p+8])
+		if !pngMetadataChunks[typ] {
+			out = append(out, png[p:int(chunkEnd)]...)
+		}
+		p = int(chunkEnd)
+		if typ == "IEND" {
+			sawIEND = true
+			break
+		}
+	}
+	if !sawIEND {
+		// No IEND: truncated/incomplete PNG — report unparseable so the caller
+		// passes the original through.
+		return png, false
+	}
+	return out, true
+}
+
+// postSigned posts a plain JSON body to path with cosy signing (no Encode
+// envelope, unlike postEncoded) and returns the raw JSON response.
+func (c *Client) postSigned(ctx context.Context, path string, body []byte) ([]byte, error) {
+	cred, err := LoadCredential(c.cfg.AuthFile)
+	if err != nil {
+		return nil, err
+	}
+	headers, err := c.headers(cred, path, string(body))
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+path, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	return raw, nil
+}
+
+// PolishText cleans up raw text via the gateway's voice/polish endpoint (adds
+// punctuation, fixes casing/spacing without changing meaning).
+func (c *Client) PolishText(ctx context.Context, text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", fmt.Errorf("polish text is empty")
+	}
+	body, err := json.Marshal(map[string]any{
+		"session_id":  newUUID(),
+		"request_id":  newUUID(),
+		"client_type": "5",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "<transcription>" + text + "</transcription>"},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	raw, err := c.postSigned(ctx, voicePolishPath, body)
+	if err != nil {
+		return "", err
+	}
+	var parsed struct {
+		Success *bool `json:"success"`
+		Result  struct {
+			Content string `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse polish response: %w", err)
+	}
+	if parsed.Success != nil && !*parsed.Success {
+		return "", fmt.Errorf("polish failed: %s", truncate(string(raw), 200))
+	}
+	content := strings.TrimSpace(parsed.Result.Content)
+	if content == "" {
+		return "", fmt.Errorf("polish returned empty result")
+	}
+	return content, nil
+}
+
+// openAPIBaseURL derives the openapi host (quota / user APIs) from the chat base
+// URL. Only QoderCN exposes this quota endpoint.
+func openAPIBaseURL(chatBaseURL string) (string, error) {
+	raw := strings.TrimSpace(chatBaseURL)
+	if raw == "" {
+		raw = DefaultBaseURL
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("invalid remote base URL %q", chatBaseURL)
+	}
+	if u.Host == "qoder.com.cn" || strings.HasSuffix(u.Host, ".qoder.com.cn") {
+		return "https://openapi.qoder.com.cn", nil
+	}
+	return "", fmt.Errorf("account quota is only available for QoderCN accounts (base host %q)", u.Host)
+}
+
 func (c *Client) Warmup(ctx context.Context) error {
 	_, err := LoadCredential(c.cfg.AuthFile)
 	if err != nil {
@@ -296,13 +801,28 @@ func (c *Client) listModels(ctx context.Context) ([]Model, error) {
 		return nil, c.modelListStatusError(resp.StatusCode, string(body))
 	}
 	var payload struct {
-		Chat   []Model `json:"chat"`
-		Inline []Model `json:"inline"`
+		Chat   []json.RawMessage `json:"chat"`
+		Inline []json.RawMessage `json:"inline"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err
 	}
-	return append(payload.Chat, payload.Inline...), nil
+	parse := func(entries []json.RawMessage) []Model {
+		out := make([]Model, 0, len(entries))
+		for _, e := range entries {
+			var m Model
+			if err := json.Unmarshal(e, &m); err != nil {
+				continue
+			}
+			var raw map[string]any
+			if err := json.Unmarshal(e, &raw); err == nil {
+				m.Raw = raw
+			}
+			out = append(out, m)
+		}
+		return out
+	}
+	return append(parse(payload.Chat), parse(payload.Inline)...), nil
 }
 
 func (c *Client) listModelsWithAutoBaseURLFallback(ctx context.Context, firstErr error) ([]Model, error) {
@@ -343,7 +863,7 @@ func (c *Client) modelListStatusError(statusCode int, body string) error {
 	return fmt.Errorf("%s", message)
 }
 
-func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(string)) (*ChatResult, error) {
+func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(StreamEvent)) (*ChatResult, error) {
 	cred, err := LoadCredential(c.cfg.AuthFile)
 	if err != nil {
 		return nil, err
@@ -356,6 +876,10 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(str
 	headers, err := c.headers(cred, chatPath, body)
 	if err != nil {
 		return nil, err
+	}
+	if key := strings.TrimSpace(request.Model); key != "" {
+		headers["X-Model-Key"] = key
+		headers["X-Model-Source"] = "system"
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+chatPath+chatQuery, strings.NewReader(body))
 	if err != nil {
@@ -374,84 +898,129 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest, onDelta func(str
 		return nil, fmt.Errorf("remote chat status %d: %s", resp.StatusCode, truncate(string(respBody), 1000))
 	}
 	var builder strings.Builder
+	var reasoningBuilder strings.Builder
 	toolCallBuffer := newRemoteToolCallBuffer()
+	var usage *remoteUsage
+	finishReason := ""
 	if err := scanSSE(resp.Body, func(event sseEvent) error {
+		if event.Usage != nil {
+			usage = event.Usage
+		}
+		if event.FinishReason != "" {
+			finishReason = event.FinishReason
+		}
 		if event.Done {
 			return nil
 		}
 		if len(event.ToolCalls) > 0 {
 			toolCallBuffer.Add(event.ToolCalls)
+			if onDelta != nil {
+				for _, frag := range event.ToolCalls {
+					onDelta(StreamEvent{Kind: StreamKindToolCall, ToolCall: &ToolCallDelta{
+						Index:        frag.Index,
+						ID:           frag.ID,
+						Name:         frag.Name,
+						ArgsFragment: frag.ArgumentsFragment,
+					}})
+				}
+			}
 		}
-		if event.Content == "" {
-			return nil
+		if event.Reasoning != "" {
+			reasoningBuilder.WriteString(event.Reasoning)
+			if onDelta != nil {
+				onDelta(StreamEvent{Kind: StreamKindReasoning, Delta: event.Reasoning})
+			}
 		}
-		builder.WriteString(event.Content)
-		if onDelta != nil {
-			onDelta(event.Content)
+		if event.Content != "" {
+			builder.WriteString(event.Content)
+			if onDelta != nil {
+				onDelta(StreamEvent{Kind: StreamKindText, Delta: event.Content})
+			}
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	text := builder.String()
-	return &ChatResult{
+	result := &ChatResult{
 		Text:          text,
+		ReasoningText: reasoningBuilder.String(),
 		InputTokens:   estimateTokens(request.Prompt),
 		OutputTokens:  estimateTokens(text),
 		RequestID:     requestID,
 		CredentialSrc: cred.Source,
 		ToolCalls:     toolCallBuffer.Calls(),
-	}, nil
+		FinishReason:  finishReason,
+	}
+	// Prefer the gateway's real usage numbers over local estimates when present.
+	if usage != nil {
+		if usage.PromptTokens > 0 {
+			result.InputTokens = usage.PromptTokens
+		}
+		if usage.CompletionTokens > 0 {
+			result.OutputTokens = usage.CompletionTokens
+		}
+		if usage.TotalTokens > 0 {
+			result.TotalTokens = usage.TotalTokens
+		} else {
+			result.TotalTokens = result.InputTokens + result.OutputTokens
+		}
+		result.CachedInputTokens = usage.PromptTokensDetails.CachedTokens
+		result.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
+		result.Credits = usage.Credits
+		result.OriginalCredits = usage.OriginalCredits
+		result.Billable = usage.Billable
+	}
+	return result, nil
 }
 
 func (c *Client) buildBody(requestID string, request ChatRequest) (string, error) {
-	temperature := 0.1
-	if request.Temperature != nil {
-		temperature = *request.Temperature
-	}
 	model := strings.TrimSpace(request.Model)
 	if strings.EqualFold(model, "auto") {
 		model = ""
 	}
-	imageURLs := projectImages(request.Images)
+	hasImages := hasVisionImages(request.Images)
 	payload := map[string]any{
-		"request_id":       requestID,
-		"request_set_id":   "",
-		"chat_record_id":   requestID,
-		"stream":           true,
-		"image_urls":       nullableSlice(imageURLs),
-		"is_reply":         false,
+		"request_id":     requestID,
+		"request_set_id": newUUID(),
+		"chat_record_id": requestID,
+		"stream":         true,
+		"chat_task":      "FREE_INPUT",
+		// Images travel inline in the message content parts (OpenAI vision
+		// format), matching the QoderCN CLI, which does not use image_urls.
+		"image_urls":       nullableSlice([]string(nil)),
+		"is_reply":         true,
 		"is_retry":         false,
 		"session_id":       "",
+		"session_type":     "qoderclicn",
 		"code_language":    "",
-		"source":           0,
+		"source":           1,
 		"version":          "3",
 		"chat_prompt":      "",
-		"parameters":       map[string]float64{"temperature": temperature},
-		"aliyun_user_type": "personal_standard",
+		"parameters":       buildGenerationParameters(request),
+		"aliyun_user_type": "",
 		"agent_id":         "agent_common",
-		"task_id":          "question_refine",
+		"task_id":          "common",
 		"model_config": map[string]any{
-			"key":          model,
-			"display_name": "",
-			"model":        model,
-			"format":       "",
-			"is_vl":        len(imageURLs) > 0,
-			"is_reasoning": remoteReasoningEnabled(request),
-			"api_key":      "",
-			"url":          "",
-			"source":       "",
-			"enable":       false,
+			"key":              model,
+			"display_name":     "",
+			"model":            "",
+			"format":           "openai",
+			"is_vl":            hasImages,
+			"is_reasoning":     remoteThinkingOn(request),
+			"api_key":          "",
+			"url":              "",
+			"source":           "system",
+			"max_input_tokens": 180000,
 		},
 		"messages": projectMessages(request),
 		"business": map[string]any{
-			"product":  "jb_plugin",
+			"product":  "cli",
 			"version":  c.cfg.CosyVersion,
-			"type":     "memory",
+			"type":     "agent",
 			"id":       newUUID(),
 			"begin_at": time.Now().UnixMilli(),
 			"stage":    "start",
-			"name":     "memory_intent_recognition_" + requestID,
 		},
 	}
 	if tools := projectTools(request.Tools); len(tools) > 0 {
@@ -464,12 +1033,56 @@ func (c *Client) buildBody(requestID string, request ChatRequest) (string, error
 	return string(body), err
 }
 
-func remoteReasoningEnabled(request ChatRequest) bool {
-	if strings.TrimSpace(request.ReasoningEffort) != "" {
+// buildGenerationParameters assembles the upstream "parameters" object. max_tokens
+// is sent for CLI parity but the gateway ignores it (the proxy enforces it downstream).
+func buildGenerationParameters(request ChatRequest) map[string]any {
+	params := map[string]any{}
+	// Only send temperature when the caller set it; otherwise let the gateway
+	// use its own default (forcing 0.1 silently overrode e.g. Anthropic's 1.0).
+	if request.Temperature != nil {
+		params["temperature"] = *request.Temperature
+	}
+	// Forward reasoning_effort verbatim so callers can reach QoderCN-native levels
+	// (none/low/medium/high/xhigh/max) beyond the OpenAI enum.
+	switch effort := strings.ToLower(strings.TrimSpace(request.ReasoningEffort)); {
+	case effort == "none" || effort == "off" || effort == "disabled":
+		params["enable_thinking"] = false
+		params["reasoning_effort"] = "none"
+	case effort != "":
+		params["enable_thinking"] = true
+		// Forward the lower-cased token (gateway expects a lower-case enum).
+		params["reasoning_effort"] = effort
+	case remoteThinkingOn(request):
+		// Model implies reasoning (e.g. a *-thinking variant) with no explicit
+		// level; enable thinking and let the gateway pick its default effort.
+		params["enable_thinking"] = true
+	}
+	if request.MaxTokens > 0 {
+		params["max_tokens"] = request.MaxTokens
+	}
+	if request.TopP != nil {
+		params["top_p"] = *request.TopP
+	}
+	if request.TopK > 0 {
+		params["top_k"] = request.TopK
+	}
+	if len(request.Stop) > 0 {
+		params["stop"] = request.Stop
+	}
+	return params
+}
+
+// remoteThinkingOn drives both is_reasoning and enable_thinking so they agree:
+// none/off/disabled -> false; an explicit level -> true; else name implies it.
+func remoteThinkingOn(request ChatRequest) bool {
+	switch strings.ToLower(strings.TrimSpace(request.ReasoningEffort)) {
+	case "none", "off", "disabled":
+		return false
+	case "":
+		return strings.Contains(strings.ToLower(strings.TrimSpace(request.Model)), "thinking")
+	default:
 		return true
 	}
-	model := strings.ToLower(strings.TrimSpace(request.Model))
-	return strings.Contains(model, "thinking")
 }
 
 func nullableSlice[T any](items []T) any {
@@ -479,18 +1092,13 @@ func nullableSlice[T any](items []T) any {
 	return items
 }
 
-func projectImages(images []Image) []string {
-	if len(images) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(images))
+func hasVisionImages(images []Image) bool {
 	for _, img := range images {
-		item := projectImage(img)
-		if item != "" {
-			out = append(out, item)
+		if strings.TrimSpace(img.Data) != "" || strings.TrimSpace(img.URL) != "" {
+			return true
 		}
 	}
-	return out
+	return false
 }
 
 func projectImage(img Image) string {
@@ -536,6 +1144,11 @@ func projectMessages(request ChatRequest) []map[string]any {
 		}
 		if message.ToolCallID != "" {
 			item["tool_call_id"] = message.ToolCallID
+		}
+		// Round-trip prior extended thinking as reasoning_content (the gateway
+		// accepts it in assistant history; the signature stays empty upstream).
+		if strings.EqualFold(role, "assistant") && strings.TrimSpace(message.ReasoningText) != "" {
+			item["reasoning_content"] = message.ReasoningText
 		}
 		if calls := projectMessageToolCalls(message.ToolCalls); len(calls) > 0 {
 			item["tool_calls"] = calls
@@ -675,23 +1288,26 @@ func (c *Client) headers(cred Credential, path string, body string) (map[string]
 	}, "\n")
 	signature := md5.Sum([]byte(preimage))
 	return map[string]string{
-		"Authorization":     fmt.Sprintf("Bearer COSY.%s.%x", payloadBase64, signature),
-		"Content-Type":      "application/json",
-		"Appcode":           "cosy",
-		"Cosy-Date":         date,
-		"Cosy-Key":          cred.CosyKey,
-		"Cosy-Machineid":    cred.MachineID,
-		"Cosy-User":         cred.UserID,
-		"Cosy-Clientip":     "198.18.0.1",
-		"Cosy-Clienttype":   "2",
-		"Cosy-Machineos":    MachineOSHeader(),
-		"Cosy-Machinetoken": "",
-		"Cosy-Machinetype":  "",
-		"Cosy-Version":      c.cfg.CosyVersion,
-		"Login-Version":     "v2",
-		"User-Agent":        "lingma-proxy/remote",
-		"Accept":            "text/event-stream",
-		"Cache-Control":     "no-cache",
+		"Authorization":         fmt.Sprintf("Bearer COSY.%s.%x", payloadBase64, signature),
+		"Content-Type":          "application/json",
+		"Appcode":               "cosy",
+		"Cosy-Date":             date,
+		"Cosy-Key":              cred.CosyKey,
+		"Cosy-Machineid":        cred.MachineID,
+		"Cosy-User":             cred.UserID,
+		"Cosy-Clientip":         "198.18.0.1",
+		"Cosy-Clienttype":       "5",
+		"Cosy-Machineos":        MachineOSHeader(),
+		"Cosy-Machinetoken":     "",
+		"Cosy-Machinetype":      "5",
+		"Cosy-Version":          c.cfg.CosyVersion,
+		"Cosy-Business-Product": "cli",
+		"Cosy-Business-Type":    "agent",
+		"Cosy-Scene":            "assistant",
+		"Login-Version":         "v2",
+		"User-Agent":            "lingma-proxy/remote",
+		"Accept":                "text/event-stream",
+		"Cache-Control":         "no-cache",
 	}, nil
 }
 
@@ -707,16 +1323,39 @@ type outerSSE struct {
 type innerSSE struct {
 	Choices []struct {
 		Delta struct {
-			Content   string                `json:"content"`
-			ToolCalls []remoteToolCallDelta `json:"tool_calls"`
+			Content          string                `json:"content"`
+			ReasoningContent string                `json:"reasoning_content"`
+			ToolCalls        []remoteToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *remoteUsage `json:"usage"`
+}
+
+// remoteUsage mirrors the OpenAI-style usage object the Lingma/QoderCN gateway
+// emits in the final SSE chunk, including cache/reasoning breakdowns and billing.
+type remoteUsage struct {
+	PromptTokens        int     `json:"prompt_tokens"`
+	CompletionTokens    int     `json:"completion_tokens"`
+	TotalTokens         int     `json:"total_tokens"`
+	Credits             float64 `json:"credits"`
+	OriginalCredits     float64 `json:"original_credits"`
+	Billable            bool    `json:"billable"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
 }
 
 type sseEvent struct {
-	Content   string
-	ToolCalls []remoteToolCallFragment
-	Done      bool
+	Content      string
+	Reasoning    string
+	ToolCalls    []remoteToolCallFragment
+	FinishReason string
+	Usage        *remoteUsage
+	Done         bool
 }
 
 type remoteToolCallFragment struct {
@@ -739,7 +1378,9 @@ type remoteToolCallDelta struct {
 
 func scanSSE(reader io.Reader, onEvent func(sseEvent) error) error {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// Cap generously: a double-wrapped SSE frame can be large, and too small a cap
+	// makes bufio.Scanner return ErrTooLong and discard the whole response.
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -782,9 +1423,15 @@ func parseSSEPayload(payload string) (sseEvent, bool, error) {
 		return sseEvent{}, false, err
 	}
 	var builder strings.Builder
+	var reasoning strings.Builder
 	var toolCalls []remoteToolCallFragment
+	finishReason := ""
 	for _, choice := range inner.Choices {
 		builder.WriteString(choice.Delta.Content)
+		reasoning.WriteString(choice.Delta.ReasoningContent)
+		if choice.FinishReason != "" {
+			finishReason = choice.FinishReason
+		}
 		for _, tc := range choice.Delta.ToolCalls {
 			toolCalls = append(toolCalls, remoteToolCallFragment{
 				Index:             tc.Index,
@@ -795,7 +1442,13 @@ func parseSSEPayload(payload string) (sseEvent, bool, error) {
 			})
 		}
 	}
-	return sseEvent{Content: builder.String(), ToolCalls: toolCalls}, true, nil
+	return sseEvent{
+		Content:      builder.String(),
+		Reasoning:    reasoning.String(),
+		ToolCalls:    toolCalls,
+		FinishReason: finishReason,
+		Usage:        inner.Usage,
+	}, true, nil
 }
 
 type remoteToolCallBuffer struct {
