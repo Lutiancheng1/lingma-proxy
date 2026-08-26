@@ -220,6 +220,14 @@ func (s *Server) applyDefaultModel(req *service.ChatRequest) {
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = s.svc.DefaultModel()
 	}
+	// Diagnostic switch: LINGMA_DISABLE_THINKING forces reasoning off for every
+	// request, for clients (e.g. Claude Code) that cannot disable extended
+	// thinking themselves. "none" propagates to the gateway (enable_thinking=false)
+	// and makes reasoningEffortEnabled() drop any stray thinking deltas, so the
+	// client receives a text-only response.
+	if truthyEnv("LINGMA_DISABLE_THINKING") {
+		req.ReasoningEffort = "none"
+	}
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
