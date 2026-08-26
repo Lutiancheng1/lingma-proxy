@@ -33,6 +33,9 @@ const (
 	generateImagePath = "/algo/api/v2/service/pro/generateImage"
 	voicePolishPath   = "/algo/api/v2/service/voice/polish"
 	quotaPath         = "/api/v2/quota/usage"
+	// fallbackCosyVersion is used only when neither an explicit version nor the
+	// installed CLI's version.txt is available (matches the observed CLI value).
+	fallbackCosyVersion = "1.1.28"
 )
 
 var remoteBaseURLPattern = regexp.MustCompile(`https?://[^\s"'<>),\]}]+`)
@@ -147,7 +150,13 @@ func New(cfg Config) *Client {
 		cfg.BaseURL = ResolveBaseURL("")
 	}
 	if cfg.CosyVersion == "" {
-		cfg.CosyVersion = "2.11.2"
+		// Match the installed CLI: its cosy version is its own package version
+		// (read from version.txt). Fall back to a known-good value if not found.
+		if v := detectCLICosyVersion(); v != "" {
+			cfg.CosyVersion = v
+		} else {
+			cfg.CosyVersion = fallbackCosyVersion
+		}
 	}
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	client := &http.Client{Timeout: cfg.Timeout}

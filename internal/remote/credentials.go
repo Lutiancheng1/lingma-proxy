@@ -696,3 +696,63 @@ func uniquePathStrings(values []string) []string {
 	}
 	return out
 }
+
+// detectCLICosyVersion reads the installed QoderCN CLI's version and returns it
+// as the cosy version, matching what the real client sends (its Cosy-Version /
+// authPayload.cosyVersion is its own package version). Empty if not found.
+func detectCLICosyVersion() string {
+	for _, p := range candidateCLIVersionFiles() {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if v := sanitizeCLIVersion(string(data)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// candidateCLIVersionFiles lists likely paths of the CLI's version.txt across
+// install roots (e.g. ~/.qoder-cn/bin/qoderclicn/version.txt).
+func candidateCLIVersionFiles() []string {
+	var roots []string
+	if explicit := strings.TrimSpace(os.Getenv("LINGMA_CLI_DIR")); explicit != "" {
+		roots = append(roots, expandHome(explicit))
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		roots = append(roots,
+			filepath.Join(home, ".qoder-cn"),
+			filepath.Join(home, ".qodercn"),
+			filepath.Join(home, ".lingma"),
+		)
+	}
+	var files []string
+	for _, root := range roots {
+		for _, cli := range []string{"qoderclicn", "qodercli", "lingmacli"} {
+			files = append(files, filepath.Join(root, "bin", cli, "version.txt"))
+		}
+	}
+	return uniquePathStrings(files)
+}
+
+// sanitizeCLIVersion validates a version.txt payload: first line, version-ish
+// characters only, bounded length. Returns "" if it doesn't look like a version.
+func sanitizeCLIVersion(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	if s == "" || len(s) > 32 {
+		return ""
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r == '.', r == '-', r == '_',
+			r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		default:
+			return ""
+		}
+	}
+	return s
+}
