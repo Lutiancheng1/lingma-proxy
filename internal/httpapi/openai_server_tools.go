@@ -145,7 +145,7 @@ func (s *Server) streamOpenAIServerTools(w http.ResponseWriter, r *http.Request,
 		}
 		// Strip emulated text action blocks from the visible stream (native tool
 		// calls surface via result.ToolCalls and are handled after the round).
-		filter := newToolStreamFilter(len(req.Tools) > 0)
+		filter := newToolStreamFilter(s.svc.EmulatesTextTools(req))
 		emitReasoning := reasoningEffortEnabled(req.ReasoningEffort)
 		emitContent := func(piece string) {
 			if piece == "" {

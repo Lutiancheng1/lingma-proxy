@@ -905,7 +905,7 @@ func parseAnthropicSSE(t *testing.T, body string) []sseRec {
 	return out
 }
 
-func runAnthropicStream(req service.ChatRequest, events []service.StreamEvent, final *service.ChatResult) string {
+func runAnthropicStream(req service.ChatRequest, events []service.StreamEvent, final *service.ChatResult, emulateTextTools bool) string {
 	evCh := make(chan service.StreamEvent, len(events)+1)
 	for _, e := range events {
 		evCh <- e
@@ -915,7 +915,7 @@ func runAnthropicStream(req service.ChatRequest, events []service.StreamEvent, f
 	doneCh <- service.StreamResult{Result: final}
 	close(doneCh)
 	rec := httptest.NewRecorder()
-	writeAnthropicStreamBody(context.Background(), rec, rec, req, evCh, doneCh)
+	writeAnthropicStreamBody(context.Background(), rec, rec, req, evCh, doneCh, emulateTextTools)
 	return rec.Body.String()
 }
 
@@ -927,7 +927,7 @@ func TestWriteAnthropicStreamBodyIncrementalToolUse(t *testing.T) {
 		{Type: service.StreamEventToolCall, ToolCall: &service.StreamToolCall{Index: 0, ArgsFragment: `"/a.txt"}`}},
 	}
 	final := &service.ChatResult{ToolCalls: []toolemulation.ToolCall{{ID: "call_1", Name: "read_file", Arguments: map[string]any{"path": "/a.txt"}}}, FinishReason: "tool_calls"}
-	recs := parseAnthropicSSE(t, runAnthropicStream(req, events, final))
+	recs := parseAnthropicSSE(t, runAnthropicStream(req, events, final, false))
 
 	starts, stops := 0, 0
 	startIdx := -1
@@ -971,7 +971,7 @@ func TestWriteAnthropicStreamBodyToolLateStart(t *testing.T) {
 		{Type: service.StreamEventToolCall, ToolCall: &service.StreamToolCall{Index: 0, ArgsFragment: `{"a":1}`}},
 	}
 	final := &service.ChatResult{ToolCalls: []toolemulation.ToolCall{{}}, FinishReason: "tool_calls"}
-	recs := parseAnthropicSSE(t, runAnthropicStream(req, events, final))
+	recs := parseAnthropicSSE(t, runAnthropicStream(req, events, final, false))
 	startIdx := -1
 	var gotID, gotName, args string
 	for _, r := range recs {
@@ -998,7 +998,7 @@ func TestWriteAnthropicStreamBodyToolLateStart(t *testing.T) {
 func TestWriteAnthropicStreamBodyEmulatedToolAggregated(t *testing.T) {
 	req := service.ChatRequest{Tools: []toolemulation.ToolDef{{Name: "read_file"}}}
 	final := &service.ChatResult{ToolCalls: []toolemulation.ToolCall{{ID: "call_9", Name: "read_file", Arguments: map[string]any{"path": "/b"}}}, FinishReason: "tool_calls"}
-	recs := parseAnthropicSSE(t, runAnthropicStream(req, nil, final))
+	recs := parseAnthropicSSE(t, runAnthropicStream(req, nil, final, false))
 	starts := 0
 	var gotID string
 	for _, r := range recs {
@@ -1020,7 +1020,7 @@ func TestWriteAnthropicStreamBodyThinkingTextToolCoexist(t *testing.T) {
 		{Type: service.StreamEventToolCall, ToolCall: &service.StreamToolCall{Index: 0, ID: "call_1", Name: "read_file", ArgsFragment: `{}`}},
 	}
 	final := &service.ChatResult{ToolCalls: []toolemulation.ToolCall{{ID: "call_1", Name: "read_file"}}, FinishReason: "tool_calls"}
-	recs := parseAnthropicSSE(t, runAnthropicStream(req, events, final))
+	recs := parseAnthropicSSE(t, runAnthropicStream(req, events, final, false))
 	thinkingIdx, textIdx, toolIdx := -1, -1, -1
 	for _, r := range recs {
 		if r.typ == "content_block_start" {

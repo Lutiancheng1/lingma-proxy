@@ -751,6 +751,21 @@ func remoteToolEmulationEnabled() bool {
 	return false
 }
 
+// EmulatesTextTools reports whether tool calls will surface as text action
+// blocks (the prompt-injection path) rather than native structured tool_calls
+// for this request. The stream filter that strips action-block markers is only
+// meaningful when this is true; on the native remote path it would strip
+// nothing and just add buffering latency, so callers leave it disabled there.
+func (s *Service) EmulatesTextTools(req ChatRequest) bool {
+	if !shouldEmulateRemoteTools(req) {
+		return false
+	}
+	if s.backend() == BackendRemote {
+		return remoteToolEmulationEnabled()
+	}
+	return true // the IPC/local Lingma backend always emulates via prompt injection
+}
+
 func remoteMessagesForChat(req ChatRequest, prompt string, emulateTools bool) []remote.Message {
 	if emulateTools && shouldEmulateRemoteTools(req) {
 		if prompt = strings.TrimSpace(prompt); prompt != "" {

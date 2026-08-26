@@ -353,7 +353,7 @@ func (s *Server) streamAnthropicServerTools(w http.ResponseWriter, r *http.Reque
 
 		// Strip emulated text action blocks from the visible text stream (native
 		// tool calls surface via result.ToolCalls and are handled after the round).
-		filter := newToolStreamFilter(len(normalized.Tools) > 0)
+		filter := newToolStreamFilter(s.svc.EmulatesTextTools(normalized))
 		thinkingOpen, textOpen := false, false
 		emitText := func(piece string) {
 			if piece == "" {

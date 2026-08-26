@@ -1106,13 +1106,13 @@ func (s *Server) handleAnthropicStream(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 
-	writeAnthropicStreamBody(r.Context(), w, flusher, req, events, done)
+	writeAnthropicStreamBody(r.Context(), w, flusher, req, events, done, s.svc.EmulatesTextTools(req))
 }
 
 // writeAnthropicStreamBody consumes the service stream and emits the Anthropic
 // SSE sequence after message_start (written by the caller).
-func writeAnthropicStreamBody(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, req service.ChatRequest, events <-chan service.StreamEvent, done <-chan service.StreamResult) {
-	filter := newToolStreamFilter(len(req.Tools) > 0)
+func writeAnthropicStreamBody(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, req service.ChatRequest, events <-chan service.StreamEvent, done <-chan service.StreamResult, emulateTextTools bool) {
+	filter := newToolStreamFilter(emulateTextTools)
 	eventsCh := events
 	doneCh := done
 	var final *service.ChatResult
@@ -1540,7 +1540,7 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, req 
 		return
 	}
 
-	filter := newToolStreamFilter(len(req.Tools) > 0)
+	filter := newToolStreamFilter(s.svc.EmulatesTextTools(req))
 	eventsCh := events
 	doneCh := done
 	var final *service.ChatResult
@@ -1803,7 +1803,7 @@ func (s *Server) handleOpenAIResponsesStream(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	filter := newToolStreamFilter(len(req.Tools) > 0)
+	filter := newToolStreamFilter(s.svc.EmulatesTextTools(req))
 	eventsCh := events
 	doneCh := done
 	var final *service.ChatResult
